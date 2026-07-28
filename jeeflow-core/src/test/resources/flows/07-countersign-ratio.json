@@ -1,0 +1,14 @@
+{
+  "name": "countersign-ratio",
+  "displayName": "按比例会签流程",
+  "type": "approval",
+  "nodes": [
+    {"id":"start","type":"snaker:start","x":100,"y":200,"properties":{"width":50,"height":50},"text":{"value":"开始"}},
+    {"id":"task1","type":"snaker:task","x":350,"y":200,"properties":{"width":120,"height":60,"form":"ratio-form","assignee":"","taskType":0,"performType":1,"countersignType":"PARALLEL","field":{"candidateUsers":"userA,userB,userC,userD","countersignCompletionCondition":"#nrOfCompletedInstances==2"}},"text":{"value":"2人同意即通过"}},
+    {"id":"end","type":"snaker:end","x":600,"y":200,"properties":{"width":50,"height":50},"text":{"value":"结束"}}
+  ],
+  "edges": [
+    {"id":"e1","sourceNodeId":"start","targetNodeId":"task1","properties":{}},
+    {"id":"e2","sourceNodeId":"task1","targetNodeId":"end","properties":{}}
+  ]
+}

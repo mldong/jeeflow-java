@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.mldong.jeeflow</groupId>
+    <artifactId>jeeflow-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>jeeflow</name>
+    <description>轻量工作流引擎——零框架依赖、DDD 充血模型、JDK 8 兼容</description>
+    <url>https://github.com/mldong/jeeflow</url>
+
+    <modules>
+        <module>jeeflow-core</module>
+        <module>jeeflow-repository-jdbc</module>
+        <module>jeeflow-spring-boot-autoconfigure</module>
+        <module>jeeflow-spring-boot2-starter</module>
+        <module>jeeflow-spring-boot3-starter</module>
+        <module>jeeflow-spring-boot4-starter</module>
+        <module>jeeflow-demo-boot4</module>
+    </modules>
+
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <slf4j.version>1.7.36</slf4j.version>
+        <junit.version>4.13.2</junit.version>
+    </properties>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>mldong</name>
+            <email>mldong@mldong.com</email>
+            <url>https://github.com/mldong</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/mldong/jeeflow.git</connection>
+        <developerConnection>scm:git:git@github.com:mldong/jeeflow.git</developerConnection>
+        <url>https://github.com/mldong/jeeflow</url>
+    </scm>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.mldong.jeeflow</groupId>
+                <artifactId>jeeflow-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.mldong.jeeflow</groupId>
+                <artifactId>jeeflow-repository-jdbc</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.mldong.jeeflow</groupId>
+                <artifactId>jeeflow-spring-boot-autoconfigure</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.mldong.jeeflow</groupId>
+                <artifactId>jeeflow-spring-boot2-starter</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.mldong.jeeflow</groupId>
+                <artifactId>jeeflow-spring-boot3-starter</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.mldong.jeeflow</groupId>
+                <artifactId>jeeflow-spring-boot4-starter</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>junit</groupId>
+                <artifactId>junit</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.h2database</groupId>
+                <artifactId>h2</artifactId>
+                <version>2.1.214</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+</project>
