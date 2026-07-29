@@ -39,8 +39,15 @@ input,select,textarea{padding:6px 10px;border:1px solid #d9d9d9;border-radius:4p
 .toast.success{background:#52c41a}
 .toast.show{display:block}
 .modal-overlay.show{display:flex}
-.modal{background:#fff;border-radius:8px;padding:24px;width:420px;max-height:80vh;overflow:auto}
+.modal{background:#fff;border-radius:8px;padding:0;width:800px;max-width:95vw;height:70vh;max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
 .modal h4{margin-bottom:12px}
+.modal-header{padding:16px 20px 8px;flex-shrink:0;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #f0f0f0}
+.modal-header h4{margin:0}
+.modal-body{flex:1;min-height:0;position:relative}
+.modal-body iframe{width:100%;height:100%;border:none}
+.modal-body table{font-size:12px}
+.modal-body td,.modal-body th{padding:4px 8px}
+.viewer-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#999;font-size:14px}
 .flex-row{display:flex;gap:8px;align-items:center}
 .gap8{gap:8px}
 .mt8{margin-top:8px}
@@ -94,7 +101,7 @@ input,select,textarea{padding:6px 10px;border:1px solid #d9d9d9;border-radius:4p
   </div>
 </main>
 
-<div class="modal-overlay" id="modal"><div class="modal" id="modalContent"></div></div>
+<div class="modal-overlay" id="modal"><div class="modal"><div class="modal-header"><h4 id="modalTitle"></h4><button class="btn btn-primary btn-sm" onclick="closeModal()">关闭</button></div><div class="modal-body" id="modalContent"><div class="viewer-loading">加载中...</div></div></div></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -175,22 +182,35 @@ function toast(msg, type) {
 }
 
 async function showDetail(id) {
-  let r = await api('/wf/processInstance/detail', {id});
-  if(r.code!==200) return;
-  let d = r.data;
-  let stateLabel = d.state==10?'进行中':d.state==20?'已完成':d.state==45?'已拒绝':d.state;
-  let html = '<h4>流程详情 #'+d.id+'</h4>';
-  html += '<p><b>流程:</b> '+h(d.defineName)+' <b>状态:</b> '+stateLabel+' <b>发起人:</b> '+h(d.operator)+'</p>';
-  html += '<h5 style="margin-top:12px">审批记录</h5>';
-  html += '<table><thead><tr><th>节点</th><th>处理人</th><th>状态</th><th>时间</th></tr></thead><tbody>';
-  (d.approvalRecords||[]).forEach(r => {
-    let s = r.taskState==10?'进行中':r.taskState==20?'已完成':r.taskState==99?'已废弃':r.taskState;
-    html += '<tr><td>'+h(r.displayName)+'</td><td>'+h(r.operator)+'</td><td>'+s+'</td><td>'+h(r.createTime)+'</td></tr>';
-  });
-  html += '</tbody></table><button class="btn btn-primary mt8" onclick="closeModal()">关闭</button>';
-  document.getElementById('modalContent').innerHTML = html;
   document.getElementById('modal').classList.add('show');
+  document.getElementById('modalTitle').textContent = '流程详情 #'+id;
+  document.getElementById('modalContent').innerHTML = '<div class="viewer-loading">加载中...</div>';
+
+  let r = await api('/wf/processInstance/detail', {id});
+  if(r.code!==200) { document.getElementById('modalContent').innerHTML='<div class="viewer-loading">加载失败</div>'; return; }
+  let d = r.data;
+
+  // 存储数据到 sessionStorage 供 viewer.html 读取
+  if (d.graphData) sessionStorage.setItem('_jeeflow_view_graph', JSON.stringify(d.graphData));
+  if (d.highLight) sessionStorage.setItem('_jeeflow_view_highlight', JSON.stringify(d.highLight));
+
+  // 标题
+  let stateLabel = d.state==10?'进行中':d.state==20?'已完成':d.state==45?'已拒绝':d.state;
+  document.getElementById('modalTitle').innerHTML = '流程详情 #'+d.id+' <span style="font-size:12px;color:#888;font-weight:400">'+h(d.defineName)+' · '+stateLabel+'</span>';
+
+  // iframe 嵌入 viewer
+  let html = '<iframe src="/viewer.html?'+Date.now()+'" onload="onViewerLoad()"></iframe>';
+  // 审批记录放下面
+  html += '<div style="padding:8px 16px;background:#fafafa;border-top:1px solid #f0f0f0;max-height:120px;overflow:auto">';
+  html += '<table style="width:100%"><thead><tr><th>节点</th><th>处理人</th><th>状态</th><th>时间</th></tr></thead><tbody>';
+  (d.approvalRecords||[]).forEach(r => {
+    let s = r.taskState==10?'<span class="badge badge-doing">进行中</span>':r.taskState==20?'<span class="badge badge-done">已完成</span>':r.taskState==99?'<span class="badge badge-reject">已废弃</span>':r.taskState;
+    html += '<tr><td>'+h(r.displayName)+'</td><td>'+h(r.operator||'-')+'</td><td>'+s+'</td><td>'+h(r.createTime)+'</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  document.getElementById('modalContent').innerHTML = html;
 }
+function onViewerLoad() { /* viewer 加载完成 */ }
 
 function switchUser(u) { currentUser = u; sessionStorage.setItem('jeeflow_user', u); document.getElementById('userLabel').textContent = '（当前用户: ' + (userNames[u]||u) + '）'; updateActiveTab(); loadAll(); }
 

@@ -1,17 +1,20 @@
 package com.mldong.jeeflow.demo;
 
 import com.mldong.jeeflow.core.JeeflowEngine;
+import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
+import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.spi.IProcessRepository;
 import com.mldong.jeeflow.spi.PageQuery;
 import com.mldong.jeeflow.spi.PageResult;
 import com.mldong.jeeflow.spring.JeeflowQueryParser;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -90,6 +93,8 @@ public class DemoController {
         // 审批记录
         List<Map<String, Object>> records = new ArrayList<>();
         List<ProcessTask> history = repository.findHistoryTasks(id);
+        Set<String> finishedNodeNames = new LinkedHashSet<>();
+        Set<String> activeNodeNames = new LinkedHashSet<>();
         for (ProcessTask t : history) {
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("id", t.getTaskId());
@@ -101,6 +106,40 @@ public class DemoController {
             r.put("finishTime", t.getFinishTime());
             r.put("variables", t.getVariables());
             records.add(r);
+            // 收集高亮节点名
+            if (t.getTaskState() != null && t.getTaskState() == 20) {
+                finishedNodeNames.add(t.getTaskName());
+            } else if (t.getTaskState() != null && t.getTaskState() == 10) {
+                activeNodeNames.add(t.getTaskName());
+            }
+        }
+
+        // 流程定义 JSON（供前端设计器渲染）
+        Map<String, Object> graphData = null;
+        if (def != null && def.getContent() != null) {
+            try {
+                IJsonProvider json = ServiceContext.find(IJsonProvider.class);
+                if (json != null) {
+                    String contentStr = new String(def.getContent(), java.nio.charset.StandardCharsets.UTF_8);
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> parsed = json.fromJson(contentStr, Map.class);
+                    graphData = parsed;
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // 计算高亮边（连接已完成节点的边）
+        List<String> finishedEdgeNames = new ArrayList<>();
+        if (graphData != null) {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> edges = (List<Map<String, Object>>) graphData.getOrDefault("edges", java.util.Collections.emptyList());
+            for (Map<String, Object> edge : edges) {
+                String src = (String) edge.get("sourceNodeId");
+                String tgt = (String) edge.get("targetNodeId");
+                if (finishedNodeNames.contains(src) && finishedNodeNames.contains(tgt)) {
+                    finishedEdgeNames.add((String) edge.get("id"));
+                }
+            }
         }
 
         Map<String, Object> data = new LinkedHashMap<>();
@@ -110,7 +149,14 @@ public class DemoController {
         data.put("businessNo", inst.getBusinessNo());
         data.put("createTime", inst.getCreateTime());
         data.put("defineName", def != null ? def.getDisplayName() : "");
+        data.put("graphData", graphData);
         data.put("approvalRecords", records);
+        // 高亮数据
+        Map<String, Object> highLight = new LinkedHashMap<>();
+        highLight.put("historyNodeNames", new ArrayList<>(finishedNodeNames));
+        highLight.put("historyEdgeNames", finishedEdgeNames);
+        highLight.put("activeNodeNames", new ArrayList<>(activeNodeNames));
+        data.put("highLight", highLight);
         return ok(data);
     }
 

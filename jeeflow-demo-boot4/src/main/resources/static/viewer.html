@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>流程查看器</title>
+<script type="importmap">
+{
+  "imports": {
+    "vue": "https://unpkg.com/vue@3.4.30/dist/vue.esm-browser.js"
+  }
+}
+</script>
+<link rel="stylesheet" href="/designer/style.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font:14px/1.6 system-ui,sans-serif;background:#fff;overflow:hidden;height:100vh}
+#app{height:100%}
+/* 隐藏设计器编辑工具栏（查看模式不需要） */
+.lf-toolbar{display:none!important}
+/* 查看模式下隐藏 dnd-panel */
+.lf-dndpanel{display:none!important}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script type="module">
+import { createApp } from 'vue'
+import FlowDesigner from '/designer/mldong-flow-designer-plus.js'
+
+// 从 sessionStorage 读取父页面传入的数据
+let graphData = { nodes: [], edges: [] }
+let highLight = { historyNodeNames: [], historyEdgeNames: [], activeNodeNames: [] }
+
+try {
+  const raw = sessionStorage.getItem('_jeeflow_view_graph')
+  if (raw) graphData = JSON.parse(raw)
+} catch(e) {}
+try {
+  const raw = sessionStorage.getItem('_jeeflow_view_highlight')
+  if (raw) highLight = JSON.parse(raw)
+} catch(e) {}
+
+const app = createApp({
+  data() {
+    return { graphData, highLight, mode: 'dingtalk' }
+  },
+  template: `
+    <FlowDesigner
+      v-model:value="graphData"
+      :mode="mode"
+      :viewer="true"
+      :high-light="highLight"
+    />
+  `
+})
+
+app.component('FlowDesigner', FlowDesigner)
+app.mount('#app')
+
+// 通知父页面加载完成
+window.parent.postMessage({ type: 'viewer-ready' }, '*')
+</script>
+</body>
+</html>
