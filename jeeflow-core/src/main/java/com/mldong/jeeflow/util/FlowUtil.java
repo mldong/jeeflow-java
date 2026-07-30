@@ -25,12 +25,14 @@ public final class FlowUtil {
     /** 追加用户信息到流程参数 */
     public static void addUserInfoToArgs(String operator, FlowData args, IUserProvider userProvider) {
         if (userProvider == null) return;
-        args.put(FlowConst.USER_USER_ID, operator);
-        args.put(FlowConst.USER_REAL_NAME, userProvider.getRealName(operator));
-        args.put(FlowConst.USER_DEPT_ID, userProvider.getDeptId(operator));
-        args.put(FlowConst.USER_DEPT_NAME, userProvider.getDeptName(operator));
-        args.put(FlowConst.USER_POST_ID, userProvider.getPostId(operator));
-        args.put(FlowConst.USER_POST_NAME, userProvider.getPostName(operator));
+        IUserProvider.UserInfo u = userProvider.getUser(operator);
+        if (u == null) return;
+        args.put(FlowConst.USER_USER_ID, u.getUserId() != null ? u.getUserId() : operator);
+        args.put(FlowConst.USER_REAL_NAME, u.getRealName() != null ? u.getRealName() : operator);
+        args.put(FlowConst.USER_DEPT_ID, u.getDeptId());
+        args.put(FlowConst.USER_DEPT_NAME, u.getDeptName());
+        args.put(FlowConst.USER_POST_ID, u.getPostId());
+        args.put(FlowConst.USER_POST_NAME, u.getPostName());
     }
 
     /** 自动构造标题 */
