@@ -12,6 +12,7 @@ import com.mldong.jeeflow.enums.ProcessInstanceStateEnum;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.spi.IUserProvider;
+import com.mldong.jeeflow.spi.IUserProvider.UserInfo;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -41,11 +42,16 @@ public class JeeflowFullTest {
         ServiceContext.put("json", json);
         ServiceContext.put("expr", new TestExpressionEvaluator());
         ServiceContext.put("user", new IUserProvider() {
-            @Override public String getRealName(String userId) { return "用户" + userId; }
-            @Override public String getDeptId(String userId) { return "D01"; }
-            @Override public String getDeptName(String userId) { return "测试部门"; }
-            @Override public String getPostId(String userId) { return "P01"; }
-            @Override public String getPostName(String userId) { return "测试岗位"; }
+            @Override public UserInfo getUser(String userId) {
+                UserInfo u = new UserInfo();
+                u.setUserId(userId);
+                u.setRealName("用户" + userId);
+                u.setDeptId("D01");
+                u.setDeptName("测试部门");
+                u.setPostId("P01");
+                u.setPostName("测试岗位");
+                return u;
+            }
         });
 
         engine = new JeeflowEngineImpl();
