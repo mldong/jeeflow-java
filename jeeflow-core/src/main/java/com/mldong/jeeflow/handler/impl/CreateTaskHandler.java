@@ -69,7 +69,7 @@ public class CreateTaskHandler implements IHandler {
 
     private List<String> resolveActors(TaskModel taskModel, ProcessModel model, Execution execution) {
         List<String> actors = new ArrayList<>();
-        // 从 assignee 获取
+        // 1. 固定指派 assignee
         if (taskModel.getAssignee() != null && !taskModel.getAssignee().isEmpty()) {
             String assignee = taskModel.getAssignee();
             if (assignee.contains(",")) {
@@ -81,33 +81,25 @@ public class CreateTaskHandler implements IHandler {
                 actors.add(assignee.trim());
             }
         }
-        // 从 candidateUsers 获取（ext 中的候选人列表）
-        String candidateUsers = taskModel.getCandidateUsers();
-        if (candidateUsers != null && !candidateUsers.isEmpty()) {
-            for (String a : candidateUsers.split(",")) {
-                String trimmed = a.trim();
-                if (!trimmed.isEmpty() && !actors.contains(trimmed)) {
-                    actors.add(trimmed);
-                }
-            }
-        }
-        // 从 AssignmentHandler 获取
-        String handlerClass = taskModel.getAssignmentHandler();
-        if (handlerClass != null && !handlerClass.isEmpty()) {
-            try {
-                AssignmentHandler handler = (AssignmentHandler)
-                        Class.forName(handlerClass.trim()).getDeclaredConstructor().newInstance();
-                String result = handler.assign(execution);
-                if (result != null && !result.isEmpty()) {
-                    if (result.contains(",")) {
-                        for (String a : result.split(",")) {
-                            if (!actors.contains(a.trim())) actors.add(a.trim());
+        // 2. 动态指派处理器 assignmentHandler（assignee 为空时才生效）
+        if (actors.isEmpty()) {
+            String handlerClass = taskModel.getAssignmentHandler();
+            if (handlerClass != null && !handlerClass.isEmpty()) {
+                try {
+                    AssignmentHandler handler = (AssignmentHandler)
+                            Class.forName(handlerClass.trim()).getDeclaredConstructor().newInstance();
+                    String result = handler.assign(execution);
+                    if (result != null && !result.isEmpty()) {
+                        if (result.contains(",")) {
+                            for (String a : result.split(",")) {
+                                if (!actors.contains(a.trim())) actors.add(a.trim());
+                            }
+                        } else if (!actors.contains(result.trim())) {
+                            actors.add(result.trim());
                         }
-                    } else if (!actors.contains(result.trim())) {
-                        actors.add(result.trim());
                     }
+                } catch (Exception ignored) {
                 }
-            } catch (Exception ignored) {
             }
         }
         return actors;
