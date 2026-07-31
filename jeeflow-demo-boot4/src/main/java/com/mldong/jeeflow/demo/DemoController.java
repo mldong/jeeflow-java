@@ -55,6 +55,17 @@ public class DemoController {
         data.put("type", def.getType());
         data.put("state", def.getState());
         data.put("version", def.getVersion());
+        // 流程图数据（供前端设计器预览）
+        if (def.getContent() != null) {
+            try {
+                IJsonProvider json = ServiceContext.find(IJsonProvider.class);
+                if (json != null) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> graphData = json.fromJson(new String(def.getContent(), StandardCharsets.UTF_8), Map.class);
+                    data.put("graphData", graphData);
+                }
+            } catch (Exception ignored) {}
+        }
         return ok(data);
     }
 
@@ -69,6 +80,13 @@ public class DemoController {
         if (params.containsKey("reason")) args.put("reason", params.get("reason"));
         args.put(FlowConst.BUSINESS_NO, "BIZ-" + System.currentTimeMillis());
         ProcessInstance inst = engine.startProcessInstanceById(defineId, operator, args);
+        // boot2 契约：启动后自动完成申请节点（assignee="applicant" → 发起人）
+        List<ProcessTask> doingTasks = repository.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask task : doingTasks) {
+            repository.addTaskActor(task.getTaskId(), List.of(operator));
+            args.put(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode());
+            engine.executeProcessTask(task.getTaskId(), operator, args);
+        }
         return ok(Map.of("processInstanceId", inst.getInstanceId()));
     }
 
@@ -213,7 +231,8 @@ public class DemoController {
         if (params.containsKey("comment")) args.put(FlowConst.APPROVAL_COMMENT, params.get("comment"));
         try {
             if (ProcessSubmitTypeEnum.REJECT.getCode().equals(submitType)) {
-                engine.executeAndJumpToEnd(taskId, operator, args);
+                // boot2 契约：驳回 → 跳回申请节点，发起人收到新待办
+                engine.executeAndJumpTask(taskId, operator, args, "apply");
             } else if (ProcessSubmitTypeEnum.ROLLBACK.getCode().equals(submitType)) {
                 engine.executeAndJumpTask(taskId, operator, args, null);
             } else {

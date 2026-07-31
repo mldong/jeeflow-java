@@ -72,6 +72,10 @@ public class CreateTaskHandler implements IHandler {
         // 1. 固定指派 assignee
         if (taskModel.getAssignee() != null && !taskModel.getAssignee().isEmpty()) {
             String assignee = taskModel.getAssignee();
+            // boot2 约定："applicant" → 解析为流程发起人
+            if (assignee.contains("applicant")) {
+                assignee = assignee.replace("applicant", execution.getProcessInstance().getOperator());
+            }
             if (assignee.contains(",")) {
                 for (String a : assignee.split(",")) {
                     String trimmed = a.trim();
