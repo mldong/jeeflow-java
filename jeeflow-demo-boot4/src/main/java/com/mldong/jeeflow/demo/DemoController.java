@@ -15,11 +15,17 @@ import com.mldong.jeeflow.spring.JeeflowQueryParser;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
  * 演示站 REST 控制器——路径和参数格式对齐 mldong-boot2
+ *
+ * <p>boot2 CommonResult 规范：code=0 成功 / 99999999 失败，字段 code/msg/data；
+ * submitType 全枚举（0/1/2/3/4/5/6/20）；
+ * highLight / approvalRecord 独立端点。</p>
  */
 @RestController
 public class DemoController {
@@ -55,18 +61,15 @@ public class DemoController {
         data.put("type", def.getType());
         data.put("state", def.getState());
         data.put("version", def.getVersion());
-        // 流程图数据（供前端设计器预览）
-        if (def.getContent() != null) {
-            try {
-                IJsonProvider json = ServiceContext.find(IJsonProvider.class);
-                if (json != null) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> graphData = json.fromJson(new String(def.getContent(), StandardCharsets.UTF_8), Map.class);
-                    data.put("graphData", graphData);
-                }
-            } catch (Exception ignored) {}
-        }
+        // 流程图数据（供前端设计器预览）——boot2 ProcessDefineVO.jsonObject
+        Map<String, Object> graph = parseGraph(def);
+        if (graph != null) data.put("jsonObject", graph);
         return ok(data);
+    }
+
+    @PostMapping("/wf/processDefine/startAndExecute")
+    public Map<String, Object> defineStartAndExecute(@RequestBody Map<String, Object> params) {
+        return startAndExecute(params);
     }
 
     // ═══ 流程实例 ═══
@@ -75,19 +78,20 @@ public class DemoController {
     public Map<String, Object> startAndExecute(@RequestBody Map<String, Object> params) {
         Long defineId = toLong(params.get(FlowConst.PROCESS_DEFINE_ID_KEY));
         String operator = params.get("operator") != null ? params.get("operator").toString() : "user1";
+        // 透传 body 其余参数作为流程变量（演示站不依赖登录态，便于切换人员）
         FlowData args = FlowData.create();
-        if (params.containsKey("amount")) args.put("amount", toLong(params.get("amount")));
-        if (params.containsKey("reason")) args.put("reason", params.get("reason"));
-        args.put(FlowConst.BUSINESS_NO, "BIZ-" + System.currentTimeMillis());
+        params.forEach((k, v) -> {
+            if (!FlowConst.PROCESS_DEFINE_ID_KEY.equals(k) && !"operator".equals(k)) args.put(k, v);
+        });
         ProcessInstance inst = engine.startProcessInstanceById(defineId, operator, args);
-        // boot2 契约：启动后自动完成申请节点（assignee="applicant" → 发起人）
+        // boot2 startAndExecute：自动完成申请节点（assignee="applicant" → 发起人）
         List<ProcessTask> doingTasks = repository.findDoingTasks(inst.getInstanceId(), new String[]{});
         for (ProcessTask task : doingTasks) {
             repository.addTaskActor(task.getTaskId(), List.of(operator));
             args.put(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode());
             engine.executeProcessTask(task.getTaskId(), operator, args);
         }
-        return ok(Map.of("processInstanceId", inst.getInstanceId()));
+        return ok();
     }
 
     @PostMapping("/wf/processInstance/page")
@@ -96,7 +100,8 @@ public class DemoController {
         String userId = toStr(params.get("operator"), "user1");
         query.add("t.operator", "EQ", userId);
         PageResult<IProcessRepository.InstanceRow> page = repository.pageInstances(query);
-        return pageResult(page);
+        List<Map<String, Object>> rows = page.getRows().stream().map(this::instanceVo).collect(Collectors.toList());
+        return pageResult(PageResult.of(page.getPageNum(), page.getPageSize(), page.getRecordCount(), rows));
     }
 
     @PostMapping("/wf/processInstance/detail")
@@ -104,83 +109,86 @@ public class DemoController {
         Long id = toLong(params.get("id"));
         ProcessInstance inst = repository.findInstanceById(id);
         if (inst == null) return error("实例不存在");
-
-        // 流程定义信息
         ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", inst.getInstanceId());
+        vo.put("parentId", inst.getParentId());
+        vo.put("processDefineId", inst.getDefineId());
+        vo.put("state", inst.getState());
+        vo.put("parentNodeName", inst.getParentNodeName());
+        vo.put("businessNo", inst.getBusinessNo());
+        vo.put("operator", inst.getOperator());
+        vo.put("expireTime", fmtTime(inst.getExpireTime()));
+        vo.put("variable", toJsonString(inst.getVariables()));
+        vo.put("createTime", fmtTime(inst.getCreateTime()));
+        vo.put("createUser", inst.getCreateUser());
+        vo.put("updateTime", fmtTime(inst.getUpdateTime()));
+        vo.put("updateUser", inst.getUpdateUser());
+        if (def != null) {
+            vo.put("displayName", def.getDisplayName());
+            vo.put("name", def.getName());
+            vo.put("version", def.getVersion());
+            Map<String, Object> graph = parseGraph(def);
+            if (graph != null) vo.put("jsonObject", graph);
+        }
+        List<Map<String, Object>> active = new ArrayList<>();
+        for (ProcessTask t : repository.findDoingTasks(id, new String[]{})) {
+            active.add(taskVo(t, null, null, null));
+        }
+        vo.put("activeTaskList", active);
+        return ok(vo);
+    }
 
-        // 审批记录
-        List<Map<String, Object>> records = new ArrayList<>();
-        List<ProcessTask> history = repository.findHistoryTasks(id);
-        Set<String> finishedNodeNames = new LinkedHashSet<>();
-        Set<String> activeNodeNames = new LinkedHashSet<>();
-        for (ProcessTask t : history) {
-            Map<String, Object> r = new LinkedHashMap<>();
-            r.put("id", t.getTaskId());
-            r.put("taskName", t.getTaskName());
-            r.put("displayName", t.getDisplayName());
-            r.put("taskState", t.getTaskState());
-            r.put("operator", t.getActorId());
-            r.put("createTime", t.getCreateTime());
-            r.put("finishTime", t.getFinishTime());
-            r.put("variables", t.getVariables());
-            records.add(r);
-            // 收集高亮节点名
+    @PostMapping("/wf/processInstance/highLight")
+    public Map<String, Object> highLight(@RequestBody Map<String, Object> params) {
+        Long id = toLong(params.get("id"));
+        ProcessInstance inst = repository.findInstanceById(id);
+        if (inst == null) return error("实例不存在");
+        Set<String> finished = new LinkedHashSet<>();
+        Set<String> active = new LinkedHashSet<>();
+        for (ProcessTask t : repository.findHistoryTasks(id)) {
             if (t.getTaskState() != null && t.getTaskState() == 20) {
-                finishedNodeNames.add(t.getTaskName());
+                finished.add(t.getTaskName());
             } else if (t.getTaskState() != null && t.getTaskState() == 10) {
-                activeNodeNames.add(t.getTaskName());
+                active.add(t.getTaskName());
             }
         }
-
-        // 流程定义 JSON（供前端设计器渲染）
-        Map<String, Object> graphData = null;
-        if (def != null && def.getContent() != null) {
-            try {
-                IJsonProvider json = ServiceContext.find(IJsonProvider.class);
-                if (json != null) {
-                    String contentStr = new String(def.getContent(), java.nio.charset.StandardCharsets.UTF_8);
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> parsed = json.fromJson(contentStr, Map.class);
-                    graphData = parsed;
-                }
-            } catch (Exception ignored) {}
-        }
-
-        // 计算高亮边（连接已完成节点的边）
-        List<String> finishedEdgeNames = new ArrayList<>();
-        if (graphData != null) {
+        // 高亮边：连接已完成节点的边
+        List<String> finishedEdges = new ArrayList<>();
+        ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        Map<String, Object> graph = parseGraph(def);
+        if (graph != null) {
             @SuppressWarnings("unchecked")
-            List<Map<String, Object>> edges = (List<Map<String, Object>>) graphData.getOrDefault("edges", java.util.Collections.emptyList());
+            List<Map<String, Object>> edges = (List<Map<String, Object>>) graph.getOrDefault("edges", Collections.emptyList());
             for (Map<String, Object> edge : edges) {
                 String src = (String) edge.get("sourceNodeId");
                 String tgt = (String) edge.get("targetNodeId");
-                if (finishedNodeNames.contains(src) && finishedNodeNames.contains(tgt)) {
-                    finishedEdgeNames.add((String) edge.get("id"));
+                if (finished.contains(src) && finished.contains(tgt)) {
+                    finishedEdges.add((String) edge.get("id"));
                 }
             }
         }
-
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("id", inst.getInstanceId());
-        data.put("state", inst.getState());
-        data.put("operator", inst.getOperator());
-        data.put("businessNo", inst.getBusinessNo());
-        data.put("createTime", inst.getCreateTime());
-        data.put("defineName", def != null ? def.getDisplayName() : "");
-        data.put("graphData", graphData);
-        data.put("approvalRecords", records);
-        // 高亮数据
-        Map<String, Object> highLight = new LinkedHashMap<>();
-        highLight.put("historyNodeNames", new ArrayList<>(finishedNodeNames));
-        highLight.put("historyEdgeNames", finishedEdgeNames);
-        highLight.put("activeNodeNames", new ArrayList<>(activeNodeNames));
-        data.put("highLight", highLight);
+        data.put("historyNodeNames", new ArrayList<>(finished));
+        data.put("historyEdgeNames", finishedEdges);
+        data.put("activeNodeNames", new ArrayList<>(active));
         return ok(data);
     }
 
     @PostMapping("/wf/processInstance/approvalRecord")
     public Map<String, Object> approvalRecord(@RequestBody Map<String, Object> params) {
-        return instanceDetail(params); // 复用
+        Long id = toLong(params.get("id"));
+        ProcessInstance inst = repository.findInstanceById(id);
+        if (inst == null) return error("实例不存在");
+        ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        List<Map<String, Object>> records = new ArrayList<>();
+        for (ProcessTask t : repository.findHistoryTasks(id)) {
+            records.add(taskVo(t,
+                    def != null ? def.getName() : null,
+                    def != null ? def.getDisplayName() : null,
+                    inst.getCreateTime()));
+        }
+        return ok(records);
     }
 
     // ═══ 流程任务 ═══
@@ -191,7 +199,8 @@ public class DemoController {
         String userId = toStr(params.getOrDefault("userId", params.get("operator")), "user1");
         query.add("pta.actor_id", "EQ", userId);
         PageResult<IProcessRepository.TaskRow> page = repository.pageTodoTasks(query);
-        return pageResult(page);
+        List<Map<String, Object>> rows = page.getRows().stream().map(this::taskVo).collect(Collectors.toList());
+        return pageResult(PageResult.of(page.getPageNum(), page.getPageSize(), page.getRecordCount(), rows));
     }
 
     @PostMapping("/wf/processTask/doneList")
@@ -200,7 +209,8 @@ public class DemoController {
         String userId = toStr(params.getOrDefault("userId", params.get("operator")), "user1");
         query.add("pta.actor_id", "EQ", userId);
         PageResult<IProcessRepository.TaskRow> page = repository.pageDoneTasks(query);
-        return pageResult(page);
+        List<Map<String, Object>> rows = page.getRows().stream().map(this::taskVo).collect(Collectors.toList());
+        return pageResult(PageResult.of(page.getPageNum(), page.getPageSize(), page.getRecordCount(), rows));
     }
 
     @PostMapping("/wf/processTask/detail")
@@ -208,17 +218,7 @@ public class DemoController {
         Long id = toLong(params.get("id"));
         ProcessTask task = repository.findTaskById(id);
         if (task == null) return error("任务不存在");
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("id", task.getTaskId());
-        data.put("processInstanceId", task.getProcessInstanceId());
-        data.put("taskName", task.getTaskName());
-        data.put("displayName", task.getDisplayName());
-        data.put("taskState", task.getTaskState());
-        data.put("operator", task.getActorId());
-        data.put("formKey", task.getFormKey());
-        data.put("createTime", task.getCreateTime());
-        data.put("actorIds", task.getActorIds());
-        return ok(data);
+        return ok(taskVo(task, null, null, null));
     }
 
     @PostMapping("/wf/processTask/execute")
@@ -226,19 +226,35 @@ public class DemoController {
         Long taskId = toLong(params.get(FlowConst.PROCESS_TASK_ID_KEY));
         String operator = params.get("operator") != null ? params.get("operator").toString() : "leader";
         Integer submitType = toInt(params.get(FlowConst.SUBMIT_TYPE), ProcessSubmitTypeEnum.AGREE.getCode());
+        // 透传 body 其余参数（taskName 供跳转、comment 审批意见等）
         FlowData args = FlowData.create();
+        params.forEach((k, v) -> {
+            if (!FlowConst.PROCESS_TASK_ID_KEY.equals(k) && !"operator".equals(k)) args.put(k, v);
+        });
         args.put(FlowConst.SUBMIT_TYPE, submitType);
-        if (params.containsKey("comment")) args.put(FlowConst.APPROVAL_COMMENT, params.get("comment"));
         try {
             if (ProcessSubmitTypeEnum.REJECT.getCode().equals(submitType)) {
-                // boot2 契约：驳回 → 跳回申请节点，发起人收到新待办
-                engine.executeAndJumpTask(taskId, operator, args, "apply");
+                // 2 拒绝 → 跳结束（实例→45）
+                engine.executeAndJumpToEnd(taskId, operator, args);
             } else if (ProcessSubmitTypeEnum.ROLLBACK.getCode().equals(submitType)) {
-                engine.executeAndJumpTask(taskId, operator, args, null);
+                // 3 退回上一步（回溯上一任务节点）
+                rollbackToPrev(taskId, operator, args);
+            } else if (ProcessSubmitTypeEnum.JUMP.getCode().equals(submitType)) {
+                // 4 跳指定节点
+                String taskName = params.get("taskName") != null ? params.get("taskName").toString() : null;
+                engine.executeAndJumpTask(taskId, operator, args, taskName);
+            } else if (ProcessSubmitTypeEnum.ROLLBACK_TO_OPERATOR.getCode().equals(submitType)) {
+                // 6 退回发起人（第一个任务节点）
+                engine.executeAndJumpToFirstTaskNode(taskId, operator, args);
+            } else if (ProcessSubmitTypeEnum.COUNTERSIGN_DISAGREE.getCode().equals(submitType)) {
+                // 20 会签不同意
+                args.put("countersignDisagreeFlag", 1);
+                engine.executeProcessTask(taskId, operator, args);
             } else {
+                // 0/1/5 及默认 → 执行
                 engine.executeProcessTask(taskId, operator, args);
             }
-            return ok(Map.of("message", "处理成功"));
+            return ok();
         } catch (Exception e) {
             return error(e.getMessage());
         }
@@ -279,39 +295,137 @@ public class DemoController {
 
     @GetMapping("/api/stats")
     public Map<String, Object> stats(@RequestParam(name = "userId", defaultValue = "user1") String userId) {
-        int todoCount = repository.countTodoTasks(toLong(userId) != null ? toLong(userId) : 1L);
+        PageQuery todoQ = new PageQuery(1, 1);
+        todoQ.add("pta.actor_id", "EQ", userId);
+        int todoCount = repository.pageTodoTasks(todoQ).getRecordCount();
 
-        PageQuery q1 = new PageQuery(1,1);
-        q1.add("t.operator", "EQ", userId);
-        PageResult<IProcessRepository.InstanceRow> insts = repository.pageInstances(q1);
+        PageQuery instQ = new PageQuery(1, 1);
+        instQ.add("t.operator", "EQ", userId);
+        int myInstanceCount = repository.pageInstances(instQ).getRecordCount();
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("todoCount", todoCount);
-        data.put("myInstanceCount", insts.getRecordCount());
+        data.put("myInstanceCount", myInstanceCount);
         return ok(data);
     }
 
-    // ═══ 响应工具 ═══
+    // ═══ VO 转换（对齐 boot2 ProcessInstanceVO / ProcessTaskVO）═══
+
+    private Map<String, Object> instanceVo(IProcessRepository.InstanceRow r) {
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", r.getId());
+        vo.put("parentId", r.getParentId());
+        vo.put("processDefineId", r.getProcessDefineId());
+        vo.put("state", r.getState());
+        vo.put("parentNodeName", r.getParentNodeName());
+        vo.put("businessNo", r.getBusinessNo());
+        vo.put("operator", r.getOperator());
+        vo.put("expireTime", fmtTime(r.getExpireTime()));
+        vo.put("variable", r.getVariable());
+        vo.put("createTime", fmtTime(r.getCreateTime()));
+        vo.put("createUser", r.getCreateUser());
+        vo.put("updateTime", fmtTime(r.getUpdateTime()));
+        vo.put("updateUser", r.getUpdateUser());
+        vo.put("displayName", r.getProcessDefineDisplayName());
+        vo.put("name", r.getProcessDefineName());
+        vo.put("version", r.getProcessDefineVersion());
+        // jsonObject + activeTaskList（boot2 ProcessInstanceVO）
+        ProcessInstance.ProcessDefine def = repository.findDefineById(r.getProcessDefineId());
+        Map<String, Object> graph = parseGraph(def);
+        if (graph != null) vo.put("jsonObject", graph);
+        List<Map<String, Object>> active = new ArrayList<>();
+        for (ProcessTask t : repository.findDoingTasks(r.getId(), new String[]{})) {
+            active.add(taskVo(t, null, null, null));
+        }
+        vo.put("activeTaskList", active);
+        return vo;
+    }
+
+    private Map<String, Object> taskVo(IProcessRepository.TaskRow r) {
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", r.getId());
+        vo.put("processInstanceId", r.getProcessInstanceId());
+        vo.put("taskName", r.getTaskName());
+        vo.put("displayName", r.getDisplayName());
+        vo.put("taskType", r.getTaskType());
+        vo.put("performType", r.getPerformType());
+        vo.put("taskState", r.getTaskState());
+        vo.put("operator", r.getOperator());
+        vo.put("finishTime", fmtTime(r.getFinishTime()));
+        vo.put("expireTime", fmtTime(r.getExpireTime()));
+        vo.put("formKey", r.getFormKey());
+        vo.put("taskParentId", r.getTaskParentId());
+        vo.put("variable", r.getVariable());
+        vo.put("createTime", fmtTime(r.getCreateTime()));
+        vo.put("createUser", r.getCreateUser());
+        vo.put("updateTime", fmtTime(r.getUpdateTime()));
+        vo.put("updateUser", r.getUpdateUser());
+        vo.put("processDefineName", r.getProcessDefineName());
+        vo.put("processDefineDisplayName", r.getProcessDefineDisplayName());
+        vo.put("instanceVariable", r.getInstanceVariable());
+        vo.put("instanceCreateTime", fmtTime(r.getInstanceCreateTime()));
+        vo.put("taskActorIdList", repository.findTaskActors(r.getId()));
+        return vo;
+    }
+
+    private Map<String, Object> taskVo(ProcessTask t, String defineName, String defineDisplayName,
+                                       LocalDateTime instanceCreateTime) {
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", t.getTaskId());
+        vo.put("processInstanceId", t.getProcessInstanceId());
+        vo.put("taskName", t.getTaskName());
+        vo.put("displayName", t.getDisplayName());
+        vo.put("taskType", t.getTaskType() != null ? t.getTaskType().getCode() : null);
+        vo.put("performType", t.getPerformType() != null ? t.getPerformType().getCode() : null);
+        vo.put("taskState", t.getTaskState());
+        vo.put("operator", t.getActorId());
+        vo.put("finishTime", fmtTime(t.getFinishTime()));
+        vo.put("expireTime", fmtTime(t.getExpireTime()));
+        vo.put("formKey", t.getFormKey());
+        vo.put("taskParentId", t.getParentTaskId());
+        vo.put("variable", toJsonString(t.getVariables()));
+        vo.put("createTime", fmtTime(t.getCreateTime()));
+        vo.put("createUser", t.getCreateUser());
+        vo.put("updateTime", fmtTime(t.getUpdateTime()));
+        vo.put("updateUser", t.getUpdateUser());
+        if (defineName != null) {
+            vo.put("processDefineName", defineName);
+            vo.put("processDefineDisplayName", defineDisplayName);
+            vo.put("instanceCreateTime", fmtTime(instanceCreateTime));
+        }
+        vo.put("taskActorIdList", t.getActorIds());
+        return vo;
+    }
+
+    // ═══ 响应工具（boot2 CommonResult：code=0 成功 / 99999999 失败，字段 code/msg/data）═══
+
+    private Map<String, Object> ok() {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("code", 0);
+        r.put("msg", "成功");
+        r.put("data", null);
+        return r;
+    }
 
     private Map<String, Object> ok(Object data) {
         Map<String, Object> r = new LinkedHashMap<>();
-        r.put("code", 200);
-        r.put("message", "成功");
+        r.put("code", 0);
+        r.put("msg", "成功");
         r.put("data", data);
         return r;
     }
 
     private Map<String, Object> error(String msg) {
         Map<String, Object> r = new LinkedHashMap<>();
-        r.put("code", 500);
-        r.put("message", msg);
+        r.put("code", 99999999);
+        r.put("msg", msg);
         return r;
     }
 
     private Map<String, Object> pageResult(PageResult<?> page) {
         Map<String, Object> r = new LinkedHashMap<>();
-        r.put("code", 200);
-        r.put("message", "成功");
+        r.put("code", 0);
+        r.put("msg", "成功");
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("pageNum", page.getPageNum());
         data.put("pageSize", page.getPageSize());
@@ -320,6 +434,79 @@ public class DemoController {
         data.put("rows", page.getRows());
         r.put("data", data);
         return r;
+    }
+
+    // ═══ 工具 ═══
+
+    private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    private static String fmtTime(LocalDateTime t) {
+        return t == null ? null : t.format(FMT);
+    }
+
+    private String toJsonString(Object obj) {
+        try {
+            IJsonProvider json = ServiceContext.find(IJsonProvider.class);
+            return json != null ? json.toJson(obj) : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseGraph(ProcessInstance.ProcessDefine def) {
+        if (def == null || def.getContent() == null) return null;
+        try {
+            IJsonProvider json = ServiceContext.find(IJsonProvider.class);
+            if (json == null) return null;
+            return json.fromJson(new String(def.getContent(), StandardCharsets.UTF_8), Map.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 退回上一步：找到当前任务节点的上一个任务节点并跳转（boot2 ROLLBACK=3） */
+    private void rollbackToPrev(Long taskId, String operator, FlowData args) {
+        ProcessTask task = repository.findTaskById(taskId);
+        ProcessInstance inst = task != null ? repository.findInstanceById(task.getProcessInstanceId()) : null;
+        if (task == null || inst == null) {
+            engine.executeAndJumpToEnd(taskId, operator, args);
+            return;
+        }
+        Map<String, Object> graph = parseGraph(repository.findDefineById(inst.getDefineId()));
+        if (graph == null) {
+            engine.executeAndJumpToEnd(taskId, operator, args);
+            return;
+        }
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> edges = (List<Map<String, Object>>) graph.getOrDefault("edges", Collections.emptyList());
+        // 找当前节点的上一个节点
+        String prev = null;
+        for (Map<String, Object> e : edges) {
+            if (task.getTaskName().equals(e.get("targetNodeId"))) {
+                prev = (String) e.get("sourceNodeId");
+                break;
+            }
+        }
+        // 沿 prev 回溯到任务节点
+        String target = prev;
+        Set<String> seen = new HashSet<>();
+        while (target != null) {
+            if (!seen.add(target)) break;
+            Map<String, Object> node = null;
+            for (Map<String, Object> n : (List<Map<String, Object>>) graph.getOrDefault("nodes", Collections.emptyList())) {
+                if (target.equals(n.get("id"))) { node = n; break; }
+            }
+            if (node == null) break;
+            if ("snaker:task".equals(node.get("type")) || "snaker:custom".equals(node.get("type"))) break;
+            String found = null;
+            for (Map<String, Object> e : edges) {
+                if (target.equals(e.get("targetNodeId"))) { found = (String) e.get("sourceNodeId"); break; }
+            }
+            target = found;
+        }
+        if (target != null) engine.executeAndJumpTask(taskId, operator, args, target);
+        else engine.executeAndJumpToEnd(taskId, operator, args);
     }
 
     private static Long toLong(Object v) {

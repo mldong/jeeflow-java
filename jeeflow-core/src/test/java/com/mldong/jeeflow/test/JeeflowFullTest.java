@@ -78,6 +78,21 @@ public class JeeflowFullTest {
         return def;
     }
 
+    /**
+     * 模拟 demo 的 startAndExecute 契约：
+     * 启动后自动完成申请节点（assignee="applicant" → 发起人），流程推进到第一个业务节点。
+     */
+    private ProcessInstance startFlow(ProcessInstance.ProcessDefine def, FlowData args) throws Exception {
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", args);
+        for (ProcessTask task : repo.findDoingTasks(inst.getInstanceId(), null)) {
+            repo.addTaskActor(task.getTaskId(), Arrays.asList("applicant"));
+            task.getActorIds().add("applicant");
+            engine.executeProcessTask(task.getTaskId(), "applicant",
+                    FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode()));
+        }
+        return repo.findInstanceById(inst.getInstanceId());
+    }
+
     // ═══════════════════════════════════════════
     // 测试 1：简单线性流程 Start → Task → End
     // ═══════════════════════════════════════════
@@ -86,7 +101,7 @@ public class JeeflowFullTest {
         ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
 
         // 启动
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
         assertNotNull(inst);
         assertEquals(ProcessInstanceStateEnum.DOING.getCode(), inst.getState());
 
@@ -115,7 +130,7 @@ public class JeeflowFullTest {
     public void test02MultiTask() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("02-multi-task.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         // 依次完成三级审批
         String[] approvers = {"leader", "manager", "boss"};
@@ -144,7 +159,7 @@ public class JeeflowFullTest {
 
         // 先完成 task1，带 amount=5000
         FlowData startArgs = FlowData.create().set("amount", 5000);
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", startArgs);
+        ProcessInstance inst = startFlow(def, startArgs);
 
         // 完成 task1
         ProcessTask task1 = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
@@ -177,7 +192,7 @@ public class JeeflowFullTest {
     public void test04ForkJoin() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("04-fork-join.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         // fork 后应该产生两个任务
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
@@ -211,7 +226,7 @@ public class JeeflowFullTest {
     public void test05CountersignParallel() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("05-countersign-parallel.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         // 会签创建 3 个任务
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
@@ -238,7 +253,7 @@ public class JeeflowFullTest {
     public void test06CountersignSequential() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("06-countersign-sequential.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         // 串行会签，每次只完成一个
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
@@ -269,7 +284,7 @@ public class JeeflowFullTest {
     public void test07CountersignRatio() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("07-countersign-ratio.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         // 4 个任务，只需完成 2 个
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
@@ -296,7 +311,7 @@ public class JeeflowFullTest {
     public void test08CustomNode() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("08-custom-node.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         // 自定义节点在当前实现中直接执行 runOutTransition（因为 invokeObject 为 null 时走 IHandler 检测）
         // 然后记录 history task，接着执行输出边 → end → finish
@@ -312,7 +327,7 @@ public class JeeflowFullTest {
     public void test09Reject() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("09-with-reject.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         // 完成 task1
         ProcessTask task1 = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
@@ -322,15 +337,14 @@ public class JeeflowFullTest {
         engine.executeProcessTask(task1.getTaskId(), "leader",
                 FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
 
-        // 在 task2 处驳回
+        // 在 task2 处驳回（boot2 契约：REJECT → executeAndJumpToEnd，实例 → 45）
         ProcessTask task2 = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
         assertEquals("task2", task2.getTaskName());
         repo.addTaskActor(task2.getTaskId(), Arrays.asList("manager"));
         task2.getActorIds().add("manager");
 
-        // 驳回 task2 → 流程结束（reject）
         FlowData rejectArgs = FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.REJECT.getCode());
-        engine.executeProcessTask(task2.getTaskId(), "manager", rejectArgs);
+        engine.executeAndJumpToEnd(task2.getTaskId(), "manager", rejectArgs);
 
         ProcessInstance updated = repo.findInstanceById(inst.getInstanceId());
         assertEquals(ProcessInstanceStateEnum.REJECT.getCode(), updated.getState());
@@ -343,7 +357,7 @@ public class JeeflowFullTest {
     public void test10Jump() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         ProcessTask task1 = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
         repo.addTaskActor(task1.getTaskId(), Arrays.asList("leader"));
@@ -364,17 +378,9 @@ public class JeeflowFullTest {
         ProcessInstance.ProcessDefine def = registerFlow("10-mixed-mode.json");
 
         FlowData args = FlowData.create().set("finalAmount", 3000);
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", args);
+        ProcessInstance inst = startFlow(def, args);
 
-        // 完成 task1
-        ProcessTask task1 = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
-        assertEquals("task1", task1.getTaskName());
-        repo.addTaskActor(task1.getTaskId(), Arrays.asList("applicant"));
-        task1.getActorIds().add("applicant");
-        engine.executeProcessTask(task1.getTaskId(), "applicant",
-                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
-
-        // fork 出 task2 + task3
+        // start → apply → fork 出 task2 + task3
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
         assertEquals(2, doing.size());
 
@@ -406,7 +412,7 @@ public class JeeflowFullTest {
     public void test12ActorNotAllowed() throws Exception {
         ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
 
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
         ProcessTask task = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
 
         // 没有添加参与者就执行，应抛异常
@@ -450,7 +456,7 @@ public class JeeflowFullTest {
         ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
 
         // 启动流程——不手动设置 actor
-        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessInstance inst = startFlow(def, FlowData.create());
 
         // 获取创建的任务
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);

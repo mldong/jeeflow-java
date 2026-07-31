@@ -87,11 +87,14 @@ public class JdbcRepositoryTest {
         ServiceContext.put("json", jsonProvider);
         ServiceContext.put("expr", new TestExprEvaluator());
         ServiceContext.put("user", new IUserProvider() {
-            @Override public String getRealName(String userId) { return "用户" + userId; }
-            @Override public String getDeptId(String userId) { return "D01"; }
-            @Override public String getDeptName(String userId) { return "XX部门"; }
-            @Override public String getPostId(String userId) { return "P01"; }
-            @Override public String getPostName(String userId) { return "XX岗位"; }
+            @Override public UserInfo getUser(String userId) {
+                UserInfo u = UserInfo.of(userId);
+                u.setDeptId("D01");
+                u.setDeptName("XX部门");
+                u.setPostId("P01");
+                u.setPostName("XX岗位");
+                return u;
+            }
         });
 
         engine = new JeeflowEngineImpl();
