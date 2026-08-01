@@ -120,6 +120,18 @@ public CommonResult<CommonPage<TaskRow>> todoList(@RequestBody Map<String, Objec
 
 列名在仓库层过白名单校验，不在白名单的自动丢弃，防止 SQL 注入。
 
+### 参考实现：JdbcProcessRepository
+
+`jeeflow-repository-jdbc` 模块提供纯 JDBC 实现（零 ORM 依赖），注入 `DataSource` 即可对接任意数据库（MySQL / H2 / PostgreSQL）：
+
+```java
+JdbcProcessRepository repository = new JdbcProcessRepository(dataSource);
+```
+
+- 自动映射 `wf_*` 5 张表（spec §2），兼容 mldong 框架（boot2 版）表结构
+- 主键用 `IIdGenerator` SPI（不注册则内置时间戳+序号）
+- **事务（spec §7.4）**：引擎方法不开启事务，由业务层用 `ITransactionTemplate` 包装——Spring Boot 场景使用 `@Transactional` 或 `TransactionTemplate`，仓储所有方法从 `DataSource.getConnection()` 取连接，天然加入当前 Spring 事务
+
 ---
 
 ## IJsonProvider（必须）
