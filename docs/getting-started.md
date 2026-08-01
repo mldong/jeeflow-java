@@ -1,5 +1,7 @@
 # 快速开始
 
+> ⚠️ **版本说明**：以下坐标是发布目标版本（`1.0.0`）。SDK 尚未发布到 Maven Central 前，请用本地构建：`mvn -q install -DskipTests -pl jeeflow-core`（当前版本 `1.0.0-SNAPSHOT`）。
+
 ## 1. Maven 依赖
 
 ### 最小运行（内存模式，不依赖数据库）
