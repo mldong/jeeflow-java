@@ -22,7 +22,7 @@ mvn -q -pl jeeflow-demo-boot4 spring-boot:run
 # → http://localhost:8080
 ```
 
-> 演示站对接 jeeflow-ui（:5173）时右上角切到 `☕ Java :8080`；接口规范（code=0/msg、submitType 全枚举）见[文档站 REST API 指南](https://jeeflow-doc.mldong.com/guides/03-api)。
+> 演示站对接 jeeflow-ui（:5173）时右上角切到 `☕ Java :8080`；接口规范（code=0/msg、submitType 全枚举）见[文档站 REST API 指南](../../guides/03-api)。
 
 ## 快速验证
 
@@ -50,7 +50,7 @@ mvn package
 java -jar jeeflow-demo-boot4/target/*.jar --server.port=8080
 ```
 
-生产接入：实现 `IProcessRepository` SPI（或直接用 `jeeflow-repository-jdbc` 的 JDBC 实现，注入 DataSource），映射 [SPEC §2](https://jeeflow-doc.mldong.com/spec/) 的 5 张表。
+生产接入：实现 `IProcessRepository` SPI（或直接用 `jeeflow-repository-jdbc` 的 JDBC 实现，注入 DataSource），映射 [SPEC §2](../../spec/) 的 5 张表。
 
 ## 常见问题
 
