@@ -33,8 +33,8 @@
 
     <licenses>
         <license>
-            <name>MIT License</name>
-            <url>https://opensource.org/licenses/MIT</url>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
         </license>
     </licenses>
 
@@ -47,9 +47,9 @@
     </developers>
 
     <scm>
-        <connection>scm:git:https://github.com/mldong/jeeflow.git</connection>
-        <developerConnection>scm:git:git@github.com:mldong/jeeflow.git</developerConnection>
-        <url>https://github.com/mldong/jeeflow</url>
+        <connection>scm:git:https://github.com/mldong/jeeflow-java.git</connection>
+        <developerConnection>scm:git:git@github.com:mldong/jeeflow-java.git</developerConnection>
+        <url>https://github.com/mldong/jeeflow-java</url>
     </scm>
 
     <dependencyManagement>
@@ -103,5 +103,58 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <!-- 发布专用 profile（Maven Central）：GPG 签名 + sources/javadoc 附件 -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.6.3</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>
