@@ -7,7 +7,7 @@
 | 模块 | JDK |
 |------|-----|
 | `jeeflow-core`（引擎核心，零依赖） | JDK 8 |
-| `jeeflow-demo-boot4`（演示站） | JDK 21 |
+| `jeeflow-demo-boot4`（演示站） | JDK 21（Boot 4 官方最低 17，本项目统一 21） |
 
 Maven 3.6+。
 

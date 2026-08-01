@@ -6,7 +6,7 @@
 |---------|----------|----------|
 | `jeeflow-spring-boot2-starter` | 2.x | 8 |
 | `jeeflow-spring-boot3-starter` | 3.x | 17 |
-| `jeeflow-spring-boot4-starter` | 4.x | 17 |
+| `jeeflow-spring-boot4-starter` | 4.x | 17（官方基线；本项目统一 21） |
 
 ## 添加依赖
 
