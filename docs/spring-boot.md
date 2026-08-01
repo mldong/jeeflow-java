@@ -76,7 +76,7 @@ jeeflow:
 Starter 依赖 `spring-boot-starter-jdbc`（由你已有配置提供 DataSource），引擎使用 5 张表：
 
 ```sql
--- MySQL DDL（与 mldong-boot2 完全兼容）
+-- MySQL DDL（与 mldong 框架 完全兼容）
 CREATE TABLE wf_process_define (
     id BIGINT NOT NULL COMMENT '主键',
     name VARCHAR(64) NOT NULL COMMENT '唯一编码',

@@ -122,7 +122,7 @@ jeeflow:
 
 ## 4. 表结构
 
-引擎使用 5 张核心表（与 mldong-boot2 完全兼容）：
+引擎使用 5 张核心表（与 mldong 框架 完全兼容）：
 
 - `wf_process_define` — 流程定义
 - `wf_process_instance` — 流程实例
