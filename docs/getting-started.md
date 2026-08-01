@@ -128,7 +128,7 @@ jeeflow:
 - `wf_process_task_actor` — 任务参与者
 - `wf_process_cc_instance` — 抄送
 
-DDL 见 [schema-h2.sql](../jeeflow-repository-jdbc/src/test/resources/schema-h2.sql)（H2 版本，MySQL 直接可用）。
+DDL 见[引擎规范 §2](https://jeeflow-doc.mldong.com/spec/)（5 张表，H2/MySQL 均可）。
 
 ## 5. 下一步
 
