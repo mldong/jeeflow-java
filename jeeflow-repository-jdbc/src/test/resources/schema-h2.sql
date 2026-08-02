@@ -74,3 +74,43 @@ CREATE TABLE IF NOT EXISTS wf_process_cc_instance (
     update_user          VARCHAR(64)  NULL     COMMENT '更新用户',
     PRIMARY KEY (id)
 );
+
+CREATE TABLE IF NOT EXISTS wf_process_design (
+  id            BIGINT       NOT NULL PRIMARY KEY,
+  name          VARCHAR(100) NOT NULL,
+  display_name  VARCHAR(200) NOT NULL,
+  type          VARCHAR(50)  DEFAULT 'approval',
+  icon          VARCHAR(200),
+  is_deployed   INT          DEFAULT 0,
+  remark        CLOB,
+  create_time   TIMESTAMP,
+  create_user   VARCHAR(64),
+  update_time   TIMESTAMP,
+  update_user   VARCHAR(64)
+);
+CREATE INDEX IF NOT EXISTS idx_process_design_name ON wf_process_design(name);
+
+CREATE TABLE IF NOT EXISTS wf_process_design_his (
+  id                BIGINT NOT NULL PRIMARY KEY,
+  process_design_id BIGINT NOT NULL,
+  content           BLOB,
+  create_time       TIMESTAMP,
+  create_user       VARCHAR(64)
+);
+CREATE INDEX IF NOT EXISTS idx_process_design_his_pdid ON wf_process_design_his(process_design_id);
+
+CREATE TABLE IF NOT EXISTS wf_process_surrogate (
+  id            BIGINT      NOT NULL PRIMARY KEY,
+  process_name  VARCHAR(100),
+  operator      VARCHAR(64) NOT NULL,
+  surrogate     VARCHAR(64) NOT NULL,
+  start_time    TIMESTAMP,
+  end_time      TIMESTAMP,
+  enabled       INT         DEFAULT 1,
+  create_time   TIMESTAMP,
+  create_user   VARCHAR(64),
+  update_time   TIMESTAMP,
+  update_user   VARCHAR(64)
+);
+CREATE INDEX IF NOT EXISTS idx_process_surrogate_op ON wf_process_surrogate(operator);
+CREATE INDEX IF NOT EXISTS idx_process_surrogate_sur ON wf_process_surrogate(surrogate);
