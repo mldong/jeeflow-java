@@ -130,7 +130,7 @@ jeeflow:
 - `wf_process_task_actor` — 任务参与者
 - `wf_process_cc_instance` — 抄送
 
-DDL 见[引擎规范 §2](../../spec/)（5 张表，H2/MySQL 均可）。
+DDL 见[规范 01 · 数据模型](../../spec/01-data-model)（5 张表，H2/MySQL 均可）。
 
 ## 5. 下一步
 

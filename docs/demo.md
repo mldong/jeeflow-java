@@ -50,7 +50,7 @@ mvn package
 java -jar jeeflow-demo-boot4/target/*.jar --server.port=8080
 ```
 
-生产接入：实现 `IProcessRepository` SPI（或直接用 `jeeflow-repository-jdbc` 的 JDBC 实现，注入 DataSource），映射 [SPEC §2](../../spec/) 的 5 张表。
+生产接入：实现 `IProcessRepository` SPI（或直接用 `jeeflow-repository-jdbc` 的 JDBC 实现，注入 DataSource），映射 [规范 01 · 数据模型](../../spec/01-data-model) 的 5 张表。
 
 ## 常见问题
 
