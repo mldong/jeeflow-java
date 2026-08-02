@@ -8,6 +8,8 @@ import com.mldong.jeeflow.spi.PageQuery;
 import com.mldong.jeeflow.spi.PageResult;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -178,37 +180,26 @@ public class MemoryProcessRepository implements IProcessRepository {
 
     @Override
     public PageResult<TaskRow> pageTodoTasks(PageQuery query) {
-        // 支持 pta.actor_id EQ 过滤（Facade todoList 依赖），仅进行中任务
-        String actorId = null;
-        for (PageQuery.Condition c : query.getConditions()) {
-            if ("pta.actor_id".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
-                actorId = c.getValue().toString();
-            }
-        }
+        // 通用条件过滤（含 pta.actor_id EQ，Facade todoList 依赖），仅进行中任务
         List<TaskRow> rows = new ArrayList<>();
         for (ProcessTask t : tasks.values()) {
             if (!Integer.valueOf(10).equals(t.getTaskState())) continue;
-            List<String> actors = taskActors.get(t.getTaskId());
-            if (actorId != null && (actors == null || !actors.contains(actorId))) continue;
-            rows.add(toTaskRow(t));
+            TaskRow r = toTaskRow(t);
+            Map<String, Object> fields = taskFields(r);
+            fields.put("pta.actor_id", taskActors.getOrDefault(t.getTaskId(), new ArrayList<>()));
+            if (matches(query.getConditions(), fields)) rows.add(r);
         }
         return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
     }
 
     @Override
     public PageResult<TaskRow> pageDoneTasks(PageQuery query) {
-        // 支持 t.operator EQ 过滤（Facade doneList 依赖），仅已完成任务
-        String operator = null;
-        for (PageQuery.Condition c : query.getConditions()) {
-            if ("t.operator".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
-                operator = c.getValue().toString();
-            }
-        }
+        // 通用条件过滤（含 t.operator EQ，Facade doneList 依赖），仅已完成任务
         List<TaskRow> rows = new ArrayList<>();
         for (ProcessTask t : tasks.values()) {
             if (!Integer.valueOf(20).equals(t.getTaskState())) continue;
-            if (operator != null && !operator.equals(t.getActorId())) continue;
-            rows.add(toTaskRow(t));
+            TaskRow r = toTaskRow(t);
+            if (matches(query.getConditions(), taskFields(r))) rows.add(r);
         }
         return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
     }
@@ -245,19 +236,129 @@ public class MemoryProcessRepository implements IProcessRepository {
     }
 
     @Override public PageResult<InstanceRow> pageInstances(PageQuery query) {
-        // 支持 t.operator EQ 过滤（Facade instancePage 依赖）
-        String operator = null;
-        for (PageQuery.Condition c : query.getConditions()) {
-            if ("t.operator".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
-                operator = c.getValue().toString();
-            }
-        }
+        // 通用条件过滤（含 t.operator EQ，Facade instancePage 依赖）
         List<InstanceRow> rows = new ArrayList<>();
         for (ProcessInstance inst : instances.values()) {
-            if (operator != null && !operator.equals(inst.getOperator())) continue;
-            rows.add(toInstanceRow(inst));
+            InstanceRow r = toInstanceRow(inst);
+            if (matches(query.getConditions(), instanceFields(r))) rows.add(r);
         }
         return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
+    }
+
+    // ═══ 通用条件匹配（对齐 JdbcProcessRepository.buildWhere 语义，issues/05-5） ═══
+
+    /** 行字段（列名 → 值）映射：白名单列均可匹配 */
+    private static Map<String, Object> taskFields(TaskRow r) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("t.id", r.getId());
+        m.put("t.task_name", r.getTaskName());
+        m.put("t.display_name", r.getDisplayName());
+        m.put("t.task_type", r.getTaskType());
+        m.put("t.perform_type", r.getPerformType());
+        m.put("t.task_state", r.getTaskState());
+        m.put("t.operator", r.getOperator());
+        m.put("t.form_key", r.getFormKey());
+        m.put("t.create_time", r.getCreateTime());
+        m.put("t.finish_time", r.getFinishTime());
+        m.put("t.expire_time", r.getExpireTime());
+        m.put("t.process_instance_id", r.getProcessInstanceId());
+        m.put("t.task_parent_id", r.getTaskParentId());
+        m.put("t.variable", r.getVariable());
+        m.put("pd.name", r.getProcessDefineName());
+        m.put("pd.display_name", r.getProcessDefineDisplayName());
+        m.put("pd.version", r.getProcessDefineVersion());
+        return m;
+    }
+
+    private static Map<String, Object> instanceFields(InstanceRow r) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("t.id", r.getId());
+        m.put("t.parent_id", r.getParentId());
+        m.put("t.process_define_id", r.getProcessDefineId());
+        m.put("t.state", r.getState());
+        m.put("t.parent_node_name", r.getParentNodeName());
+        m.put("t.business_no", r.getBusinessNo());
+        m.put("t.operator", r.getOperator());
+        m.put("t.expire_time", r.getExpireTime());
+        m.put("t.variable", r.getVariable());
+        m.put("t.create_time", r.getCreateTime());
+        m.put("pd.name", r.getProcessDefineName());
+        m.put("pd.display_name", r.getProcessDefineDisplayName());
+        m.put("pd.version", r.getProcessDefineVersion());
+        return m;
+    }
+
+    private static Map<String, Object> defineFields(DefineRow r) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("t.id", r.getId());
+        m.put("t.name", r.getName());
+        m.put("t.display_name", r.getDisplayName());
+        m.put("t.type", r.getType());
+        m.put("t.state", r.getState());
+        m.put("t.version", r.getVersion());
+        m.put("t.create_time", r.getCreateTime());
+        m.put("t.update_time", r.getUpdateTime());
+        return m;
+    }
+
+    /** 条件全匹配（列不在行字段中则跳过；操作符对齐 JDBC buildWhere） */
+    private static boolean matches(List<PageQuery.Condition> conditions, Map<String, Object> fields) {
+        for (PageQuery.Condition c : conditions) {
+            Object v = fields.get(c.getColumn());
+            Object expect = c.getValue();
+            if (v == null || expect == null) continue;
+            switch (c.getOperator().toUpperCase()) {
+                case "EQ":
+                    if (!eq(v, expect)) return false;
+                    break;
+                case "NE":
+                    if (eq(v, expect)) return false;
+                    break;
+                case "LIKE":
+                    if (!v.toString().contains(expect.toString())) return false;
+                    break;
+                case "LLIKE":
+                    if (!v.toString().endsWith(expect.toString())) return false;
+                    break;
+                case "RLIKE":
+                    if (!v.toString().startsWith(expect.toString())) return false;
+                    break;
+                case "GT":
+                    if (compareValues(v, expect) <= 0) return false;
+                    break;
+                case "GE":
+                    if (compareValues(v, expect) < 0) return false;
+                    break;
+                case "LT":
+                    if (compareValues(v, expect) >= 0) return false;
+                    break;
+                case "LE":
+                    if (compareValues(v, expect) > 0) return false;
+                    break;
+                case "IN":
+                    if (expect instanceof Collection && !((Collection<?>) expect).contains(v)) return false;
+                    break;
+                case "NIN":
+                    if (expect instanceof Collection && ((Collection<?>) expect).contains(v)) return false;
+                    break;
+            }
+        }
+        return true;
+    }
+
+    /** EQ：值或集合包含判断（pta.actor_id/cc.actor_id 为集合） */
+    private static boolean eq(Object v, Object expect) {
+        if (v instanceof Collection) return ((Collection<?>) v).contains(expect);
+        return v.toString().equals(expect.toString());
+    }
+
+    /** 值比较：都可比则 compareTo，否则字符串比较 */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static int compareValues(Object a, Object b) {
+        if (a instanceof Comparable && b instanceof Comparable) {
+            return ((Comparable) a).compareTo(b);
+        }
+        return a.toString().compareTo(b.toString());
     }
 
     private InstanceRow toInstanceRow(ProcessInstance inst) {
@@ -289,44 +390,33 @@ public class MemoryProcessRepository implements IProcessRepository {
 
     @Override
     public PageResult<InstanceRow> pageCcInstances(PageQuery query) {
-        // 支持 cc.actor_id EQ 过滤（Facade ccList 依赖）
-        String actorId = null;
-        for (PageQuery.Condition c : query.getConditions()) {
-            if ("cc.actor_id".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
-                actorId = c.getValue().toString();
-            }
-        }
+        // 通用条件过滤（含 cc.actor_id EQ，Facade ccList 依赖）
         List<InstanceRow> rows = new ArrayList<>();
         for (Map.Entry<Long, List<String>> e : ccInstances.entrySet()) {
-            if (actorId != null && !e.getValue().contains(actorId)) continue;
+            if (e.getValue().isEmpty()) continue;
             ProcessInstance inst = instances.get(e.getKey());
             if (inst == null) continue;
-            InstanceRow r = new InstanceRow();
-            r.setId(inst.getInstanceId());
-            r.setProcessDefineId(inst.getDefineId());
-            r.setState(inst.getState());
-            r.setBusinessNo(inst.getBusinessNo());
-            r.setOperator(inst.getOperator());
-            r.setCreateTime(inst.getCreateTime());
-            rows.add(r);
+            InstanceRow r = toInstanceRow(inst);
+            Map<String, Object> fields = instanceFields(r);
+            fields.put("cc.actor_id", new ArrayList<>(e.getValue()));
+            if (matches(query.getConditions(), fields)) rows.add(r);
         }
         return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
     }
 
     @Override
     public PageResult<DefineRow> pageDefines(PageQuery query) {
-        // 支持 t.name EQ / t.state 过滤（JeeflowFacade deploy 版本查询依赖），按 id 倒序
+        // 通用条件过滤（含 t.name EQ / t.state GT，JeeflowFacade deploy 版本查询依赖），按 id 倒序
         List<DefineRow> rows = defines.values().stream()
                 .filter(d -> {
-                    for (PageQuery.Condition c : query.getConditions()) {
-                        if ("t.name".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
-                            if (!c.getValue().toString().equals(d.getName())) return false;
-                        }
-                        if ("t.state".equals(c.getColumn()) && "GT".equalsIgnoreCase(c.getOperator())) {
-                            if (d.getState() == null || d.getState() <= ((Number) c.getValue()).intValue()) return false;
-                        }
-                    }
-                    return true;
+                    DefineRow r = new DefineRow();
+                    r.setId(d.getId());
+                    r.setName(d.getName());
+                    r.setDisplayName(d.getDisplayName());
+                    r.setType(d.getType());
+                    r.setState(d.getState());
+                    r.setVersion(d.getVersion());
+                    return matches(query.getConditions(), defineFields(r));
                 })
                 .sorted(Comparator.comparing(ProcessInstance.ProcessDefine::getId).reversed())
                 .map(d -> {

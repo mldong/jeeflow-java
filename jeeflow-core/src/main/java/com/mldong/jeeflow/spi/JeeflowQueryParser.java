@@ -50,9 +50,10 @@ public class JeeflowQueryParser {
             String operator;
 
             if (parts.length == 2) {
-                // m_EQ_taskName → column="task_name", operator="EQ"
+                // m_EQ_taskName → column="t.task_name", operator="EQ"
+                // （默认主表别名 t，与白名单约定一致；前端 m_LIKE_name/m_LIKE_displayName 落主表列，issues/05-5）
                 operator = parts[0];
-                column = toUnderscore(parts[1]);
+                column = "t." + toUnderscore(parts[1]);
             } else {
                 // m_t_EQ_taskName → column="t.task_name", operator="EQ"
                 String alias = parts[0];

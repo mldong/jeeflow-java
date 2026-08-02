@@ -414,4 +414,53 @@ public class JeeflowFacadeTest {
         assertNotNull(row.get("displayName")); // 定义显示名
         assertNotNull(row.get("version"));     // 定义版本
     }
+
+    // ═══ issues/05-5：m_ 前缀查询参数（前端 m_LIKE_name / m_pd_LIKE_* / m_t_LIKE_*）═══
+
+    @Test
+    public void testMQueryParams() throws Exception {
+        ProcessInstance.ProcessDefine def1 = registerFlow("01-simple.json");
+        registerFlow("02-multi-task.json");
+
+        // 无别名 → 默认主表别名 t（t.name / t.display_name，对齐白名单）
+        Map<String, Object> r = call("processDefine/page", args("m_LIKE_name", "simple"));
+        assertOk(r);
+        List<?> rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_LIKE_name 应过滤到 01-simple: " + r, 1, rows.size());
+        assertEquals("01-simple", ((Map<String, Object>) rows.get(0)).get("name"));
+
+        r = call("processDefine/page", args("m_LIKE_displayName", "02"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_LIKE_displayName 应过滤到 02-multi-task: " + r, 1, rows.size());
+
+        r = call("processDefine/page", args("m_LIKE_displayName", ".json"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_LIKE_displayName 应匹配全部: " + r, 2, rows.size());
+
+        // 实例列表：m_pd_LIKE_displayName（别名 pd → pd.display_name）
+        call("processInstance/startAndExecute",
+                args("processDefineId", def1.getId(), "operator", "zhangsan"));
+        r = call("processInstance/page", args("operator", "zhangsan", "m_pd_LIKE_displayName", "simple"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_pd_LIKE_displayName 应命中: " + r, 1, rows.size());
+
+        r = call("processInstance/page", args("operator", "zhangsan", "m_pd_LIKE_displayName", "zzz"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_pd_LIKE_displayName 不应命中: " + r, 0, rows.size());
+
+        // 任务列表：m_t_LIKE_displayName（别名 t → t.display_name）
+        r = call("processTask/todoList", args("operator", "leader", "m_t_LIKE_displayName", "审批"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_t_LIKE_displayName 应命中待办: " + r, 1, rows.size());
+
+        r = call("processTask/todoList", args("operator", "leader", "m_t_LIKE_displayName", "zzz"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_t_LIKE_displayName 不应命中: " + r, 0, rows.size());
+    }
 }
