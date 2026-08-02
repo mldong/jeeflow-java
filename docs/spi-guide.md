@@ -111,14 +111,16 @@ public CommonResult<CommonPage<TaskRow>> todoList(@RequestBody Map<String, Objec
 
 ### 表别名约定
 
-| 别名 | 表 |
-|------|-----|
-| `t` | wf_process_task |
-| `pi` | wf_process_instance |
-| `pd` | wf_process_define |
-| `pta` | wf_process_task_actor |
+> ⚠️ **各分页方法别名不统一（v1.0.0 现状）**，按方法区分：
 
-列名在仓库层过白名单校验，不在白名单的自动丢弃，防止 SQL 注入。
+| 方法 | FROM 主表别名 | 支持的关联别名 |
+|------|--------------|---------------|
+| `pageTodoTasks` / `pageDoneTasks` | `t` = wf_process_task | `pi`=wf_process_instance、`pd`=wf_process_define、`pta`=wf_process_task_actor |
+| `pageInstances` / `pageCcInstances` | `t` = wf_process_instance | `pd`=wf_process_define、`cc`=wf_process_cc_instance |
+| `pageDefines` | `t` = wf_process_define | （无关联表） |
+| `pageDefines` 过滤列 | `t.name` / `t.state` / `t.displayName` 等（白名单见仓库实现） | — |
+
+列名在仓库层过白名单校验，**不在白名单的自动丢弃**（v1.0.1 计划改为报错，调试更友好）。踩坑提醒：`pageDefines` 过滤请用 `t.xxx` 而非 `pd.xxx`（`pd` 仅 task 分页可用）。
 
 ### 参考实现：JdbcProcessRepository
 
@@ -157,13 +159,13 @@ public interface IJsonProvider {
 
 ```java
 public interface IUserProvider {
-    String getRealName(String userId);
-    String getDeptId(String userId);
-    String getDeptName(String userId);
-    String getPostId(String userId);
-    String getPostName(String userId);
+    /** 一次返回用户全部信息（为空时返回 null）——避免多次查库 */
+    UserInfo getUser(String userId);
 }
 ```
+
+> 注意：v1.0.0 起为单方法 `getUser`（一次返回完整 `UserInfo`：userId/realName/deptId/deptName/postId/postName），
+> 早期 5 个 `getRealName/getDeptId/...` 方法的版本已废弃。
 
 ---
 
