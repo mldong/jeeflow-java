@@ -143,6 +143,7 @@ public class JeeflowFacade {
         data.put("type", def.getType());
         data.put("state", def.getState());
         data.put("version", def.getVersion());
+        data.put("jsonObject", parseGraph(def.getContent())); // 前端表单渲染/流程图依赖（issues/05）
         return ok(data);
     }
 
@@ -226,6 +227,8 @@ public class JeeflowFacade {
         data.put("variables", inst.getVariables());
         data.put("createTime", String.valueOf(inst.getCreateTime()));
         data.put("createUser", inst.getCreateUser());
+        ProcessInstance.ProcessDefine def0 = repository.findDefineById(inst.getDefineId());
+        data.put("jsonObject", def0 != null ? parseGraph(def0.getContent()) : null); // issues/05
         // 任务列表
         List<Map<String, Object>> tasks = new ArrayList<>();
         if (inst.getTasks() != null) {
@@ -476,6 +479,7 @@ public class JeeflowFacade {
         ProcessInstance inst = repository.findInstanceById(task.getProcessInstanceId());
         if (inst != null) {
             ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+            vo.put("jsonObject", def != null ? parseGraph(def.getContent()) : null); // issues/05
             if (def != null) {
                 try {
                     ProcessModel model = ModelParser.parse(def.getContent());

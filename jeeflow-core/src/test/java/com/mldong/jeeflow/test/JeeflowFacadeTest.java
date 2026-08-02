@@ -348,4 +348,27 @@ public class JeeflowFacadeTest {
         assertFalse("未走节点 task2 不应高亮: " + historyNodes, historyNodes.contains("task2"));
         assertTrue("应包含走过节点 task3: " + historyNodes, historyNodes.contains("task3"));
     }
+
+    // ═══ 三个 detail 返回 jsonObject（issues/05-1）═══
+
+    @Test
+    public void testDetailJsonObject() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Map<String, Object> r = call("processDefine/detail", args("id", def.getId()));
+        assertOk(r);
+        assertNotNull(((Map<String, Object>) r.get("data")).get("jsonObject"));
+
+        r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        r = call("processInstance/detail", args("id", instanceId));
+        assertOk(r);
+        assertNotNull(((Map<String, Object>) r.get("data")).get("jsonObject"));
+
+        List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, null);
+        r = call("processTask/detail", args("id", doing.get(0).getTaskId(), "operator", "zhangsan"));
+        assertOk(r);
+        assertNotNull(((Map<String, Object>) r.get("data")).get("jsonObject"));
+    }
 }
