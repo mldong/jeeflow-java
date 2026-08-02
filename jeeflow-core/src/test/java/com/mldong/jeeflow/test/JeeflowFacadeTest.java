@@ -6,6 +6,10 @@ import com.mldong.jeeflow.core.JeeflowEngineImpl;
 import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.facade.JeeflowFacade;
+import com.mldong.jeeflow.interceptor.AssignmentHandler;
+import com.mldong.jeeflow.metadata.EnumDictRegistry;
+import com.mldong.jeeflow.metadata.HandlerMeta;
+import com.mldong.jeeflow.metadata.HandlerRegistry;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
 import com.mldong.jeeflow.spi.IProcessRepository;
@@ -304,5 +308,55 @@ public class JeeflowFacadeTest {
         if (val == null) return null;
         if (val instanceof Number) return ((Number) val).longValue();
         return Long.parseLong(val.toString());
+    }
+
+    // ═══ 引擎元数据 action（v1.4.0）═══
+
+    @Test
+    public void testMetadataActions() {
+        // dictKeys：7 个 key 对齐 boot3
+        Map<String, Object> r1 = facade.flow("metadata/dictKeys", new java.util.HashMap<>());
+        assertEquals(0, r1.get("code"));
+        @SuppressWarnings("unchecked")
+        List<String> keys = (List<String>) r1.get("data");
+        assertEquals(7, keys.size());
+        assertTrue(keys.contains("wf_process_instance_state"));
+
+        // dict：按 key 取字典
+        Map<String, Object> r2 = facade.flow("metadata/dict",
+                java.util.Collections.singletonMap("key", "wf_process_instance_state"));
+        assertEquals(0, r2.get("code"));
+        @SuppressWarnings("unchecked")
+        List<EnumDictRegistry.DictItem> items = (List<EnumDictRegistry.DictItem>) r2.get("data");
+        assertEquals(7, items.size());
+        assertEquals("10", items.get(0).getValue());
+        assertEquals("进行中", items.get(0).getLabel());
+
+        // dict：key 缺失报错
+        Map<String, Object> r3 = facade.flow("metadata/dict", new java.util.HashMap<>());
+        assertEquals(99999999, r3.get("code"));
+
+        // handlers：未注入注册中心返回空清单
+        Map<String, Object> r4 = facade.flow("metadata/handlers",
+                java.util.Collections.singletonMap("type", "AssignmentHandler"));
+        assertEquals(0, r4.get("code"));
+        assertTrue(((List<?>) r4.get("data")).isEmpty());
+
+        // handlers：注入注册中心后按类型/分组列出
+        HandlerRegistry registry = new HandlerRegistry();
+        registry.register(AssignmentHandler.class, "com.example.DeptLeaderHandler", "部门领导审批", 2, null);
+        registry.register(AssignmentHandler.class, "com.example.BossHandler", "老板审批", 1, null);
+        facade.setHandlerRegistry(registry);
+        Map<String, Object> r5 = facade.flow("metadata/handlers",
+                java.util.Collections.singletonMap("type", "AssignmentHandler"));
+        assertEquals(0, r5.get("code"));
+        @SuppressWarnings("unchecked")
+        List<HandlerMeta> metas = (List<HandlerMeta>) r5.get("data");
+        assertEquals(2, metas.size());
+        assertEquals("com.example.BossHandler", metas.get(0).getClassName());
+
+        // handlers：type 缺失报错
+        Map<String, Object> r6 = facade.flow("metadata/handlers", new java.util.HashMap<>());
+        assertEquals(99999999, r6.get("code"));
     }
 }
