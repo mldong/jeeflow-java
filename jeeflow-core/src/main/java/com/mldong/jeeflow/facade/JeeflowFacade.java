@@ -1,0 +1,525 @@
+package com.mldong.jeeflow.facade;
+
+import com.mldong.jeeflow.core.JeeflowEngine;
+import com.mldong.jeeflow.domain.FlowData;
+import com.mldong.jeeflow.domain.ProcessDesign;
+import com.mldong.jeeflow.domain.ProcessDesignHis;
+import com.mldong.jeeflow.domain.ProcessInstance;
+import com.mldong.jeeflow.domain.ProcessSurrogate;
+import com.mldong.jeeflow.domain.ProcessTask;
+import com.mldong.jeeflow.enums.FlowConst;
+import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
+import com.mldong.jeeflow.json.IJsonProvider;
+import com.mldong.jeeflow.model.ProcessModel;
+import com.mldong.jeeflow.parser.ModelParser;
+import com.mldong.jeeflow.spi.IProcessExtRepository;
+import com.mldong.jeeflow.spi.IProcessRepository;
+import com.mldong.jeeflow.spi.JeeflowQueryParser;
+import com.mldong.jeeflow.spi.PageQuery;
+import com.mldong.jeeflow.spi.PageResult;
+
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 统一门面（v1.1.0）——"接口即 POST + JSON body"风格的单入口
+ *
+ * <p>集成方只实现一个转发 controller：把 body JSON 转成 {@code Map} 传入
+ * {@link #flow(String, Map)}，所有流程能力按 {@code action}（boot2/boot3 端点短名）
+ * 路由。返回统一结构 {@code {code, msg, data}}（code=0 成功 / 99999999 失败）。</p>
+ *
+ * <p>操作人约定：门面不感知登录态，{@code args.operator} 显式传入（demo 风格），
+ * 集成方可换为自定义实现（如从登录上下文注入）。</p>
+ *
+ * @author mldong
+ */
+public class JeeflowFacade {
+
+    private final JeeflowEngine engine;
+    private final IProcessRepository repository;
+    private final IProcessExtRepository extRepository; // 可空：未接入扩展仓储时设计/委托 action 报错
+    private final JeeflowQueryParser queryParser = new JeeflowQueryParser();
+
+    public JeeflowFacade(JeeflowEngine engine, IProcessRepository repository, IProcessExtRepository extRepository) {
+        this.engine = engine;
+        this.repository = repository;
+        this.extRepository = extRepository;
+    }
+
+    /**
+     * 统一入口。action 见 spec §11.2 清单。
+     */
+    public Map<String, Object> flow(String action, Map<String, Object> args) {
+        try {
+            if (args == null) args = new LinkedHashMap<>();
+            switch (action) {
+                // ── 流程定义 ──
+                case "processDefine/page": return definePage(args);
+                case "processDefine/detail": return defineDetail(args);
+                case "processDefine/startAndExecute": return startAndExecute(args);
+                case "processDefine/deploy": return deploy(args);
+                case "processDefine/redeploy": return redeploy(args);
+                case "processDefine/remove": return defineRemove(args);
+                case "processDefine/upAndDown": return defineUpAndDown(args);
+                // ── 流程实例 ──
+                case "processInstance/page": return instancePage(args);
+                case "processInstance/detail": return instanceDetail(args);
+                case "processInstance/startAndExecute": return startAndExecute(args);
+                case "processInstance/withdraw": return withdraw(args);
+                // ── 流程任务 ──
+                case "processTask/todoList": return todoList(args);
+                case "processTask/doneList": return doneList(args);
+                case "processTask/execute": return execute(args);
+                // ── 流程设计（需扩展仓储）──
+                case "processDesign/page": return designPage(args);
+                case "processDesign/detail": return designDetail(args);
+                case "processDesign/save": return designSave(args);
+                case "processDesign/remove": return designRemove(args);
+                case "processDesign/deploy": return designDeploy(args);
+                // ── 委托代理（需扩展仓储）──
+                case "processSurrogate/page": return surrogatePage(args);
+                case "processSurrogate/save": return surrogateSave(args);
+                case "processSurrogate/remove": return surrogateRemove(args);
+                default:
+                    return error("未知 action: " + action);
+            }
+        } catch (Exception e) {
+            return error(e.getMessage() != null ? e.getMessage() : e.toString());
+        }
+    }
+
+    // ═══ 流程定义 ═══
+
+    private Map<String, Object> definePage(Map<String, Object> args) {
+        PageQuery query = queryParser.parse(args);
+        PageResult<IProcessRepository.DefineRow> page = repository.pageDefines(query);
+        return pageResult(page);
+    }
+
+    private Map<String, Object> defineDetail(Map<String, Object> args) {
+        Long id = toLong(args.get("id"));
+        ProcessInstance.ProcessDefine def = repository.findDefineById(id);
+        if (def == null) return error("流程定义不存在");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", def.getId());
+        data.put("name", def.getName());
+        data.put("displayName", def.getDisplayName());
+        data.put("type", def.getType());
+        data.put("state", def.getState());
+        data.put("version", def.getVersion());
+        Map<String, Object> graph = parseGraph(def.getContent());
+        if (graph != null) data.put("jsonObject", graph);
+        return ok(data);
+    }
+
+    private Map<String, Object> startAndExecute(Map<String, Object> args) {
+        Long defineId = toLong(args.get(FlowConst.PROCESS_DEFINE_ID_KEY));
+        String operator = toStr(args.get("operator"), "user1");
+        FlowData flowArgs = FlowData.create();
+        args.forEach((k, v) -> {
+            if (!FlowConst.PROCESS_DEFINE_ID_KEY.equals(k) && !"operator".equals(k)) flowArgs.put(k, v);
+        });
+        ProcessInstance inst = engine.startProcessInstanceById(defineId, operator, flowArgs);
+        // boot2 startAndExecute：自动完成申请节点（assignee="applicant" → 发起人）
+        List<ProcessTask> doingTasks = repository.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask task : doingTasks) {
+            repository.addTaskActor(task.getTaskId(), List.of(operator));
+            flowArgs.put(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode());
+            engine.executeProcessTask(task.getTaskId(), operator, flowArgs);
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put(FlowConst.PROCESS_INSTANCE_ID_KEY, inst.getInstanceId());
+        return ok(data);
+    }
+
+    private Map<String, Object> deploy(Map<String, Object> args) {
+        byte[] bytes = contentBytes(args);
+        ProcessModel model = ModelParser.parse(bytes);
+        Long defineId = saveDeployedDefine(model, bytes);
+        return ok(Map.of(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
+    }
+
+    private Map<String, Object> redeploy(Map<String, Object> args) {
+        Long defineId = toLong(args.get(FlowConst.PROCESS_DEFINE_ID_KEY));
+        byte[] bytes = contentBytes(args);
+        ProcessModel model = ModelParser.parse(bytes);
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setId(defineId);
+        def.setName(model.getName());
+        def.setDisplayName(model.getDisplayName());
+        def.setType(model.getType());
+        def.setContent(bytes);
+        def.setUpdateUser(toStr(args.get("operator"), "system"));
+        repository.updateDefine(def);
+        return ok();
+    }
+
+    private Map<String, Object> defineRemove(Map<String, Object> args) {
+        Long id = toLong(args.get("id"));
+        repository.removeDefine(id);
+        return ok();
+    }
+
+    private Map<String, Object> defineUpAndDown(Map<String, Object> args) {
+        Long id = toLong(args.get("id"));
+        int state = Integer.parseInt(args.get("state").toString());
+        repository.updateDefineState(id, state);
+        return ok();
+    }
+
+    // ═══ 流程实例 ═══
+
+    private Map<String, Object> instancePage(Map<String, Object> args) {
+        PageQuery query = queryParser.parse(args);
+        String userId = toStr(args.get("operator"), "user1");
+        query.add("t.operator", "EQ", userId);
+        PageResult<IProcessRepository.InstanceRow> page = repository.pageInstances(query);
+        return pageResult(page);
+    }
+
+    private Map<String, Object> instanceDetail(Map<String, Object> args) {
+        Long id = toLong(args.get("id"));
+        ProcessInstance inst = repository.findInstanceById(id);
+        if (inst == null) return error("流程实例不存在");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", inst.getInstanceId());
+        data.put("parentId", inst.getParentId());
+        data.put("processDefineId", inst.getDefineId());
+        data.put("state", inst.getState());
+        data.put("parentNodeName", inst.getParentNodeName());
+        data.put("businessNo", inst.getBusinessNo());
+        data.put("operator", inst.getOperator());
+        data.put("variables", inst.getVariables());
+        data.put("createTime", String.valueOf(inst.getCreateTime()));
+        data.put("createUser", inst.getCreateUser());
+        // 任务列表
+        List<Map<String, Object>> tasks = new ArrayList<>();
+        if (inst.getTasks() != null) {
+            for (ProcessTask t : inst.getTasks()) {
+                tasks.add(taskVo(t));
+            }
+        }
+        data.put("tasks", tasks);
+        return ok(data);
+    }
+
+    private Map<String, Object> withdraw(Map<String, Object> args) {
+        Long instanceId = toLong(args.get("id"));
+        String operator = toStr(args.get("operator"), "user1");
+        ProcessInstance inst = repository.findInstanceById(instanceId);
+        if (inst == null) return error("流程实例不存在");
+        inst.withdraw(operator);
+        repository.updateInstance(inst); // v1.0.1：级联持久化任务状态
+        return ok();
+    }
+
+    // ═══ 流程任务 ═══
+
+    private Map<String, Object> todoList(Map<String, Object> args) {
+        PageQuery query = queryParser.parse(args);
+        String userId = toStr(args.get("operator"), "user1");
+        query.add("pta.actor_id", "EQ", userId);
+        PageResult<IProcessRepository.TaskRow> page = repository.pageTodoTasks(query);
+        return pageResult(page);
+    }
+
+    private Map<String, Object> doneList(Map<String, Object> args) {
+        PageQuery query = queryParser.parse(args);
+        String userId = toStr(args.get("operator"), "user1");
+        query.add("t.operator", "EQ", userId);
+        PageResult<IProcessRepository.TaskRow> page = repository.pageDoneTasks(query);
+        return pageResult(page);
+    }
+
+    private Map<String, Object> execute(Map<String, Object> args) {
+        Long taskId = toLong(args.get(FlowConst.PROCESS_TASK_ID_KEY));
+        String operator = toStr(args.get("operator"), "user1");
+        Object submitTypeObj = args.getOrDefault(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode());
+        Integer submitType = submitTypeObj instanceof Number ? ((Number) submitTypeObj).intValue()
+                : Integer.parseInt(submitTypeObj.toString());
+        FlowData flowArgs = FlowData.create();
+        args.forEach((k, v) -> {
+            if (!FlowConst.PROCESS_TASK_ID_KEY.equals(k) && !"operator".equals(k)) flowArgs.put(k, v);
+        });
+        flowArgs.put(FlowConst.SUBMIT_TYPE, submitType);
+        // boot3 execute 分发（spec §11.2）
+        if (ProcessSubmitTypeEnum.REJECT.getCode().equals(submitType)) {
+            engine.executeAndJumpToEnd(taskId, operator, flowArgs);
+        } else if (ProcessSubmitTypeEnum.ROLLBACK.getCode().equals(submitType)) {
+            engine.executeAndJumpTask(taskId, operator, flowArgs, null);
+        } else if (ProcessSubmitTypeEnum.JUMP.getCode().equals(submitType)) {
+            String taskName = toStr(args.get(FlowConst.TASK_NAME));
+            engine.executeAndJumpTask(taskId, operator, flowArgs, taskName);
+        } else if (ProcessSubmitTypeEnum.ROLLBACK_TO_OPERATOR.getCode().equals(submitType)) {
+            engine.executeAndJumpToFirstTaskNode(taskId, operator, flowArgs);
+        } else if (ProcessSubmitTypeEnum.COUNTERSIGN_DISAGREE.getCode().equals(submitType)) {
+            flowArgs.put(FlowConst.COUNTERSIGN_DISAGREE_FLAG, 1);
+            engine.executeProcessTask(taskId, operator, flowArgs);
+        } else {
+            // 默认执行（0 APPLY / 1 AGREE / 5 重新提交）
+            engine.executeProcessTask(taskId, operator, flowArgs);
+        }
+        return ok();
+    }
+
+    // ═══ 流程设计（需扩展仓储） ═══
+
+    private Map<String, Object> designPage(Map<String, Object> args) {
+        PageQuery query = queryParser.parse(args);
+        PageResult<ProcessDesign> page = ext().pageDesigns(query);
+        return pageResult(page);
+    }
+
+    private Map<String, Object> designDetail(Map<String, Object> args) {
+        Long id = toLong(args.get("id"));
+        ProcessDesign design = ext().findDesignById(id);
+        if (design == null) return error("流程设计不存在");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", design.getId());
+        data.put("name", design.getName());
+        data.put("displayName", design.getDisplayName());
+        data.put("type", design.getType());
+        data.put("icon", design.getIcon());
+        data.put("isDeployed", design.getIsDeployed());
+        data.put("remark", design.getRemark());
+        // 最新设计稿内容 + 历史列表
+        List<ProcessDesignHis> hisList = ext().listDesignHis(id);
+        if (!hisList.isEmpty()) {
+            data.put("jsonObject", parseGraph(hisList.get(0).getContent()));
+        }
+        data.put("his", hisList);
+        return ok(data);
+    }
+
+    private Map<String, Object> designSave(Map<String, Object> args) {
+        IProcessExtRepository ext = ext();
+        String operator = toStr(args.get("operator"), "user1");
+        Long id = toLong(args.get("id"));
+        ProcessDesign design;
+        if (id == null) {
+            design = new ProcessDesign();
+            design.setName(toStr(args.get("name")));
+            design.setDisplayName(toStr(args.get("displayName")));
+            design.setType(toStr(args.get("type"), "approval"));
+            design.setIcon(toStr(args.get("icon")));
+            design.setRemark(toStr(args.get("remark")));
+            design.setIsDeployed(0);
+            design.setCreateUser(operator);
+            design.setUpdateUser(operator);
+            ext.saveDesign(design);
+        } else {
+            design = ext.findDesignById(id);
+            if (design == null) return error("流程设计不存在");
+            if (args.get("displayName") != null) design.setDisplayName(toStr(args.get("displayName")));
+            if (args.get("type") != null) design.setType(toStr(args.get("type")));
+            if (args.get("icon") != null) design.setIcon(toStr(args.get("icon")));
+            if (args.get("remark") != null) design.setRemark(toStr(args.get("remark")));
+            design.setUpdateUser(operator);
+            ext.updateDesign(design);
+        }
+        // 内容快照（设计稿内容存历史表）
+        byte[] content = contentBytes(args);
+        if (content != null) {
+            ProcessDesignHis his = new ProcessDesignHis();
+            his.setProcessDesignId(design.getId());
+            his.setContent(content);
+            his.setCreateUser(operator);
+            ext.saveDesignHis(his);
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", design.getId());
+        return ok(data);
+    }
+
+    private Map<String, Object> designRemove(Map<String, Object> args) {
+        Long id = toLong(args.get("id"));
+        ext().removeDesign(id);
+        return ok();
+    }
+
+    private Map<String, Object> designDeploy(Map<String, Object> args) {
+        IProcessExtRepository ext = ext();
+        Long designId = toLong(args.get("id"));
+        ProcessDesign design = ext.findDesignById(designId);
+        if (design == null) return error("流程设计不存在");
+        List<ProcessDesignHis> hisList = ext.listDesignHis(designId);
+        if (hisList.isEmpty()) return error("流程设计没有内容，无法发布");
+        byte[] bytes = hisList.get(0).getContent();
+        ProcessModel model = ModelParser.parse(bytes);
+        Long defineId = saveDeployedDefine(model, bytes);
+        design.setIsDeployed(1);
+        design.setUpdateUser(toStr(args.get("operator"), "system"));
+        ext.updateDesign(design);
+        return ok(Map.of(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
+    }
+
+    // ═══ 委托代理（需扩展仓储） ═══
+
+    private Map<String, Object> surrogatePage(Map<String, Object> args) {
+        PageQuery query = queryParser.parse(args);
+        PageResult<ProcessSurrogate> page = ext().pageSurrogates(query);
+        return pageResult(page);
+    }
+
+    private Map<String, Object> surrogateSave(Map<String, Object> args) {
+        IProcessExtRepository ext = ext();
+        String operator = toStr(args.get("operator"), "user1");
+        Long id = toLong(args.get("id"));
+        ProcessSurrogate surrogate;
+        if (id == null) {
+            surrogate = new ProcessSurrogate();
+            surrogate.setCreateUser(operator);
+            surrogate.setCreateTime(LocalDateTime.now());
+        } else {
+            surrogate = ext.findSurrogateById(id);
+            if (surrogate == null) return error("委托记录不存在");
+        }
+        surrogate.setProcessName(toStr(args.get("processName")));
+        surrogate.setOperator(toStr(args.get("operator"))); // 授权人 = 操作人
+        surrogate.setSurrogate(toStr(args.get("surrogate")));
+        surrogate.setStartTime(parseTime(args.get("startTime")));
+        surrogate.setEndTime(parseTime(args.get("endTime")));
+        surrogate.setEnabled(toInt(args.get("enabled"), 1));
+        surrogate.setUpdateUser(operator);
+        if (id == null) {
+            ext.saveSurrogate(surrogate);
+        } else {
+            ext.updateSurrogate(surrogate);
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", surrogate.getId());
+        return ok(data);
+    }
+
+    private Map<String, Object> surrogateRemove(Map<String, Object> args) {
+        Long id = toLong(args.get("id"));
+        ext().removeSurrogate(id);
+        return ok();
+    }
+
+    // ═══ 内部工具 ═══
+
+    private IProcessExtRepository ext() {
+        if (extRepository == null) {
+            throw new IllegalStateException("未配置 IProcessExtRepository（扩展仓储）");
+        }
+        return extRepository;
+    }
+
+    /** deploy 版本管理（对齐 boot3）：按 name 查最新定义，存在 version+1 插新记录，否则从 0 起 */
+    private Long saveDeployedDefine(ProcessModel model, byte[] bytes) {
+        PageQuery query = new PageQuery(1, 1);
+        query.add("t.name", "EQ", model.getName());
+        query.add("t.state", "GT", -1); // 不过滤状态（含停用）
+        PageResult<IProcessRepository.DefineRow> page = repository.pageDefines(query);
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        int version = 0;
+        if (page.getRows() != null && !page.getRows().isEmpty()) {
+            Integer latest = page.getRows().get(0).getVersion();
+            version = (latest != null ? latest : 0) + 1;
+        }
+        def.setName(model.getName());
+        def.setDisplayName(model.getDisplayName());
+        def.setType(model.getType());
+        def.setState(1);
+        def.setContent(bytes);
+        def.setVersion(version);
+        repository.saveDefine(def);
+        return def.getId();
+    }
+
+    private byte[] contentBytes(Map<String, Object> args) {
+        Object content = args.get("content");
+        if (content == null) return null;
+        if (content instanceof byte[]) return (byte[]) content;
+        return content.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private Map<String, Object> parseGraph(byte[] content) {
+        if (content == null) return null;
+        try {
+            IJsonProvider json = com.mldong.jeeflow.core.ServiceContext.find(IJsonProvider.class);
+            if (json == null) return null;
+            return json.fromJson(new String(content, StandardCharsets.UTF_8), Map.class);
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private Map<String, Object> taskVo(ProcessTask t) {
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("id", t.getTaskId());
+        vo.put("processInstanceId", t.getProcessInstanceId());
+        vo.put("taskName", t.getTaskName());
+        vo.put("displayName", t.getDisplayName());
+        vo.put("taskType", t.getTaskType());
+        vo.put("performType", t.getPerformType());
+        vo.put("taskState", t.getTaskState());
+        vo.put("operator", t.getActorId());
+        vo.put("formKey", t.getFormKey());
+        vo.put("taskParentId", t.getParentTaskId());
+        vo.put("taskActorIdList", t.getActorIds());
+        return vo;
+    }
+
+    // ═══ 响应工具（boot2 CommonResult：code=0 成功 / 99999999 失败）═══
+
+    private Map<String, Object> ok() {
+        return ok(null);
+    }
+
+    private Map<String, Object> ok(Object data) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("code", 0);
+        r.put("msg", "成功");
+        r.put("data", data);
+        return r;
+    }
+
+    private Map<String, Object> error(String msg) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("code", 99999999);
+        r.put("msg", msg);
+        return r;
+    }
+
+    private Map<String, Object> pageResult(PageResult<?> page) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("pageNum", page.getPageNum());
+        data.put("pageSize", page.getPageSize());
+        data.put("recordCount", page.getRecordCount());
+        data.put("totalPage", page.getTotalPage());
+        data.put("rows", page.getRows());
+        return ok(data);
+    }
+
+    private static Long toLong(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).longValue();
+        try { return Long.parseLong(val.toString()); } catch (NumberFormatException e) { return null; }
+    }
+
+    private static Integer toInt(Object val, int def) {
+        if (val == null) return def;
+        if (val instanceof Number) return ((Number) val).intValue();
+        try { return Integer.parseInt(val.toString()); } catch (NumberFormatException e) { return def; }
+    }
+
+    private static String toStr(Object val) {
+        return val != null ? val.toString() : null;
+    }
+
+    private static String toStr(Object val, String def) {
+        String s = toStr(val);
+        return s != null ? s : def;
+    }
+
+    private static LocalDateTime parseTime(Object val) {
+        if (val == null) return null;
+        try { return LocalDateTime.parse(val.toString()); } catch (Exception e) { return null; }
+    }
+}

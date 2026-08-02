@@ -8,6 +8,7 @@ import com.mldong.jeeflow.spi.PageQuery;
 import com.mldong.jeeflow.spi.PageResult;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -171,10 +172,90 @@ public class MemoryProcessRepository implements IProcessRepository {
         if (existing != null) existing.removeAll(actors);
     }
 
-    @Override public PageResult<TaskRow> pageTodoTasks(PageQuery query) { return PageResult.of(1, 10, 0, new ArrayList<>()); }
-    @Override public PageResult<TaskRow> pageDoneTasks(PageQuery query) { return PageResult.of(1, 10, 0, new ArrayList<>()); }
+    @Override
+    public PageResult<TaskRow> pageTodoTasks(PageQuery query) {
+        // 支持 pta.actor_id EQ 过滤（Facade todoList 依赖），仅进行中任务
+        String actorId = null;
+        for (PageQuery.Condition c : query.getConditions()) {
+            if ("pta.actor_id".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
+                actorId = c.getValue().toString();
+            }
+        }
+        List<TaskRow> rows = new ArrayList<>();
+        for (ProcessTask t : tasks.values()) {
+            if (!Integer.valueOf(10).equals(t.getTaskState())) continue;
+            List<String> actors = taskActors.get(t.getTaskId());
+            if (actorId != null && (actors == null || !actors.contains(actorId))) continue;
+            rows.add(toTaskRow(t));
+        }
+        return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
+    }
+
+    @Override
+    public PageResult<TaskRow> pageDoneTasks(PageQuery query) {
+        // 支持 t.operator EQ 过滤（Facade doneList 依赖），仅已完成任务
+        String operator = null;
+        for (PageQuery.Condition c : query.getConditions()) {
+            if ("t.operator".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
+                operator = c.getValue().toString();
+            }
+        }
+        List<TaskRow> rows = new ArrayList<>();
+        for (ProcessTask t : tasks.values()) {
+            if (!Integer.valueOf(20).equals(t.getTaskState())) continue;
+            if (operator != null && !operator.equals(t.getActorId())) continue;
+            rows.add(toTaskRow(t));
+        }
+        return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
+    }
+
+    private static TaskRow toTaskRow(ProcessTask t) {
+        TaskRow r = new TaskRow();
+        r.setId(t.getTaskId());
+        r.setProcessInstanceId(t.getProcessInstanceId());
+        r.setTaskName(t.getTaskName());
+        r.setDisplayName(t.getDisplayName());
+        r.setTaskType(t.getTaskType() != null ? t.getTaskType().getCode() : null);
+        r.setPerformType(t.getPerformType() != null ? t.getPerformType().getCode() : null);
+        r.setTaskState(t.getTaskState());
+        r.setOperator(t.getActorId());
+        r.setFormKey(t.getFormKey());
+        r.setCreateTime(t.getCreateTime());
+        return r;
+    }
+
     @Override public PageResult<InstanceRow> pageInstances(PageQuery query) { return PageResult.of(1, 10, 0, new ArrayList<>()); }
     @Override public PageResult<InstanceRow> pageCcInstances(PageQuery query) { return PageResult.of(1, 10, 0, new ArrayList<>()); }
-    @Override public PageResult<DefineRow> pageDefines(PageQuery query) { return PageResult.of(1, 10, 0, new ArrayList<>()); }
+
+    @Override
+    public PageResult<DefineRow> pageDefines(PageQuery query) {
+        // 支持 t.name EQ / t.state 过滤（JeeflowFacade deploy 版本查询依赖），按 id 倒序
+        List<DefineRow> rows = defines.values().stream()
+                .filter(d -> {
+                    for (PageQuery.Condition c : query.getConditions()) {
+                        if ("t.name".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
+                            if (!c.getValue().toString().equals(d.getName())) return false;
+                        }
+                        if ("t.state".equals(c.getColumn()) && "GT".equalsIgnoreCase(c.getOperator())) {
+                            if (d.getState() == null || d.getState() <= ((Number) c.getValue()).intValue()) return false;
+                        }
+                    }
+                    return true;
+                })
+                .sorted(Comparator.comparing(ProcessInstance.ProcessDefine::getId).reversed())
+                .map(d -> {
+                    DefineRow r = new DefineRow();
+                    r.setId(d.getId());
+                    r.setName(d.getName());
+                    r.setDisplayName(d.getDisplayName());
+                    r.setType(d.getType());
+                    r.setState(d.getState());
+                    r.setVersion(d.getVersion());
+                    return r;
+                })
+                .collect(Collectors.toList());
+        return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
+    }
+
     @Override public int countTodoTasks(Long userId) { return 0; }
 }
