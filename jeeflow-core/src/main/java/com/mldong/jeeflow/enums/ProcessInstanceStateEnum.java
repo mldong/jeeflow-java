@@ -5,7 +5,7 @@ package com.mldong.jeeflow.enums;
  *
  * @author mldong
  */
-public enum ProcessInstanceStateEnum {
+public enum ProcessInstanceStateEnum implements IDictEnum {
     /** 进行中 */
     DOING(10, "进行中"),
     /** 已完成 */

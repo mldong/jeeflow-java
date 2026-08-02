@@ -5,7 +5,7 @@ package com.mldong.jeeflow.enums;
  *
  * @author mldong
  */
-public enum ProcessDefineStateEnum {
+public enum ProcessDefineStateEnum implements IDictEnum {
     /** 禁用 */
     DISABLE(0, "禁用"),
     /** 启用 */

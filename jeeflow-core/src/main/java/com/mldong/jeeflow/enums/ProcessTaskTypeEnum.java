@@ -5,7 +5,7 @@ package com.mldong.jeeflow.enums;
  *
  * @author mldong
  */
-public enum ProcessTaskTypeEnum {
+public enum ProcessTaskTypeEnum implements IDictEnum {
     /** 主办 */
     MAJOR(0, "主办"),
     /** 协办 */

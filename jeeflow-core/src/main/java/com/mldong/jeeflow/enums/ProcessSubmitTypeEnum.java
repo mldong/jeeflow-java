@@ -5,7 +5,7 @@ package com.mldong.jeeflow.enums;
  *
  * @author mldong
  */
-public enum ProcessSubmitTypeEnum {
+public enum ProcessSubmitTypeEnum implements IDictEnum {
     /** 发起申请 */
     APPLY(0, "发起申请"),
     /** 同意申请 */

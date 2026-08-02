@@ -5,7 +5,7 @@ package com.mldong.jeeflow.enums;
  *
  * @author mldong
  */
-public enum ProcessTaskPerformTypeEnum {
+public enum ProcessTaskPerformTypeEnum implements IDictEnum {
     /**
      * 普通参与：多人参与同一任务，任一人完成即可驱动下一步
      */

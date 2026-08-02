@@ -5,7 +5,7 @@ package com.mldong.jeeflow.enums;
  *
  * @author mldong
  */
-public enum CountersignTypeEnum {
+public enum CountersignTypeEnum implements IDictEnum {
     /** 并行会签 */
     PARALLEL(0, "并行会签"),
     /** 串行会签 */
