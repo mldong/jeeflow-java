@@ -2,6 +2,10 @@
 
 轻量 Java 工作流引擎——零框架依赖、DDD 充血模型、JDK 8 兼容。
 
+> **v1.1.0**：新增管理扩展（流程设计/历史/委托三表 + `IProcessExtRepository` + `SurrogateInterceptor`）
+> 与统一门面 `JeeflowFacade.flow(action, map)`（27 个 action，集成方 controller 一行接入）；
+> assignee 变量解析与 `flow.auto`/`flow.admin` 系统代执行对齐 boot2/boot3（v1.0.1）。
+
 ## 特性
 
 - **零框架依赖**：不依赖 Spring、MyBatis、JPA、Servlet，仅 `slf4j-api`（provided）

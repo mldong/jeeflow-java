@@ -208,3 +208,40 @@ public interface IIdGenerator {
 ```
 
 **内置实现（Spring Boot）：** `SnowflakeIdGenerator`。
+
+---
+
+## 管理扩展（v1.1.0，可选 SPI）
+
+设计稿 / 历史 / 委托三张表由 `IProcessExtRepository` 提供统一读写（规范见文档站 spec §10）：
+
+```java
+// 参考实现：JDBC 版（给定 DataSource 即可）
+IProcessExtRepository extRepo = new JdbcProcessExtRepository(dataSource);
+
+// 委托生效查询（SurrogateInterceptor 内部使用）
+ProcessSurrogate s = extRepo.getSurrogate("zhangsan", "leave", LocalDateTime.now());
+```
+
+**委托自动生效**：把 `SurrogateInterceptor`（core 提供，默认不注册）加入拦截器列表，
+任务创建后自动把代理人加入参与者：
+
+```java
+ServiceContext.put("surrogateInterceptor", new SurrogateInterceptor(extRepo));
+```
+
+## 统一门面（v1.1.0）
+
+"接口即 POST + JSON body"风格——集成方只写一个转发 controller：
+
+```java
+@PostMapping("/wf/**")
+public Map<String, Object> flow(HttpServletRequest req, @RequestBody Map<String, Object> body) {
+    String action = req.getRequestURI().substring(req.getContextPath().length() + "/wf/".length());
+    return facade.flow(action, body);
+}
+```
+
+`JeeflowFacade.flow(action, map)` 路由全部 27 个 action（spec §11.2 清单），
+返回 `{code, msg, data}`；deploy 自动做版本管理，execute 按 submitType 全分发。
+操作人约定：`args.operator` 显式传入（集成方可替换为登录上下文注入）。
