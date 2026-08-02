@@ -391,8 +391,15 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     @Override
     public void addTaskActor(Long taskId, List<String> actors) {
+        if (actors == null || actors.isEmpty()) return;
         try (Connection conn = dataSource.getConnection()) {
-            saveTaskActors(conn, taskId, actors, null);
+            // 追加语义（对齐 boot2/boot3）：查已有参与者，去重后仅插入新增，不清空原参与者
+            List<String> existing = findTaskActors(conn, taskId);
+            List<String> toAdd = new ArrayList<>();
+            for (String a : actors) {
+                if (a != null && !existing.contains(a)) toAdd.add(a);
+            }
+            insertTaskActors(conn, taskId, toAdd, null);
         } catch (SQLException e) {
             throw new RuntimeException("添加任务参与者失败", e);
         }
@@ -535,11 +542,18 @@ public class JdbcProcessRepository implements IProcessRepository {
     }
 
     private void saveTaskActors(Connection conn, Long taskId, List<String> actors, String createUser) throws SQLException {
+        // 全量覆盖语义：saveTask/updateTask 同步"任务聚合副本"的参与者（权威副本全量落库）
         if (actors == null || actors.isEmpty()) return;
         try (PreparedStatement dps = conn.prepareStatement("DELETE FROM wf_process_task_actor WHERE process_task_id = ?")) {
             dps.setLong(1, taskId);
             dps.executeUpdate();
         }
+        insertTaskActors(conn, taskId, actors, createUser);
+    }
+
+    /** 纯插入参与者（addTaskActor 追加语义用，不删除已有） */
+    private void insertTaskActors(Connection conn, Long taskId, List<String> actors, String createUser) throws SQLException {
+        if (actors == null || actors.isEmpty()) return;
         String insertSql = "INSERT INTO wf_process_task_actor (id, process_task_id, actor_id, create_time, create_user) VALUES (?,?,?,?,?)";
         try (PreparedStatement ips = conn.prepareStatement(insertSql)) {
             Timestamp now = new Timestamp(System.currentTimeMillis());

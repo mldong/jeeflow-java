@@ -143,6 +143,26 @@ public class JdbcRepositoryTest {
         assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), updated.getState());
     }
 
+    // ═══ 测试：addTaskActor 追加语义（对齐 boot2/boot3，issues/03） ═══
+
+    @Test
+    public void testAddTaskActorAppendJdbc() throws Exception {
+        ProcessInstance.ProcessDefine def = registerSimpleFlow();
+        FlowData args = FlowData.create().set(FlowConst.BUSINESS_NO, "JDBC-APPEND");
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1", args);
+        ProcessTask task = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
+
+        // 首次添加
+        repo.addTaskActor(task.getTaskId(), Arrays.asList("admin"));
+        // 追加：新参与者 + 已存在的重复项
+        repo.addTaskActor(task.getTaskId(), Arrays.asList("userB", "admin"));
+        List<String> actors = repo.findTaskActors(task.getTaskId());
+
+        // 初始参与者 leader 保留 + 追加的 admin/userB 不丢且不重复
+        // （覆盖语义下 admin 会被清空，此处验证已修复）
+        assertEquals(Arrays.asList("leader", "admin", "userB"), actors);
+    }
+
     // ═══ 测试 2：多级审批 ═══
 
     @Test

@@ -163,7 +163,11 @@ public class MemoryProcessRepository implements IProcessRepository {
 
     @Override
     public void addTaskActor(Long taskId, List<String> actors) {
-        taskActors.computeIfAbsent(taskId, k -> new ArrayList<>()).addAll(actors);
+        // 追加语义（对齐 boot2/boot3）：去重后追加，不清空原参与者
+        List<String> existing = taskActors.computeIfAbsent(taskId, k -> new ArrayList<>());
+        for (String a : actors) {
+            if (!existing.contains(a)) existing.add(a);
+        }
     }
 
     @Override
