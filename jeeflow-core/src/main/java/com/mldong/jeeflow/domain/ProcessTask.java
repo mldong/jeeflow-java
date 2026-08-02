@@ -1,5 +1,6 @@
 package com.mldong.jeeflow.domain;
 
+import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
 import com.mldong.jeeflow.enums.ProcessTaskTypeEnum;
 import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
@@ -131,6 +132,10 @@ public class ProcessTask {
     }
 
     public boolean isAllowed(String operator) {
+        // v1.0.1：系统代执行（flow.auto）/超级管理员（flow.admin）放行（对齐 boot2/boot3 isAllowed）
+        if (FlowConst.AUTO_ID.equalsIgnoreCase(operator) || FlowConst.ADMIN_ID.equalsIgnoreCase(operator)) {
+            return true;
+        }
         return isDoing() && this.actorIds != null && this.actorIds.contains(operator);
     }
 

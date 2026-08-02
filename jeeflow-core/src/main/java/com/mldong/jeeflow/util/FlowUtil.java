@@ -25,6 +25,10 @@ public final class FlowUtil {
     /** 追加用户信息到流程参数 */
     public static void addUserInfoToArgs(String operator, FlowData args, IUserProvider userProvider) {
         if (userProvider == null) return;
+        // v1.0.1：系统代执行（flow.auto）/超级管理员（flow.admin）非真实用户，跳过注入（对齐 boot2/boot3）
+        if (FlowConst.AUTO_ID.equalsIgnoreCase(operator) || FlowConst.ADMIN_ID.equalsIgnoreCase(operator)) {
+            return;
+        }
         IUserProvider.UserInfo u = userProvider.getUser(operator);
         if (u == null) return;
         args.put(FlowConst.USER_USER_ID, u.getUserId() != null ? u.getUserId() : operator);

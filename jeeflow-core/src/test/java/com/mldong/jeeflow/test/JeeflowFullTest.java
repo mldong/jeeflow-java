@@ -468,4 +468,78 @@ public class JeeflowFullTest {
         assertFalse("任务参与者不应为空列表", task.getActorIds().isEmpty());
         assertTrue("任务参与者应包含 leader", task.getActorIds().contains("leader"));
     }
+
+    // ═══════════════════════════════════════════
+    // 测试 15：assignee 变量解析（v1.0.1，集成反馈③）
+    // token 即变量 key：命中用值（集合展开）、未命中字面量；tf_nextNodeOperator 优先
+    // ═══════════════════════════════════════════
+    @Test
+    public void test15AssigneeVariableResolution() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("11-assignee-vars.json");
+
+        // ① deptLeader 变量命中 → 参与者 = 变量值
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant",
+                FlowData.create().set("deptLeader", "L001"));
+        ProcessTask apply = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
+        assertEquals("applicant", apply.getActorIds().get(0));
+        engine.executeProcessTask(apply.getTaskId(), "applicant",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode()));
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals("task1", doing.get(0).getTaskName());
+        assertEquals("变量命中应解析为变量值", Arrays.asList("L001"), doing.get(0).getActorIds());
+
+        // ② 静态字面量 userA,userB（变量未命中）
+        engine.executeProcessTask(doing.get(0).getTaskId(), "L001",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+        doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals("task2", doing.get(0).getTaskName());
+        assertEquals("静态字面量参与者", Arrays.asList("userA", "userB"), doing.get(0).getActorIds());
+
+        // ③ 变量未传入 → token 字面量回退（对齐 boot3 args.get(token, token)）
+        def = registerFlow("11-assignee-vars.json");
+        inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        apply = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
+        engine.executeProcessTask(apply.getTaskId(), "applicant",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode()));
+        doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals("deptLeader 未传入应回退字面量", Arrays.asList("deptLeader"), doing.get(0).getActorIds());
+
+        // ④ tf_nextNodeOperator 优先于 assignee
+        def = registerFlow("11-assignee-vars.json");
+        inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        apply = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
+        engine.executeProcessTask(apply.getTaskId(), "applicant",
+                FlowData.create()
+                        .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode())
+                        .set(FlowConst.NEXT_NODE_OPERATOR, "BOSS1,BOSS2"));
+        doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals("tf_nextNodeOperator 应优先", Arrays.asList("BOSS1", "BOSS2"), doing.get(0).getActorIds());
+    }
+
+    // ═══════════════════════════════════════════
+    // 测试 16：系统代执行 flow.auto / flow.admin（v1.0.1，集成反馈④）
+    // ═══════════════════════════════════════════
+    @Test
+    public void test16SystemExecuteFlowAuto() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("11-assignee-vars.json");
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant",
+                FlowData.create().set("deptLeader", "L001"));
+        ProcessTask apply = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
+
+        // ① flow.auto 非参与者身份放行（startAndExecute 契约）
+        engine.executeProcessTask(apply.getTaskId(), FlowConst.AUTO_ID,
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode()));
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals("flow.auto 应放行执行", "task1", doing.get(0).getTaskName());
+
+        // ② 跳过 UserProvider 注入：u_userId 不会被替换成 flow.auto
+        inst = repo.findInstanceById(inst.getInstanceId());
+        assertEquals("flow.auto 执行应跳过用户注入", "applicant", inst.getVariables().getStr(FlowConst.USER_USER_ID));
+
+        // ③ flow.admin 放行
+        engine.executeProcessTask(doing.get(0).getTaskId(), FlowConst.ADMIN_ID,
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+        doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals("flow.admin 应放行执行", "task2", doing.get(0).getTaskName());
+    }
 }

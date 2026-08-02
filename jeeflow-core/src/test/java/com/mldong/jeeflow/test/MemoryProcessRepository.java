@@ -39,6 +39,29 @@ public class MemoryProcessRepository implements IProcessRepository {
         defines.put(define.getId(), define);
     }
 
+    // 定义写操作（v1.0.1，对齐 SPI）
+    @Override
+    public void saveDefine(ProcessInstance.ProcessDefine define) {
+        if (define.getId() == null) define.setId(idSeq.getAndIncrement());
+        defines.put(define.getId(), define);
+    }
+
+    @Override
+    public void updateDefine(ProcessInstance.ProcessDefine define) {
+        defines.put(define.getId(), define);
+    }
+
+    @Override
+    public void updateDefineState(Long defineId, int state) {
+        ProcessInstance.ProcessDefine d = defines.get(defineId);
+        if (d != null) d.setState(state);
+    }
+
+    @Override
+    public void removeDefine(Long defineId) {
+        defines.remove(defineId);
+    }
+
     // ---- 流程实例 ----
     @Override
     public ProcessInstance findInstanceById(Long instanceId) {
@@ -62,6 +85,17 @@ public class MemoryProcessRepository implements IProcessRepository {
     @Override
     public void updateInstance(ProcessInstance instance) {
         instances.put(instance.getInstanceId(), instance);
+        // v1.0.1：级联保存聚合根内任务状态变更（对齐 JdbcProcessRepository）
+        if (instance.getTasks() != null) {
+            for (ProcessTask task : instance.getTasks()) {
+                if (task.getTaskId() != null) {
+                    tasks.put(task.getTaskId(), task);
+                    if (task.getActorIds() != null && !task.getActorIds().isEmpty()) {
+                        taskActors.put(task.getTaskId(), new ArrayList<>(task.getActorIds()));
+                    }
+                }
+            }
+        }
     }
 
     // ---- 流程任务 ----

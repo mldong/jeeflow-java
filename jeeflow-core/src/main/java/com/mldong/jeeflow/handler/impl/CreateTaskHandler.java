@@ -2,8 +2,10 @@ package com.mldong.jeeflow.handler.impl;
 
 import com.mldong.jeeflow.core.Execution;
 import com.mldong.jeeflow.core.ServiceContext;
+import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessTask;
+import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessEventTypeEnum;
 import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
 import com.mldong.jeeflow.event.ProcessEvent;
@@ -15,6 +17,7 @@ import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.model.TaskModel;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -69,23 +72,50 @@ public class CreateTaskHandler implements IHandler {
 
     private List<String> resolveActors(TaskModel taskModel, ProcessModel model, Execution execution) {
         List<String> actors = new ArrayList<>();
-        // 1. 固定指派 assignee
-        if (taskModel.getAssignee() != null && !taskModel.getAssignee().isEmpty()) {
-            String assignee = taskModel.getAssignee();
-            // boot2 约定："applicant" → 解析为流程发起人
-            if (assignee.contains("applicant")) {
-                assignee = assignee.replace("applicant", execution.getProcessInstance().getOperator());
-            }
-            if (assignee.contains(",")) {
-                for (String a : assignee.split(",")) {
-                    String trimmed = a.trim();
-                    if (!trimmed.isEmpty()) actors.add(trimmed);
+        FlowData args = execution.getArgs();
+        // 1. 动态指定下一节点处理人优先（v1.0.1：对齐 boot2/boot3 tf_nextNodeOperator）
+        Object nextNodeOperator = args.get(FlowConst.NEXT_NODE_OPERATOR);
+        if (nextNodeOperator != null && !nextNodeOperator.toString().isEmpty()) {
+            if (nextNodeOperator instanceof Collection) {
+                for (Object o : (Collection<?>) nextNodeOperator) {
+                    String t = String.valueOf(o).trim();
+                    if (!t.isEmpty() && !actors.contains(t)) actors.add(t);
                 }
             } else {
-                actors.add(assignee.trim());
+                for (String a : nextNodeOperator.toString().split(",")) {
+                    String t = a.trim();
+                    if (!t.isEmpty() && !actors.contains(t)) actors.add(t);
+                }
+            }
+            return actors;
+        }
+        // 2. 固定指派 assignee——token 即变量 key，能替换就换，换不了就是字面量（v1.0.1 对齐 boot3 args.get(token, token)）
+        if (taskModel.getAssignee() != null && !taskModel.getAssignee().isEmpty()) {
+            String assignee = taskModel.getAssignee();
+            for (String raw : assignee.split(",")) {
+                String token = raw.trim();
+                if (token.isEmpty()) continue;
+                // mldong 契约特殊值：applicant → 流程发起人
+                if (token.contains("applicant")) {
+                    token = token.replace("applicant", execution.getProcessInstance().getOperator());
+                }
+                Object v = args.get(token);
+                if (v != null) {
+                    if (v instanceof Collection) {
+                        for (Object o : (Collection<?>) v) {
+                            String t = String.valueOf(o).trim();
+                            if (!t.isEmpty() && !actors.contains(t)) actors.add(t);
+                        }
+                    } else {
+                        String t = String.valueOf(v).trim();
+                        if (!t.isEmpty() && !actors.contains(t)) actors.add(t);
+                    }
+                } else if (!actors.contains(token)) {
+                    actors.add(token);
+                }
             }
         }
-        // 2. 动态指派处理器 assignmentHandler（assignee 为空时才生效）
+        // 3. 动态指派处理器 assignmentHandler（assignee 为空时才生效）
         if (actors.isEmpty()) {
             String handlerClass = taskModel.getAssignmentHandler();
             if (handlerClass != null && !handlerClass.isEmpty()) {
