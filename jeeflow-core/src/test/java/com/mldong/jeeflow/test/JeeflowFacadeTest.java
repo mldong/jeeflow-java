@@ -463,4 +463,35 @@ public class JeeflowFacadeTest {
         rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
         assertEquals("m_t_LIKE_displayName 不应命中: " + r, 0, rows.size());
     }
+
+    // ═══ issues/07：设计详情 jsonObject 缺失基本信息时从设计表补齐 ═══
+
+    @Test
+    public void testDesignDetailJsonObjectMerge() throws Exception {
+        String content = new String(Files.readAllBytes(
+                Paths.get("src/test/resources/flows/01-simple.json")), java.nio.charset.StandardCharsets.UTF_8);
+        // 无 content 保存 → 无 his → jsonObject 为空对象合并基本信息
+        Map<String, Object> r = call("processDesign/save", args("name", "test_display",
+                "displayName", "回显测试", "operator", "zhangsan"));
+        assertOk(r);
+        Long designId = toLong(((Map<String, Object>) r.get("data")).get("id"));
+
+        r = call("processDesign/detail", args("id", designId));
+        assertOk(r);
+        Map<String, Object> data = (Map<String, Object>) r.get("data");
+        Map<String, Object> jo = (Map<String, Object>) data.get("jsonObject");
+        assertNotNull("jsonObject 应始终返回（issues/07）: " + r, jo);
+        assertEquals("test_display", jo.get("name"));
+        assertEquals("回显测试", jo.get("displayName"));
+        assertEquals(designId, jo.get("processDesignId"));
+
+        // 已有 his（含 name/displayName）→ 保留 his 内容
+        r = call("processDesign/save", args("id", designId, "name", "test_display",
+                "displayName", "回显测试", "content", content, "operator", "zhangsan"));
+        assertOk(r);
+        r = call("processDesign/detail", args("id", designId));
+        assertOk(r);
+        jo = (Map<String, Object>) ((Map<String, Object>) r.get("data")).get("jsonObject");
+        assertEquals("his content 的 name 优先: " + r, "simple", jo.get("name"));
+    }
 }

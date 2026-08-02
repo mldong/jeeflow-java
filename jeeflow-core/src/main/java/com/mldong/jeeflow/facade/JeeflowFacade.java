@@ -647,9 +647,17 @@ public class JeeflowFacade {
         data.put("remark", design.getRemark());
         // 最新设计稿内容 + 历史列表
         List<ProcessDesignHis> hisList = ext().listDesignHis(id);
+        Map<String, Object> jsonObject = null;
         if (!hisList.isEmpty()) {
-            data.put("jsonObject", parseGraph(hisList.get(0).getContent()));
+            jsonObject = parseGraph(hisList.get(0).getContent());
         }
+        // issues/07：jsonObject 缺失基本信息时从设计表补齐（对齐 boot3 ProcessDesignServiceImpl.findById）
+        if (jsonObject == null) jsonObject = new LinkedHashMap<>();
+        if (!jsonObject.containsKey("name")) jsonObject.put("name", design.getName());
+        if (!jsonObject.containsKey("displayName")) jsonObject.put("displayName", design.getDisplayName());
+        if (!jsonObject.containsKey("type")) jsonObject.put("type", design.getType());
+        if (!jsonObject.containsKey("processDesignId")) jsonObject.put("processDesignId", design.getId());
+        data.put("jsonObject", jsonObject);
         data.put("his", hisList);
         return ok(data);
     }
