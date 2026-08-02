@@ -10,8 +10,6 @@ import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
 import com.mldong.jeeflow.json.IJsonProvider;
-import com.mldong.jeeflow.metadata.EnumDictRegistry;
-import com.mldong.jeeflow.metadata.HandlerRegistry;
 import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.parser.ModelParser;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
@@ -49,19 +47,11 @@ public class JeeflowFacade {
     private final IProcessRepository repository;
     private final IProcessExtRepository extRepository; // 可空：未接入扩展仓储时设计/委托 action 报错
     private IUserSearchProvider userSearchProvider;    // 可空：candidatePage 用户搜索依赖
-    private HandlerRegistry handlerRegistry;           // 可空：metadata/handlers 依赖，未注入返回空清单
-    private final EnumDictRegistry enumDictRegistry = new EnumDictRegistry();
     private final JeeflowQueryParser queryParser = new JeeflowQueryParser();
 
     /** 注入用户搜索钩子（candidatePage 无模型候选时的用户分页搜索） */
     public JeeflowFacade setUserSearchProvider(IUserSearchProvider provider) {
         this.userSearchProvider = provider;
-        return this;
-    }
-
-    /** 注入处理器注册中心（metadata/handlers SPI 清单） */
-    public JeeflowFacade setHandlerRegistry(HandlerRegistry registry) {
-        this.handlerRegistry = registry;
         return this;
     }
 
@@ -119,10 +109,6 @@ public class JeeflowFacade {
                 case "processSurrogate/page": return surrogatePage(args);
                 case "processSurrogate/save": return surrogateSave(args);
                 case "processSurrogate/remove": return surrogateRemove(args);
-                // ── 引擎元数据（v1.4.0）──
-                case "metadata/dictKeys": return dictKeys(args);
-                case "metadata/dict": return dict(args);
-                case "metadata/handlers": return handlers(args);
                 default:
                     return error("未知 action: " + action);
             }
@@ -826,35 +812,5 @@ public class JeeflowFacade {
     private static LocalDateTime parseTime(Object val) {
         if (val == null) return null;
         try { return LocalDateTime.parse(val.toString()); } catch (Exception e) { return null; }
-    }
-
-    // ═══ 引擎元数据（v1.4.0）═══
-
-    /** 枚举字典 key 清单 */
-    private Map<String, Object> dictKeys(Map<String, Object> args) {
-        return ok(enumDictRegistry.listDictKeys());
-    }
-
-    /** 按 key 取枚举字典（[{value, label}]） */
-    private Map<String, Object> dict(Map<String, Object> args) {
-        String key = toStr(args.get("key"));
-        if (key == null || key.isEmpty()) return error("key 缺失");
-        return ok(enumDictRegistry.getDict(key));
-    }
-
-    /** SPI 实现清单（type 必填，group 可选过滤） */
-    private Map<String, Object> handlers(Map<String, Object> args) {
-        String type = toStr(args.get("type"));
-        if (type == null || type.isEmpty()) return error("type 缺失（AssignmentHandler / CandidateHandler / FlowInterceptor）");
-        if (handlerRegistry == null) return ok(new ArrayList<>());
-        // type 传类名（com.xxx.AssignmentHandler）或短名（AssignmentHandler）都兼容
-        List<com.mldong.jeeflow.metadata.HandlerMeta> metas = new ArrayList<>();
-        for (Class<?> t : handlerRegistry.listHandlerTypes()) {
-            if (t.getName().equals(type) || t.getSimpleName().equals(type)) {
-                String group = toStr(args.get("group"));
-                metas.addAll(group != null ? handlerRegistry.listHandlers(t, group) : handlerRegistry.listHandlers(t));
-            }
-        }
-        return ok(metas);
     }
 }
