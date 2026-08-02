@@ -852,8 +852,155 @@ public class JeeflowFacade {
         data.put("pageSize", page.getPageSize());
         data.put("recordCount", page.getRecordCount());
         data.put("totalPage", page.getTotalPage());
-        data.put("rows", page.getRows());
+        List<Map<String, Object>> rows = new ArrayList<>();
+        if (page.getRows() != null) {
+            for (Object row : page.getRows()) {
+                if (row instanceof IProcessRepository.TaskRow) {
+                    rows.add(taskRowToMap((IProcessRepository.TaskRow) row));
+                } else if (row instanceof IProcessRepository.InstanceRow) {
+                    rows.add(instanceRowToMap((IProcessRepository.InstanceRow) row));
+                } else if (row instanceof IProcessRepository.DefineRow) {
+                    rows.add(defineRowToMap((IProcessRepository.DefineRow) row));
+                } else if (row instanceof ProcessSurrogate) {
+                    rows.add(surrogateRowToMap((ProcessSurrogate) row));
+                } else {
+                    rows.add(beanToMap(row));
+                }
+            }
+        }
+        data.put("rows", rows);
         return ok(data);
+    }
+
+    // ═══ 行输出转换（issues/05-2 字段契约 + 05-3 时间格式）═══
+
+    private static final java.time.format.DateTimeFormatter TIME_FMT =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    private static String fmtTime(java.time.LocalDateTime t) {
+        return t != null ? t.format(TIME_FMT) : null;
+    }
+
+    /** 实例行：ext（实例变量对象）+ displayName/version（定义显示名/版本），时间格式化 */
+    private Map<String, Object> instanceRowToMap(IProcessRepository.InstanceRow r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.getId());
+        m.put("parentId", r.getParentId());
+        m.put("processDefineId", r.getProcessDefineId());
+        m.put("state", r.getState());
+        m.put("parentNodeName", r.getParentNodeName());
+        m.put("businessNo", r.getBusinessNo());
+        m.put("operator", r.getOperator());
+        m.put("expireTime", fmtTime(r.getExpireTime()));
+        m.put("variable", r.getVariable());
+        m.put("createTime", fmtTime(r.getCreateTime()));
+        m.put("createUser", r.getCreateUser());
+        m.put("updateTime", fmtTime(r.getUpdateTime()));
+        m.put("updateUser", r.getUpdateUser());
+        m.put("processDefineName", r.getProcessDefineName());
+        m.put("processDefineDisplayName", r.getProcessDefineDisplayName());
+        m.put("processDefineVersion", r.getProcessDefineVersion());
+        m.put("ext", parseJsonMap(r.getVariable()));
+        m.put("displayName", r.getProcessDefineDisplayName());
+        m.put("version", r.getProcessDefineVersion());
+        return m;
+    }
+
+    /** 任务行：ext（任务变量，空回退实例变量）+ instanceExt + version，时间格式化 */
+    private Map<String, Object> taskRowToMap(IProcessRepository.TaskRow r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.getId());
+        m.put("processInstanceId", r.getProcessInstanceId());
+        m.put("taskName", r.getTaskName());
+        m.put("displayName", r.getDisplayName());
+        m.put("taskType", r.getTaskType());
+        m.put("performType", r.getPerformType());
+        m.put("taskState", r.getTaskState());
+        m.put("operator", r.getOperator());
+        m.put("finishTime", fmtTime(r.getFinishTime()));
+        m.put("expireTime", fmtTime(r.getExpireTime()));
+        m.put("formKey", r.getFormKey());
+        m.put("taskParentId", r.getTaskParentId());
+        m.put("variable", r.getVariable());
+        m.put("createTime", fmtTime(r.getCreateTime()));
+        m.put("createUser", r.getCreateUser());
+        m.put("updateTime", fmtTime(r.getUpdateTime()));
+        m.put("updateUser", r.getUpdateUser());
+        m.put("processDefineName", r.getProcessDefineName());
+        m.put("processDefineDisplayName", r.getProcessDefineDisplayName());
+        m.put("instanceVariable", r.getInstanceVariable());
+        m.put("instanceCreateTime", fmtTime(r.getInstanceCreateTime()));
+        Map<String, Object> instanceExt = parseJsonMap(r.getInstanceVariable());
+        Map<String, Object> ext = parseJsonMap(r.getVariable());
+        if (ext.isEmpty()) ext = instanceExt;
+        m.put("ext", ext);
+        m.put("instanceExt", instanceExt);
+        m.put("version", r.getProcessDefineVersion());
+        return m;
+    }
+
+    /** 定义行：时间格式化 */
+    private Map<String, Object> defineRowToMap(IProcessRepository.DefineRow r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.getId());
+        m.put("name", r.getName());
+        m.put("displayName", r.getDisplayName());
+        m.put("type", r.getType());
+        m.put("state", r.getState());
+        m.put("version", r.getVersion());
+        m.put("createTime", fmtTime(r.getCreateTime()));
+        m.put("createUser", r.getCreateUser());
+        m.put("updateTime", fmtTime(r.getUpdateTime()));
+        m.put("updateUser", r.getUpdateUser());
+        return m;
+    }
+
+    /** 委托行：时间格式化 */
+    private Map<String, Object> surrogateRowToMap(ProcessSurrogate s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", s.getId());
+        m.put("processName", s.getProcessName());
+        m.put("operator", s.getOperator());
+        m.put("surrogate", s.getSurrogate());
+        m.put("startTime", fmtTime(s.getStartTime()));
+        m.put("endTime", fmtTime(s.getEndTime()));
+        m.put("enabled", s.getEnabled());
+        m.put("createTime", fmtTime(s.getCreateTime()));
+        m.put("createUser", s.getCreateUser());
+        m.put("updateTime", fmtTime(s.getUpdateTime()));
+        m.put("updateUser", s.getUpdateUser());
+        return m;
+    }
+
+    /** JSON 字符串 → Map（坏 JSON 返回空 Map） */
+    private Map<String, Object> parseJsonMap(String json) {
+        if (json == null || json.isEmpty()) return new LinkedHashMap<>();
+        try {
+            IJsonProvider provider = com.mldong.jeeflow.core.ServiceContext.find(IJsonProvider.class);
+            if (provider == null) return new LinkedHashMap<>();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> m = (Map<String, Object>) provider.fromJson(json, Map.class);
+            return m != null ? new LinkedHashMap<>(m) : new LinkedHashMap<>();
+        } catch (Exception e) {
+            return new LinkedHashMap<>();
+        }
+    }
+
+    /** 对象转 map（简单 getter 反射兜底） */
+    private Map<String, Object> beanToMap(Object bean) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        try {
+            for (java.lang.reflect.Method method : bean.getClass().getMethods()) {
+                if (method.getName().startsWith("get") && method.getParameterCount() == 0
+                        && !"getClass".equals(method.getName())) {
+                    String key = Character.toLowerCase(method.getName().charAt(3))
+                            + method.getName().substring(4);
+                    m.put(key, method.invoke(bean));
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return m;
     }
 
     private static Long toLong(Object val) {

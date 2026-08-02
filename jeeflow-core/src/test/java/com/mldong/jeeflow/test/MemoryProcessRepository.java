@@ -213,7 +213,7 @@ public class MemoryProcessRepository implements IProcessRepository {
         return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
     }
 
-    private static TaskRow toTaskRow(ProcessTask t) {
+    private TaskRow toTaskRow(ProcessTask t) {
         TaskRow r = new TaskRow();
         r.setId(t.getTaskId());
         r.setProcessInstanceId(t.getProcessInstanceId());
@@ -224,11 +224,68 @@ public class MemoryProcessRepository implements IProcessRepository {
         r.setTaskState(t.getTaskState());
         r.setOperator(t.getActorId());
         r.setFormKey(t.getFormKey());
+        r.setTaskParentId(t.getParentTaskId());
         r.setCreateTime(t.getCreateTime());
+        r.setUpdateTime(t.getUpdateTime());
+        if (t.getVariables() != null) {
+            com.mldong.jeeflow.json.IJsonProvider json = com.mldong.jeeflow.core.ServiceContext.find(com.mldong.jeeflow.json.IJsonProvider.class);
+            if (json != null) r.setVariable(json.toJson(t.getVariables()));
+        }
+        ProcessInstance inst = instances.get(t.getProcessInstanceId());
+        if (inst != null) {
+            r.setInstanceCreateTime(inst.getCreateTime());
+            ProcessInstance.ProcessDefine def = defines.get(inst.getDefineId());
+            if (def != null) {
+                r.setProcessDefineName(def.getName());
+                r.setProcessDefineDisplayName(def.getDisplayName());
+                r.setProcessDefineVersion(def.getVersion());
+            }
+        }
         return r;
     }
 
-    @Override public PageResult<InstanceRow> pageInstances(PageQuery query) { return PageResult.of(1, 10, 0, new ArrayList<>()); }
+    @Override public PageResult<InstanceRow> pageInstances(PageQuery query) {
+        // 支持 t.operator EQ 过滤（Facade instancePage 依赖）
+        String operator = null;
+        for (PageQuery.Condition c : query.getConditions()) {
+            if ("t.operator".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
+                operator = c.getValue().toString();
+            }
+        }
+        List<InstanceRow> rows = new ArrayList<>();
+        for (ProcessInstance inst : instances.values()) {
+            if (operator != null && !operator.equals(inst.getOperator())) continue;
+            rows.add(toInstanceRow(inst));
+        }
+        return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
+    }
+
+    private InstanceRow toInstanceRow(ProcessInstance inst) {
+        InstanceRow r = new InstanceRow();
+        r.setId(inst.getInstanceId());
+        r.setParentId(inst.getParentId());
+        r.setProcessDefineId(inst.getDefineId());
+        r.setState(inst.getState());
+        r.setParentNodeName(inst.getParentNodeName());
+        r.setBusinessNo(inst.getBusinessNo());
+        r.setOperator(inst.getOperator());
+        r.setExpireTime(inst.getExpireTime());
+        r.setCreateTime(inst.getCreateTime());
+        r.setCreateUser(inst.getCreateUser());
+        r.setUpdateTime(inst.getUpdateTime());
+        r.setUpdateUser(inst.getUpdateUser());
+        if (inst.getVariables() != null) {
+            com.mldong.jeeflow.json.IJsonProvider json = com.mldong.jeeflow.core.ServiceContext.find(com.mldong.jeeflow.json.IJsonProvider.class);
+            if (json != null) r.setVariable(json.toJson(inst.getVariables()));
+        }
+        ProcessInstance.ProcessDefine def = defines.get(inst.getDefineId());
+        if (def != null) {
+            r.setProcessDefineName(def.getName());
+            r.setProcessDefineDisplayName(def.getDisplayName());
+            r.setProcessDefineVersion(def.getVersion());
+        }
+        return r;
+    }
 
     @Override
     public PageResult<InstanceRow> pageCcInstances(PageQuery query) {

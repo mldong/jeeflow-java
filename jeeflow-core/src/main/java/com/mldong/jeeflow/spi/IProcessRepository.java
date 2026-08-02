@@ -96,6 +96,7 @@ public interface IProcessRepository {
         // 关联字段
         private String processDefineName;
         private String processDefineDisplayName;
+        private Integer processDefineVersion;
         private String instanceVariable;
         private java.time.LocalDateTime instanceCreateTime;
 
@@ -118,6 +119,7 @@ public interface IProcessRepository {
         public String getUpdateUser() { return updateUser; } public void setUpdateUser(String v) { this.updateUser = v; }
         public String getProcessDefineName() { return processDefineName; } public void setProcessDefineName(String v) { this.processDefineName = v; }
         public String getProcessDefineDisplayName() { return processDefineDisplayName; } public void setProcessDefineDisplayName(String v) { this.processDefineDisplayName = v; }
+        public Integer getProcessDefineVersion() { return processDefineVersion; } public void setProcessDefineVersion(Integer v) { this.processDefineVersion = v; }
         public String getInstanceVariable() { return instanceVariable; } public void setInstanceVariable(String v) { this.instanceVariable = v; }
         public java.time.LocalDateTime getInstanceCreateTime() { return instanceCreateTime; } public void setInstanceCreateTime(java.time.LocalDateTime v) { this.instanceCreateTime = v; }
     }

@@ -384,4 +384,34 @@ public class JeeflowFacadeTest {
         assertOk(r);
         assertNotNull(((Map<String, Object>) r.get("data")).get("jsonObject"));
     }
+
+    // ═══ 列表字段契约 + 时间格式（issues/05-2 / 05-3）═══
+
+    @Test
+    public void testListRowContract() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan", "amount", 500));
+        Map<String, Object> r = call("processTask/todoList", args("operator", "leader"));
+        assertOk(r);
+        List<?> rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertFalse(rows.isEmpty());
+        Map<String, Object> row = (Map<String, Object>) rows.get(0);
+        // 05-2：ext（任务变量对象，空回退实例变量）+ instanceExt + version
+        assertNotNull(row.get("ext"));
+        assertNotNull(row.get("instanceExt"));
+        assertNotNull(row.get("version"));
+        // 05-3：时间字段为 yyyy-MM-dd HH:mm:ss 格式字符串
+        String ct = String.valueOf(row.get("createTime"));
+        assertTrue("时间应格式化为 yyyy-MM-dd HH:mm:ss（无 T）: " + ct, ct.contains(" ") && !ct.contains("T"));
+
+        r = call("processInstance/page", args("operator", "zhangsan"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertFalse(rows.isEmpty());
+        row = (Map<String, Object>) rows.get(0);
+        assertNotNull(row.get("ext"));       // 实例变量对象
+        assertNotNull(row.get("displayName")); // 定义显示名
+        assertNotNull(row.get("version"));     // 定义版本
+    }
 }
