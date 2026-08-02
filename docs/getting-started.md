@@ -1,6 +1,6 @@
 # 快速开始
 
-> ⚠️ **版本说明**：以下坐标是发布目标版本（`1.0.0`）。SDK 尚未发布到 Maven Central 前，请用本地构建：`mvn -q install -DskipTests -pl jeeflow-core`（当前版本 `1.0.0-SNAPSHOT`）。
+> ✅ **版本说明**：已发布到 Maven Central（`1.1.0`，含管理扩展与统一门面）。以下坐标可直接使用。
 
 ## 1. Maven 依赖
 
@@ -10,7 +10,7 @@
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-core</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 <dependency>
     <groupId>org.slf4j</groupId>
@@ -26,21 +26,21 @@
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-spring-boot2-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 
 <!-- Spring Boot 3.x -->
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-spring-boot3-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 
 <!-- Spring Boot 4.x -->
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-spring-boot4-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
