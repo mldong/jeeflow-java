@@ -34,6 +34,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -97,8 +98,11 @@ public class JeeflowFacade {
                 case "processDesign/page": return designPage(args);
                 case "processDesign/detail": return designDetail(args);
                 case "processDesign/save": return designSave(args);
+                case "processDesign/update": return designUpdate(args);
+                case "processDesign/updateDefine": return designUpdateDefine(args);
                 case "processDesign/remove": return designRemove(args);
                 case "processDesign/deploy": return designDeploy(args);
+                case "processDesign/redeploy": return designRedeploy(args);
                 // ── 视图端点（v1.2.0）──
                 case "processDefine/getLastByName": return getLastByName(args);
                 case "processInstance/highLight": return highLight(args);
@@ -686,6 +690,8 @@ public class JeeflowFacade {
             if (args.get("icon") != null) design.setIcon(toStr(args.get("icon")));
             if (args.get("remark") != null) design.setRemark(toStr(args.get("remark")));
             design.setUpdateUser(operator);
+            // 内容快照变更 → 置为未部署（对齐 boot3 updateDefine 语义，issues/08）
+            if (contentBytes(args) != null) design.setIsDeployed(0);
             ext.updateDesign(design);
         }
         // 内容快照（设计稿内容存历史表）
@@ -718,6 +724,89 @@ public class JeeflowFacade {
         byte[] bytes = hisList.get(0).getContent();
         ProcessModel model = ModelParser.parse(bytes);
         Long defineId = saveDeployedDefine(model, bytes);
+        design.setIsDeployed(1);
+        design.setUpdateUser(toStr(args.get("operator"), "system"));
+        ext.updateDesign(design);
+        return ok(Map.of(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
+    }
+
+    /** 修改流程设计基本信息（对齐 boot3 ProcessDesignController.update，不写设计稿快照） */
+    private Map<String, Object> designUpdate(Map<String, Object> args) {
+        IProcessExtRepository ext = ext();
+        Long id = toLong(args.get("id"));
+        ProcessDesign design = ext.findDesignById(id);
+        if (design == null) return error("流程设计不存在");
+        if (args.get("name") != null) design.setName(toStr(args.get("name")));
+        if (args.get("displayName") != null) design.setDisplayName(toStr(args.get("displayName")));
+        if (args.get("type") != null) design.setType(toStr(args.get("type")));
+        if (args.get("icon") != null) design.setIcon(toStr(args.get("icon")));
+        if (args.get("remark") != null) design.setRemark(toStr(args.get("remark")));
+        design.setUpdateUser(toStr(args.get("operator"), "system"));
+        ext.updateDesign(design);
+        return ok();
+    }
+
+    /** 更新流程设计定义（设计稿保存，issues/08）：content 快照入库 + 同步 name/displayName/type + 置未部署 */
+    private Map<String, Object> designUpdateDefine(Map<String, Object> args) {
+        IProcessExtRepository ext = ext();
+        Long designId = toLong(args.get("processDesignId"));
+        ProcessDesign design = ext.findDesignById(designId);
+        if (design == null) return error("流程设计不存在");
+        byte[] bytes = contentBytes(args);
+        if (bytes == null) return error("content 缺失");
+        // 与最新一条相同则不重复入库（对齐 boot3 updateDefine）
+        List<ProcessDesignHis> hisList = ext.listDesignHis(designId);
+        if (hisList.isEmpty() || !Arrays.equals(hisList.get(0).getContent(), bytes)) {
+            ProcessDesignHis his = new ProcessDesignHis();
+            his.setProcessDesignId(designId);
+            his.setContent(bytes);
+            his.setCreateUser(toStr(args.get("operator"), "system"));
+            ext.saveDesignHis(his);
+        }
+        // 同步设计基本信息（jsonObject 里的 name/displayName/type）+ 内容变更 → 未部署
+        try {
+            ProcessModel model = ModelParser.parse(bytes);
+            design.setName(model.getName());
+            design.setDisplayName(model.getDisplayName());
+            design.setType(model.getType());
+        } catch (Exception ignored) {
+        }
+        design.setIsDeployed(0);
+        design.setUpdateUser(toStr(args.get("operator"), "system"));
+        ext.updateDesign(design);
+        return ok();
+    }
+
+    /** 重新部署流程定义（issues/08）：替换最新定义内容 + 置已部署（对齐 boot3 redeploy） */
+    private Map<String, Object> designRedeploy(Map<String, Object> args) {
+        IProcessExtRepository ext = ext();
+        Long designId = toLong(args.get("id"));
+        ProcessDesign design = ext.findDesignById(designId);
+        if (design == null) return error("流程设计不存在");
+        List<ProcessDesignHis> hisList = ext.listDesignHis(designId);
+        if (hisList.isEmpty()) return error("流程设计没有内容，无法发布");
+        byte[] bytes = hisList.get(0).getContent();
+        ProcessModel model = ModelParser.parse(bytes);
+        // 按 name 取最新定义：有则替换内容（version 不变），无则新建（对齐 boot3 redeploy）
+        PageQuery query = new PageQuery(1, 1);
+        query.add("t.name", "EQ", model.getName());
+        query.setOrderBy("t.version desc");
+        PageResult<IProcessRepository.DefineRow> page = repository.pageDefines(query);
+        Long defineId;
+        if (page.getRows() == null || page.getRows().isEmpty()) {
+            defineId = saveDeployedDefine(model, bytes);
+        } else {
+            IProcessRepository.DefineRow last = page.getRows().get(0);
+            ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+            def.setId(last.getId());
+            def.setName(model.getName());
+            def.setDisplayName(model.getDisplayName());
+            def.setType(model.getType());
+            def.setContent(bytes);
+            def.setUpdateUser(toStr(args.get("operator"), "system"));
+            repository.updateDefine(def);
+            defineId = last.getId();
+        }
         design.setIsDeployed(1);
         design.setUpdateUser(toStr(args.get("operator"), "system"));
         ext.updateDesign(design);

@@ -494,4 +494,52 @@ public class JeeflowFacadeTest {
         jo = (Map<String, Object>) ((Map<String, Object>) r.get("data")).get("jsonObject");
         assertEquals("his content 的 name 优先: " + r, "simple", jo.get("name"));
     }
+
+    // ═══ issues/08：部署/重新部署/设计稿变更的 is_deployed 状态同步 ═══
+
+    @Test
+    public void testDesignDeployRedeployIsDeployed() throws Exception {
+        String content = new String(Files.readAllBytes(
+                Paths.get("src/test/resources/flows/01-simple.json")), java.nio.charset.StandardCharsets.UTF_8);
+
+        // 保存（含内容快照）→ 未部署
+        Map<String, Object> r = call("processDesign/save", args("name", "leave08",
+                "displayName", "请假流程08", "content", content, "operator", "zhangsan"));
+        assertOk(r);
+        Long designId = toLong(((Map<String, Object>) r.get("data")).get("id"));
+        assertEquals(0, (int) extRepo.findDesignById(designId).getIsDeployed());
+
+        // 部署 → is_deployed=1
+        r = call("processDesign/deploy", args("id", designId, "operator", "zhangsan"));
+        assertOk(r);
+        Long defineId = toLong(((Map<String, Object>) r.get("data")).get("processDefineId"));
+        assertEquals(1, (int) extRepo.findDesignById(designId).getIsDeployed());
+
+        // 重新部署 → 同一 defineId（内容替换，version 不变）+ is_deployed=1
+        r = call("processDesign/redeploy", args("id", designId, "operator", "zhangsan"));
+        assertOk(r);
+        assertEquals(defineId, toLong(((Map<String, Object>) r.get("data")).get("processDefineId")));
+        assertEquals(1, (int) extRepo.findDesignById(designId).getIsDeployed());
+
+        // 设计稿内容变更（updateDefine，不同 content）→ 新快照 + is_deployed=0
+        String content2 = new String(Files.readAllBytes(
+                Paths.get("src/test/resources/flows/02-multi-task.json")), java.nio.charset.StandardCharsets.UTF_8);
+        r = call("processDesign/updateDefine", args("processDesignId", designId,
+                "content", content2, "operator", "zhangsan"));
+        assertOk(r);
+        assertEquals(0, (int) extRepo.findDesignById(designId).getIsDeployed());
+        assertEquals(2, extRepo.listDesignHis(designId).size());
+        assertEquals("updateDefine 应同步 name: " + r, "multi-task", extRepo.findDesignById(designId).getName());
+
+        // 基本信息修改（update）→ is_deployed 不变
+        r = call("processDesign/update", args("id", designId, "displayName", "改名08", "operator", "zhangsan"));
+        assertOk(r);
+        assertEquals("改名08", extRepo.findDesignById(designId).getDisplayName());
+        assertEquals(0, (int) extRepo.findDesignById(designId).getIsDeployed());
+
+        // 部署 → 再置 1
+        r = call("processDesign/deploy", args("id", designId, "operator", "zhangsan"));
+        assertOk(r);
+        assertEquals(1, (int) extRepo.findDesignById(designId).getIsDeployed());
+    }
 }
