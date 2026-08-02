@@ -17,8 +17,20 @@ public interface IProcessRepository {
     // ═══════════════════════════════════════
 
     ProcessInstance.ProcessDefine findDefineById(Long defineId);
+
+    // ── 流程定义写操作（v1.0.1 新增：设计器部署/启停/删除）──
+    /** 新增流程定义（id 为空时由实现生成） */
+    void saveDefine(ProcessInstance.ProcessDefine define);
+    /** 更新流程定义（name/displayName/type/state/content/version 等） */
+    void updateDefine(ProcessInstance.ProcessDefine define);
+    /** 启用/禁用流程定义（state: 1 可用 / 0 不可用） */
+    void updateDefineState(Long defineId, int state);
+    /** 删除流程定义 */
+    void removeDefine(Long defineId);
+
     ProcessInstance findInstanceById(Long instanceId);
     void saveInstance(ProcessInstance instance);
+    /** 更新实例并**级联持久化聚合内任务状态**（撤回/挂起/激活等变更随同落库，v1.0.1） */
     void updateInstance(ProcessInstance instance);
 
     ProcessTask findTaskById(Long taskId);

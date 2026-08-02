@@ -64,6 +64,82 @@ public class JdbcProcessRepository implements IProcessRepository {
         return null;
     }
 
+    // ── 流程定义写操作（v1.0.1）──
+
+    @Override
+    public void saveDefine(ProcessInstance.ProcessDefine define) {
+        if (define.getId() == null) {
+            define.setId(nextId());
+        }
+        String sql = "INSERT INTO wf_process_define (id, name, display_name, type, state, content, version, " +
+                "create_time, create_user, update_time, update_user) VALUES (?,?,?,?,?,?,?,?,?,?,?)";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            LocalDateTime now = LocalDateTime.now();
+            ps.setLong(1, define.getId());
+            ps.setString(2, define.getName());
+            ps.setString(3, define.getDisplayName());
+            ps.setString(4, define.getType());
+            ps.setInt(5, define.getState() != null ? define.getState() : 1);
+            ps.setBytes(6, define.getContent());
+            ps.setInt(7, define.getVersion() != null ? define.getVersion() : 1);
+            ps.setTimestamp(8, toTimestamp(now));
+            ps.setString(9, define.getUpdateUser());
+            ps.setTimestamp(10, toTimestamp(now));
+            ps.setString(11, define.getUpdateUser());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new RuntimeException("保存流程定义失败", e);
+        }
+    }
+
+    @Override
+    public void updateDefine(ProcessInstance.ProcessDefine define) {
+        String sql = "UPDATE wf_process_define SET name=?, display_name=?, type=?, state=?, content=?, " +
+                "version=?, update_time=?, update_user=? WHERE id=?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, define.getName());
+            ps.setString(2, define.getDisplayName());
+            ps.setString(3, define.getType());
+            ps.setInt(4, define.getState() != null ? define.getState() : 1);
+            ps.setBytes(5, define.getContent());
+            ps.setInt(6, define.getVersion() != null ? define.getVersion() : 1);
+            ps.setTimestamp(7, toTimestamp(LocalDateTime.now()));
+            ps.setString(8, define.getUpdateUser());
+            ps.setLong(9, define.getId());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new RuntimeException("更新流程定义失败", e);
+        }
+    }
+
+    @Override
+    public void updateDefineState(Long defineId, int state) {
+        String sql = "UPDATE wf_process_define SET state=?, update_time=? WHERE id=?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, state);
+            ps.setTimestamp(2, toTimestamp(LocalDateTime.now()));
+            ps.setLong(3, defineId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new RuntimeException("更新流程定义状态失败", e);
+        }
+    }
+
+    @Override
+    public void removeDefine(Long defineId) {
+        String sql = "DELETE FROM wf_process_define WHERE id=?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, defineId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new RuntimeException("删除流程定义失败", e);
+        }
+    }
+
     // ═══ 流程实例 ═══
 
     @Override
@@ -111,16 +187,25 @@ public class JdbcProcessRepository implements IProcessRepository {
     public void updateInstance(ProcessInstance instance) {
         String sql = "UPDATE wf_process_instance SET state=?, parent_node_name=?, expire_time=?, " +
                 "variable=?, update_time=?, update_user=? WHERE id=?";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, instance.getState() != null ? instance.getState() : 10);
-            ps.setString(2, instance.getParentNodeName());
-            ps.setTimestamp(3, toTimestamp(instance.getExpireTime()));
-            ps.setString(4, toJson(instance.getVariables()));
-            ps.setTimestamp(5, toTimestamp(LocalDateTime.now()));
-            ps.setString(6, instance.getUpdateUser());
-            ps.setLong(7, instance.getInstanceId());
-            ps.executeUpdate();
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setInt(1, instance.getState() != null ? instance.getState() : 10);
+                ps.setString(2, instance.getParentNodeName());
+                ps.setTimestamp(3, toTimestamp(instance.getExpireTime()));
+                ps.setString(4, toJson(instance.getVariables()));
+                ps.setTimestamp(5, toTimestamp(LocalDateTime.now()));
+                ps.setString(6, instance.getUpdateUser());
+                ps.setLong(7, instance.getInstanceId());
+                ps.executeUpdate();
+            }
+            // v1.0.1：级联持久化聚合内任务状态（撤回/挂起/激活等变更随同落库，同连接保证一致）
+            if (instance.getTasks() != null) {
+                for (ProcessTask task : instance.getTasks()) {
+                    if (task.getTaskId() != null) {
+                        updateTaskWithConn(conn, task);
+                    }
+                }
+            }
         } catch (SQLException e) {
             throw new RuntimeException("更新流程实例失败", e);
         }
@@ -170,10 +255,18 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     @Override
     public void updateTask(ProcessTask task) {
+        try (Connection conn = dataSource.getConnection()) {
+            updateTaskWithConn(conn, task);
+        } catch (SQLException e) {
+            throw new RuntimeException("更新流程任务失败", e);
+        }
+    }
+
+    /** 同连接更新任务（供 updateInstance 级联复用，保证事务一致） */
+    private void updateTaskWithConn(Connection conn, ProcessTask task) throws SQLException {
         String sql = "UPDATE wf_process_task SET task_state=?, operator=?, finish_time=?, expire_time=?, " +
                 "variable=?, update_time=?, update_user=? WHERE id=?";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setInt(1, task.getTaskState() != null ? task.getTaskState() : 10);
             ps.setString(2, task.getActorId());
             ps.setTimestamp(3, toTimestamp(task.getFinishTime()));
@@ -185,8 +278,6 @@ public class JdbcProcessRepository implements IProcessRepository {
             ps.executeUpdate();
             // 同步参与人
             saveTaskActors(conn, task.getTaskId(), task.getActorIds(), task.getUpdateUser());
-        } catch (SQLException e) {
-            throw new RuntimeException("更新流程任务失败", e);
         }
     }
 

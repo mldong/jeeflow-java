@@ -11,6 +11,7 @@ import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessInstanceStateEnum;
+import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
 import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.json.TypeReference;
@@ -229,6 +230,65 @@ public class JdbcRepositoryTest {
 
         // 验证抄送记录（不能直接查询，但流程正常运行即可）
         assertNotNull(inst);
+    }
+
+    // ═══ 测试：流程定义写操作 CRUD（v1.0.1） ═══
+
+    @Test
+    public void testDefineCrud() throws Exception {
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setName("crud-flow");
+        def.setDisplayName("CRUD 流程");
+        def.setType("test");
+        def.setState(1);
+        def.setVersion(1);
+        def.setContent("{}".getBytes(StandardCharsets.UTF_8));
+        def.setUpdateUser("tester");
+
+        // save
+        repo.saveDefine(def);
+        assertNotNull(def.getId());
+        ProcessInstance.ProcessDefine loaded = repo.findDefineById(def.getId());
+        assertNotNull(loaded);
+        assertEquals("crud-flow", loaded.getName());
+
+        // update
+        loaded.setDisplayName("CRUD 流程 v2");
+        loaded.setContent("{\"v\":2}".getBytes(StandardCharsets.UTF_8));
+        repo.updateDefine(loaded);
+        ProcessInstance.ProcessDefine updated = repo.findDefineById(def.getId());
+        assertEquals("CRUD 流程 v2", updated.getDisplayName());
+
+        // state
+        repo.updateDefineState(def.getId(), 0);
+        assertEquals(0, repo.findDefineById(def.getId()).getState().intValue());
+
+        // remove
+        repo.removeDefine(def.getId());
+        assertNull(repo.findDefineById(def.getId()));
+    }
+
+    // ═══ 测试：updateInstance 级联持久化任务状态（v1.0.1） ═══
+
+    @Test
+    public void testUpdateInstanceCascadesTasks() throws Exception {
+        ProcessInstance.ProcessDefine def = registerSimpleFlow();
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1", FlowData.create());
+
+        // 加载实例（含任务），修改任务状态后 updateInstance
+        ProcessInstance reloaded = repo.findInstanceById(inst.getInstanceId());
+        assertNotNull(reloaded.getTasks());
+        assertTrue(reloaded.getTasks().size() > 0);
+        for (ProcessTask task : reloaded.getTasks()) {
+            task.withdraw();
+        }
+        repo.updateInstance(reloaded);
+
+        // 重新加载验证任务状态已落库
+        ProcessInstance after = repo.findInstanceById(inst.getInstanceId());
+        for (ProcessTask task : after.getTasks()) {
+            assertEquals("撤回后任务状态未级联落库", ProcessTaskStateEnum.WITHDRAW.getCode(), task.getTaskState());
+        }
     }
 
     // ═══ 辅助方法 ═══

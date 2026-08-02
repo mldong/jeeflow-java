@@ -63,6 +63,10 @@ public class ProcessInstance {
         public void setContent(byte[] content) { this.content = content; }
         public Integer getVersion() { return version; }
         public void setVersion(Integer version) { this.version = version; }
+
+        private String updateUser;
+        public String getUpdateUser() { return updateUser; }
+        public void setUpdateUser(String updateUser) { this.updateUser = updateUser; }
     }
 
     // ═══ 工厂方法 ═══
