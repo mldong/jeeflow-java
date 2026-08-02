@@ -10,6 +10,7 @@ import com.mldong.jeeflow.domain.ProcessSurrogate;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
+import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
 import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.model.DecisionModel;
@@ -229,15 +230,39 @@ public class JeeflowFacade {
         data.put("createUser", inst.getCreateUser());
         ProcessInstance.ProcessDefine def0 = repository.findDefineById(inst.getDefineId());
         data.put("jsonObject", def0 != null ? parseGraph(def0.getContent()) : null); // issues/05
-        // 任务列表
+        // 任务列表（issues/05-4）：全量 tasks + activeTaskList（仅 DOING）+ 任务行 ext/isFirstTaskNode
+        String firstTaskNodeId = firstTaskNodeId(data.get("jsonObject"));
         List<Map<String, Object>> tasks = new ArrayList<>();
+        List<Map<String, Object>> activeTaskList = new ArrayList<>();
         if (inst.getTasks() != null) {
             for (ProcessTask t : inst.getTasks()) {
-                tasks.add(taskVo(t));
+                Map<String, Object> vo = taskVo(t);
+                Map<String, Object> ext = t.getVariables() != null
+                        ? new LinkedHashMap<>(t.getVariables()) : new LinkedHashMap<>();
+                boolean doing = ProcessTaskStateEnum.DOING.getCode().equals(t.getTaskState());
+                // 首个任务节点且进行中 → 前端详情抽屉可"重新提交"（对齐 boot3）
+                ext.put("isFirstTaskNode", doing && t.getTaskName().equals(firstTaskNodeId));
+                vo.put("ext", ext);
+                tasks.add(vo);
+                if (doing) activeTaskList.add(vo);
             }
         }
         data.put("tasks", tasks);
+        data.put("activeTaskList", activeTaskList);
         return ok(data);
+    }
+
+    /** 流程 JSON 中第一个任务节点 id（issues/05-4 isFirstTaskNode 用） */
+    private String firstTaskNodeId(Object jsonObject) {
+        if (jsonObject instanceof Map && ((Map<?, ?>) jsonObject).get("nodes") instanceof List) {
+            for (Object n : (List<?>) ((Map<?, ?>) jsonObject).get("nodes")) {
+                if (n instanceof Map && "snaker:task".equals(((Map<?, ?>) n).get("type"))) {
+                    Object id = ((Map<?, ?>) n).get("id");
+                    return id != null ? id.toString() : null;
+                }
+            }
+        }
+        return null;
     }
 
     private Map<String, Object> withdraw(Map<String, Object> args) {

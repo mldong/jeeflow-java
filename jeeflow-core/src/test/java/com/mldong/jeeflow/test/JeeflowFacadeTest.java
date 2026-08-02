@@ -365,6 +365,19 @@ public class JeeflowFacadeTest {
         r = call("processInstance/detail", args("id", instanceId));
         assertOk(r);
         assertNotNull(((Map<String, Object>) r.get("data")).get("jsonObject"));
+        // issues/05-4：activeTaskList 仅 DOING 任务 + 任务行 ext.isFirstTaskNode
+        Map<String, Object> instData = (Map<String, Object>) r.get("data");
+        List<?> activeList = (List<?>) instData.get("activeTaskList");
+        assertEquals(1, activeList.size()); // apply 已自动完成，剩余 task1（DOING）
+        Map<String, Object> task1Row = (Map<String, Object>) activeList.get(0);
+        assertEquals("task1", task1Row.get("taskName"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ext = (Map<String, Object>) task1Row.get("ext");
+        assertNotNull(ext);
+        // task1 不是首个任务节点（apply 才是），isFirstTaskNode 应为 false
+        assertEquals(Boolean.FALSE, ext.get("isFirstTaskNode"));
+        List<?> allTasks = (List<?>) instData.get("tasks");
+        assertEquals(2, allTasks.size()); // apply + task1 全量
 
         List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, null);
         r = call("processTask/detail", args("id", doing.get(0).getTaskId(), "operator", "zhangsan"));
