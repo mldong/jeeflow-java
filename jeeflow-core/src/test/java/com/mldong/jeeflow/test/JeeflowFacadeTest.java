@@ -305,4 +305,47 @@ public class JeeflowFacadeTest {
         if (val instanceof Number) return ((Number) val).longValue();
         return Long.parseLong(val.toString());
     }
+
+    // ═══ highLight 决策分支表达式过滤（issues/06）═══
+
+    @Test
+    public void testHighLightFiltersDecisionBranch() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("03-decision-expr.json");
+        // amount=500 → 走「amount <= 1000」分支（task3），task2 分支未执行
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan", "amount", 500));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        // 推进：task1(leader) → decision → task3(director) → end
+        List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, null);
+        for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
+            if ("task1".equals(t.getTaskName())) {
+                rawRepo.addTaskActor(t.getTaskId(), java.util.List.of("leader"));
+                call("processTask/execute", args("processTaskId", t.getTaskId(), "operator", "leader", "submitType", 1));
+            }
+        }
+        doing = rawRepo.findDoingTasks(instanceId, null);
+        for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
+            if ("task3".equals(t.getTaskName())) {
+                rawRepo.addTaskActor(t.getTaskId(), java.util.List.of("director"));
+                call("processTask/execute", args("processTaskId", t.getTaskId(), "operator", "director", "submitType", 1));
+            }
+        }
+
+        r = call("processInstance/highLight", args("id", instanceId));
+        assertOk(r);
+        Map<String, Object> hl = (Map<String, Object>) r.get("data");
+        @SuppressWarnings("unchecked")
+        List<String> historyEdges = (List<String>) hl.get("historyEdgeNames");
+        @SuppressWarnings("unchecked")
+        List<String> historyNodes = (List<String>) hl.get("historyNodeNames");
+        // 走过的分支：e4（amount<=1000 → task3）+ e6（task3→end）
+        assertTrue("应包含走过的边 e4/e6: " + historyEdges, historyEdges.contains("e4") && historyEdges.contains("e6"));
+        // 未走分支：e3（amount>1000 → task2）与 e5（task2→end）不得出现
+        assertFalse("未走分支 e3 不应高亮: " + historyEdges, historyEdges.contains("e3"));
+        assertFalse("未走分支 e5 不应高亮: " + historyEdges, historyEdges.contains("e5"));
+        assertFalse("未走节点 task2 不应高亮: " + historyNodes, historyNodes.contains("task2"));
+        assertTrue("应包含走过节点 task3: " + historyNodes, historyNodes.contains("task3"));
+    }
 }

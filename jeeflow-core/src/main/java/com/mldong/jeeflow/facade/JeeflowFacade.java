@@ -1,6 +1,7 @@
 package com.mldong.jeeflow.facade;
 
 import com.mldong.jeeflow.core.JeeflowEngine;
+import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessDesign;
 import com.mldong.jeeflow.domain.ProcessDesignHis;
@@ -10,7 +11,12 @@ import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
 import com.mldong.jeeflow.json.IJsonProvider;
+import com.mldong.jeeflow.spi.IExpressionEvaluator;
+import com.mldong.jeeflow.model.DecisionModel;
+import com.mldong.jeeflow.model.NodeModel;
 import com.mldong.jeeflow.model.ProcessModel;
+import com.mldong.jeeflow.model.TransitionModel;
+import com.mldong.jeeflow.util.StringUtils;
 import com.mldong.jeeflow.parser.ModelParser;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
 import com.mldong.jeeflow.spi.IUserProvider;
@@ -25,6 +31,7 @@ import com.mldong.jeeflow.spi.PageResult;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -333,7 +340,7 @@ public class JeeflowFacade {
             try {
                 ProcessModel model = ModelParser.parse(def.getContent());
                 collectPath(model.getStart(), activeNodeNames, historyNodeNames, historyEdgeNames,
-                        new java.util.HashSet<>());
+                        new java.util.HashSet<>(), inst.getVariables(), history);
             } catch (Exception ignored) {
             }
         }
@@ -344,21 +351,53 @@ public class JeeflowFacade {
         return ok(data);
     }
 
-    private void collectPath(com.mldong.jeeflow.model.NodeModel node, List<String> active,
-                             List<String> history, List<String> edges, java.util.Set<String> visited) {
+    private void collectPath(NodeModel node, List<String> active,
+                             List<String> history, List<String> edges, java.util.Set<String> visited,
+                             Map<String, Object> instanceVars, List<ProcessTask> historyTasks) {
         if (node == null || node.getOutputs() == null || visited.contains(node.getName())) return;
         visited.add(node.getName());
-        for (com.mldong.jeeflow.model.TransitionModel tm : node.getOutputs()) {
+        for (TransitionModel tm : node.getOutputs()) {
+            // 决策节点：输出边表达式求值过滤（对齐 boot3 recursionModel，issues/06）——
+            // 表达式为 false 的分支未实际执行，不收集进高亮路径
+            if (node instanceof DecisionModel && StringUtils.isNotEmpty(tm.getExpr())
+                    && !evalDecisionExpr((DecisionModel) node, tm, instanceVars, historyTasks)) {
+                continue;
+            }
             String edgeName = tm.getName();
             if (edgeName != null && !edges.contains(edgeName)) edges.add(edgeName);
-            com.mldong.jeeflow.model.NodeModel next = tm.getTarget();
+            NodeModel next = tm.getTarget();
             if (next == null) continue;
             if (!active.contains(next.getName()) && !history.contains(next.getName())) {
                 history.add(next.getName());
             }
             if (active.contains(next.getName())) continue; // 遇活跃节点停止深入
-            collectPath(next, active, history, edges, visited);
+            collectPath(next, active, history, edges, visited, instanceVars, historyTasks);
         }
+    }
+
+    /**
+     * 决策输出边表达式求值（对齐 boot3 recursionModel）：
+     * args = 实例变量 + 决策节点前置任务（输入第一个源节点）的任务变量，与引擎运行时 DecisionModel.exec 同源
+     */
+    private boolean evalDecisionExpr(DecisionModel decision, TransitionModel tm,
+                                     Map<String, Object> instanceVars, List<ProcessTask> historyTasks) {
+        IExpressionEvaluator evaluator = ServiceContext.find(IExpressionEvaluator.class);
+        if (evaluator == null) return false;
+        Map<String, Object> args = new HashMap<>();
+        if (instanceVars != null) args.putAll(instanceVars);
+        List<TransitionModel> inputs = decision.getInputs();
+        if (inputs != null && !inputs.isEmpty()) {
+            NodeModel src = inputs.get(0).getSource();
+            if (src != null && src.getName() != null && historyTasks != null) {
+                for (ProcessTask t : historyTasks) {
+                    if (src.getName().equals(t.getTaskName()) && t.getVariables() != null) {
+                        args.putAll(t.getVariables());
+                        break;
+                    }
+                }
+            }
+        }
+        return Boolean.TRUE.equals(evaluator.eval(tm.getExpr(), args));
     }
 
     private Map<String, Object> approvalRecord(Map<String, Object> args) {
