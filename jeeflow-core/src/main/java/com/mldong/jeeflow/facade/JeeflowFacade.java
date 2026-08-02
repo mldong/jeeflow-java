@@ -13,8 +13,12 @@ import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.parser.ModelParser;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
+import com.mldong.jeeflow.spi.IUserProvider;
+import com.mldong.jeeflow.spi.IUserSearchProvider;
 import com.mldong.jeeflow.spi.IProcessRepository;
 import com.mldong.jeeflow.spi.JeeflowQueryParser;
+import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
+import com.mldong.jeeflow.domain.Candidate;
 import com.mldong.jeeflow.spi.PageQuery;
 import com.mldong.jeeflow.spi.PageResult;
 
@@ -42,7 +46,14 @@ public class JeeflowFacade {
     private final JeeflowEngine engine;
     private final IProcessRepository repository;
     private final IProcessExtRepository extRepository; // 可空：未接入扩展仓储时设计/委托 action 报错
+    private IUserSearchProvider userSearchProvider;    // 可空：candidatePage 用户搜索依赖
     private final JeeflowQueryParser queryParser = new JeeflowQueryParser();
+
+    /** 注入用户搜索钩子（candidatePage 无模型候选时的用户分页搜索） */
+    public JeeflowFacade setUserSearchProvider(IUserSearchProvider provider) {
+        this.userSearchProvider = provider;
+        return this;
+    }
 
     public JeeflowFacade(JeeflowEngine engine, IProcessRepository repository, IProcessExtRepository extRepository) {
         this.engine = engine;
@@ -80,6 +91,20 @@ public class JeeflowFacade {
                 case "processDesign/save": return designSave(args);
                 case "processDesign/remove": return designRemove(args);
                 case "processDesign/deploy": return designDeploy(args);
+                // ── 视图端点（v1.2.0）──
+                case "processDefine/getLastByName": return getLastByName(args);
+                case "processInstance/highLight": return highLight(args);
+                case "processInstance/approvalRecord": return approvalRecord(args);
+                case "processInstance/getAssigneeTextData": return getAssigneeTextData(args);
+                case "processInstance/createCCInstance": return createCCInstance(args);
+                case "processInstance/updateCCStatus": return updateCCStatus(args);
+                case "processInstance/ccList": return ccList(args);
+                case "processTask/detail": return taskDetail(args);
+                case "processTask/jumpAbleTaskNameList": return jumpAbleTaskNameList(args);
+                case "processTask/candidatePage": return candidatePage(args);
+                case "processTask/surrogate": return taskSurrogate(args);
+                case "processTask/addCandidate": return taskAddCandidate(args);
+                case "processTask/latest": return taskLatest(args);
                 // ── 委托代理（需扩展仓储）──
                 case "processSurrogate/page": return surrogatePage(args);
                 case "processSurrogate/save": return surrogateSave(args);
@@ -111,8 +136,6 @@ public class JeeflowFacade {
         data.put("type", def.getType());
         data.put("state", def.getState());
         data.put("version", def.getVersion());
-        Map<String, Object> graph = parseGraph(def.getContent());
-        if (graph != null) data.put("jsonObject", graph);
         return ok(data);
     }
 
@@ -264,6 +287,274 @@ public class JeeflowFacade {
             engine.executeProcessTask(taskId, operator, flowArgs);
         }
         return ok();
+    }
+
+    // ═══ 视图端点（v1.2.0） ═══
+
+    private Map<String, Object> getLastByName(Map<String, Object> args) {
+        String name = toStr(args.get("processDefineName"));
+        PageQuery query = new PageQuery(1, 1);
+        query.add("t.name", "EQ", name);
+        query.setOrderBy("t.version desc");
+        PageResult<IProcessRepository.DefineRow> page = repository.pageDefines(query);
+        if (page.getRows() == null || page.getRows().isEmpty()) return error("流程定义不存在: " + name);
+        IProcessRepository.DefineRow def = page.getRows().get(0);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", def.getId());
+        data.put("name", def.getName());
+        data.put("displayName", def.getDisplayName());
+        data.put("type", def.getType());
+        data.put("state", def.getState());
+        data.put("version", def.getVersion());
+        return ok(data);
+    }
+
+    private Map<String, Object> highLight(Map<String, Object> args) {
+        Long instanceId = toLong(args.get("id"));
+        ProcessInstance inst = repository.findInstanceById(instanceId);
+        if (inst == null) return error("流程实例不存在");
+        List<String> activeNodeNames = new ArrayList<>();
+        List<String> historyNodeNames = new ArrayList<>();
+        List<String> historyEdgeNames = new ArrayList<>();
+        // 活跃节点 = 进行中任务
+        List<ProcessTask> doing = repository.findDoingTasks(instanceId, null);
+        for (ProcessTask t : doing) {
+            if (!activeNodeNames.contains(t.getTaskName())) activeNodeNames.add(t.getTaskName());
+        }
+        // 历史节点 = 已完成任务 + 模型路径补全（start 沿 outputs 递归，遇活跃节点停止）
+        List<ProcessTask> history = repository.findHistoryTasks(instanceId);
+        for (ProcessTask t : history) {
+            if (!activeNodeNames.contains(t.getTaskName()) && !historyNodeNames.contains(t.getTaskName())) {
+                historyNodeNames.add(t.getTaskName());
+            }
+        }
+        ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        if (def != null) {
+            try {
+                ProcessModel model = ModelParser.parse(def.getContent());
+                collectPath(model.getStart(), activeNodeNames, historyNodeNames, historyEdgeNames,
+                        new java.util.HashSet<>());
+            } catch (Exception ignored) {
+            }
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("activeNodeNames", activeNodeNames);
+        data.put("historyNodeNames", historyNodeNames);
+        data.put("historyEdgeNames", historyEdgeNames);
+        return ok(data);
+    }
+
+    private void collectPath(com.mldong.jeeflow.model.NodeModel node, List<String> active,
+                             List<String> history, List<String> edges, java.util.Set<String> visited) {
+        if (node == null || node.getOutputs() == null || visited.contains(node.getName())) return;
+        visited.add(node.getName());
+        for (com.mldong.jeeflow.model.TransitionModel tm : node.getOutputs()) {
+            String edgeName = tm.getName();
+            if (edgeName != null && !edges.contains(edgeName)) edges.add(edgeName);
+            com.mldong.jeeflow.model.NodeModel next = tm.getTarget();
+            if (next == null) continue;
+            if (!active.contains(next.getName()) && !history.contains(next.getName())) {
+                history.add(next.getName());
+            }
+            if (active.contains(next.getName())) continue; // 遇活跃节点停止深入
+            collectPath(next, active, history, edges, visited);
+        }
+    }
+
+    private Map<String, Object> approvalRecord(Map<String, Object> args) {
+        Long instanceId = toLong(args.get("id"));
+        List<ProcessTask> history = repository.findHistoryTasks(instanceId);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (ProcessTask t : history) {
+            Map<String, Object> vo = new LinkedHashMap<>();
+            vo.put("taskName", t.getTaskName());
+            vo.put("displayName", t.getDisplayName());
+            vo.put("taskType", t.getTaskType() != null ? t.getTaskType().getCode() : null);
+            vo.put("performType", t.getPerformType() != null ? t.getPerformType().getCode() : null);
+            vo.put("taskState", t.getTaskState());
+            vo.put("operator", t.getActorId());
+            vo.put("finishTime", String.valueOf(t.getFinishTime()));
+            vo.put("variable", t.getVariables());
+            rows.add(vo);
+        }
+        return ok(rows);
+    }
+
+    private Map<String, Object> getAssigneeTextData(Map<String, Object> args) {
+        Long instanceId = toLong(args.get("id"));
+        boolean includeNodeName = !Boolean.FALSE.equals(args.get("includeNodeName"));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        List<ProcessTask> doing = repository.findDoingTasks(instanceId, null);
+        for (ProcessTask t : doing) {
+            List<String> actors = repository.findTaskActors(t.getTaskId());
+            for (String actor : actors) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("value", actor);
+                item.put("label", includeNodeName ? t.getDisplayName() + ":" + actor : actor);
+                rows.add(item);
+            }
+        }
+        return ok(rows);
+    }
+
+    private Map<String, Object> createCCInstance(Map<String, Object> args) {
+        Long instanceId = toLong(args.get("processInstanceId"));
+        String operator = toStr(args.get("operator"), "user1");
+        Object actorIds = args.get("actorIds");
+        if (!(actorIds instanceof java.util.Collection) || ((java.util.Collection<?>) actorIds).isEmpty()) {
+            return error("actorIds 缺失");
+        }
+        java.util.Collection<?> coll = (java.util.Collection<?>) actorIds;
+        repository.createCcInstance(instanceId, operator,
+                coll.stream().map(Object::toString).toArray(String[]::new));
+        return ok();
+    }
+
+    private Map<String, Object> updateCCStatus(Map<String, Object> args) {
+        Long instanceId = toLong(args.get("processInstanceId"));
+        String operator = toStr(args.get("operator"), "user1");
+        repository.updateCcStatus(instanceId, operator);
+        return ok();
+    }
+
+    private Map<String, Object> ccList(Map<String, Object> args) {
+        PageQuery query = queryParser.parse(args);
+        String userId = toStr(args.get("operator"), "user1");
+        query.add("cc.actor_id", "EQ", userId);
+        PageResult<IProcessRepository.InstanceRow> page = repository.pageCcInstances(query);
+        return pageResult(page);
+    }
+
+    private Map<String, Object> taskDetail(Map<String, Object> args) {
+        Long taskId = toLong(args.get("id"));
+        String operator = toStr(args.get("operator"), "user1");
+        ProcessTask task = repository.findTaskById(taskId);
+        if (task == null) return error("任务不存在");
+        Map<String, Object> vo = taskVo(task);
+        vo.put("taskActorIdList", repository.findTaskActors(taskId));
+        vo.put("executable", task.isAllowed(operator));
+        // taskModel：流程定义中对应节点（显示名/表单）
+        ProcessInstance inst = repository.findInstanceById(task.getProcessInstanceId());
+        if (inst != null) {
+            ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+            if (def != null) {
+                try {
+                    ProcessModel model = ModelParser.parse(def.getContent());
+                    for (com.mldong.jeeflow.model.NodeModel node : model.getNodes()) {
+                        if (task.getTaskName().equals(node.getName())) {
+                            Map<String, Object> tm = new LinkedHashMap<>();
+                            tm.put("name", node.getName());
+                            tm.put("displayName", node.getDisplayName());
+                            tm.put("type", node.getClass().getSimpleName().replace("Model", "").toLowerCase());
+                            vo.put("taskModel", tm);
+                            break;
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return ok(vo);
+    }
+
+    private Map<String, Object> jumpAbleTaskNameList(Map<String, Object> args) {
+        Long instanceId = toLong(args.get("processInstanceId"));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        List<ProcessTask> done = repository.findDoneTasks(instanceId, null);
+        for (ProcessTask t : done) {
+            if (ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(t.getPerformType())) continue;
+            if (seen.add(t.getTaskName())) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("label", t.getDisplayName());
+                item.put("value", t.getTaskName());
+                rows.add(item);
+            }
+        }
+        return ok(rows);
+    }
+
+    private Map<String, Object> candidatePage(Map<String, Object> args) {
+        Long taskId = toLong(args.get(FlowConst.PROCESS_TASK_ID_KEY));
+        if (taskId == null) taskId = toLong(args.get("id"));
+        if (taskId == null) return error("processTaskId 缺失");
+        ProcessTask task = repository.findTaskById(taskId);
+        if (task == null) return error("任务不存在");
+        ProcessInstance inst = repository.findInstanceById(task.getProcessInstanceId());
+        if (inst == null) return error("流程实例不存在");
+        ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        if (def == null) return error("流程定义不存在");
+        List<Candidate> candidateList = null;
+        try {
+            ProcessModel model = ModelParser.parse(def.getContent());
+            candidateList = model.getNextTaskModelCandidates(task.getTaskName());
+        } catch (Exception ignored) {
+        }
+        if (candidateList != null && !candidateList.isEmpty()) {
+            // 候选配置命中 → 用户信息映射（IUserSearchProvider 优先，其次 IUserProvider）
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (Candidate c : candidateList) {
+                Map<String, Object> u = null;
+                if (userSearchProvider != null) {
+                    u = userSearchProvider.findById(c.getActorId());
+                }
+                if (u == null) {
+                    IUserProvider userProvider = com.mldong.jeeflow.core.ServiceContext.find(IUserProvider.class);
+                    if (userProvider != null) {
+                        IUserProvider.UserInfo info = userProvider.getUser(c.getActorId());
+                        if (info != null) {
+                            u = new LinkedHashMap<>();
+                            u.put("userId", info.getUserId());
+                            u.put("realName", info.getRealName());
+                        }
+                    }
+                }
+                if (u == null) {
+                    u = new LinkedHashMap<>();
+                    u.put("userId", c.getActorId());
+                    u.put("realName", c.getActorId());
+                }
+                rows.add(u);
+            }
+            return pageResult(PageResult.of(1, 10, rows.size(), rows));
+        }
+        // 无模型候选 → 用户分页搜索（依赖 IUserSearchProvider）
+        if (userSearchProvider == null) {
+            return error("未配置 IUserSearchProvider（用户搜索钩子）");
+        }
+        return pageResult(userSearchProvider.page(queryParser.parse(args)));
+    }
+
+    private Map<String, Object> taskSurrogate(Map<String, Object> args) {
+        Long taskId = toLong(args.get("processTaskId"));
+        java.util.List<String> actors = toStringList(args.get("actorIds"));
+        if (taskId == null || actors.isEmpty()) return error("processTaskId/actorIds 缺失");
+        repository.addTaskActor(taskId, actors);
+        return ok();
+    }
+
+    private Map<String, Object> taskAddCandidate(Map<String, Object> args) {
+        return taskSurrogate(args);
+    }
+
+    private Map<String, Object> taskLatest(Map<String, Object> args) {
+        Long instanceId = toLong(args.get("processInstanceId"));
+        List<ProcessTask> doing = repository.findDoingTasks(instanceId, null);
+        if (doing.isEmpty()) return ok(null);
+        return ok(taskVo(doing.get(0)));
+    }
+
+    private static java.util.List<String> toStringList(Object val) {
+        java.util.List<String> list = new ArrayList<>();
+        if (val instanceof java.util.Collection) {
+            for (Object o : (java.util.Collection<?>) val) list.add(String.valueOf(o));
+        } else if (val instanceof String && !((String) val).isEmpty()) {
+            for (String s : ((String) val).split(",")) {
+                String t = s.trim();
+                if (!t.isEmpty()) list.add(t);
+            }
+        }
+        return list;
     }
 
     // ═══ 流程设计（需扩展仓储） ═══

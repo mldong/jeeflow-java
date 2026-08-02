@@ -225,7 +225,32 @@ public class MemoryProcessRepository implements IProcessRepository {
     }
 
     @Override public PageResult<InstanceRow> pageInstances(PageQuery query) { return PageResult.of(1, 10, 0, new ArrayList<>()); }
-    @Override public PageResult<InstanceRow> pageCcInstances(PageQuery query) { return PageResult.of(1, 10, 0, new ArrayList<>()); }
+
+    @Override
+    public PageResult<InstanceRow> pageCcInstances(PageQuery query) {
+        // 支持 cc.actor_id EQ 过滤（Facade ccList 依赖）
+        String actorId = null;
+        for (PageQuery.Condition c : query.getConditions()) {
+            if ("cc.actor_id".equals(c.getColumn()) && "EQ".equalsIgnoreCase(c.getOperator())) {
+                actorId = c.getValue().toString();
+            }
+        }
+        List<InstanceRow> rows = new ArrayList<>();
+        for (Map.Entry<Long, List<String>> e : ccInstances.entrySet()) {
+            if (actorId != null && !e.getValue().contains(actorId)) continue;
+            ProcessInstance inst = instances.get(e.getKey());
+            if (inst == null) continue;
+            InstanceRow r = new InstanceRow();
+            r.setId(inst.getInstanceId());
+            r.setProcessDefineId(inst.getDefineId());
+            r.setState(inst.getState());
+            r.setBusinessNo(inst.getBusinessNo());
+            r.setOperator(inst.getOperator());
+            r.setCreateTime(inst.getCreateTime());
+            rows.add(r);
+        }
+        return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
+    }
 
     @Override
     public PageResult<DefineRow> pageDefines(PageQuery query) {

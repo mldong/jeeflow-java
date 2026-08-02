@@ -213,6 +213,78 @@ public class JeeflowFacadeTest {
         assertNull(extRepo.findSurrogateById(surrogateId));
     }
 
+    // ═══ 视图端点（v1.2.0） ═══
+
+    @Test
+    public void testViewEndpoints() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        // getLastByName
+        Map<String, Object> r = call("processDefine/getLastByName", args("processDefineName", "01-simple"));
+        assertOk(r);
+        Map<String, Object> data = (Map<String, Object>) r.get("data");
+        assertEquals("01-simple", data.get("name"));
+
+        // startAndExecute 后：approvalRecord / highLight / getAssigneeTextData / latest / jumpAble / detail
+        r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        r = call("processInstance/approvalRecord", args("id", instanceId));
+        assertOk(r);
+        List<?> records = (List<?>) r.get("data");
+        assertEquals(2, records.size()); // apply 已完成 + task1 进行中（全部任务记录，对齐 boot2）
+
+        r = call("processInstance/highLight", args("id", instanceId));
+        assertOk(r);
+        Map<String, Object> hl = (Map<String, Object>) r.get("data");
+        assertTrue(((List<?>) hl.get("activeNodeNames")).contains("task1"));
+        assertTrue(((List<?>) hl.get("historyNodeNames")).contains("apply"));
+
+        r = call("processInstance/getAssigneeTextData", args("id", instanceId));
+        assertOk(r);
+        List<?> texts = (List<?>) r.get("data");
+        assertEquals(1, texts.size()); // task1 参与者 leader
+
+        r = call("processTask/latest", args("processInstanceId", instanceId));
+        assertOk(r);
+        assertEquals("task1", ((Map<String, Object>) r.get("data")).get("taskName"));
+
+        List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, null);
+        r = call("processTask/detail", args("id", doing.get(0).getTaskId(), "operator", "leader"));
+        assertOk(r);
+        data = (Map<String, Object>) r.get("data");
+        assertEquals("task1", data.get("taskName"));
+        assertEquals(Boolean.TRUE, data.get("executable"));
+        assertNotNull(data.get("taskModel"));
+
+        // 抄送：创建 + 我的抄送 + 已读
+        r = call("processInstance/createCCInstance",
+                args("processInstanceId", instanceId, "operator", "zhangsan", "actorIds", List.of("lisi", "wangwu")));
+        assertOk(r);
+        r = call("processInstance/ccList", args("operator", "lisi"));
+        assertOk(r);
+        assertEquals(Integer.valueOf(1), ((Map<String, Object>) r.get("data")).get("recordCount"));
+        r = call("processInstance/updateCCStatus", args("processInstanceId", instanceId, "operator", "lisi"));
+        assertOk(r);
+
+        // jumpAbleTaskNameList（apply 完成后 task1 未办——done 只有 apply，非会签）
+        r = call("processTask/jumpAbleTaskNameList", args("processInstanceId", instanceId));
+        assertOk(r);
+        assertEquals(1, ((List<?>) r.get("data")).size());
+
+        // 加签/转交
+        r = call("processTask/addCandidate", args("processTaskId", doing.get(0).getTaskId(), "actorIds", List.of("zhaoliu")));
+        assertOk(r);
+        assertTrue(rawRepo.findTaskActors(doing.get(0).getTaskId()).contains("zhaoliu"));
+        r = call("processTask/surrogate", args("processTaskId", doing.get(0).getTaskId(), "actorIds", List.of("sunqi")));
+        assertOk(r);
+        assertTrue(rawRepo.findTaskActors(doing.get(0).getTaskId()).contains("sunqi"));
+
+        // candidatePage：无模型候选（01-simple 无 candidateUsers 配置）→ 未配置用户搜索钩子报错
+        r = call("processTask/candidatePage", args("processTaskId", doing.get(0).getTaskId()));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+    }
+
     // ═══ 错误路径 ═══
 
     @Test
