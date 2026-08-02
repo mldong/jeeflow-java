@@ -10,11 +10,14 @@
 
 ## 添加依赖
 
+> 版本号不写死：父 pom `<properties>` 统一管理（`<jeeflow.version>`），
+> 最新版查询见 [快速开始 · 获取最新版本](./getting-started.md)。
+
 ```xml
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-spring-boot4-starter</artifactId>
-    <version>1.0.0</version>
+    <version>${jeeflow.version}</version>
 </dependency>
 ```
 

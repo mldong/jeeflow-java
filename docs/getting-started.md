@@ -1,6 +1,9 @@
 # 快速开始
 
-> ✅ **版本说明**：已发布到 Maven Central（`1.1.0`，含管理扩展与统一门面）。以下坐标可直接使用。
+> ✅ **版本说明**：已发布到 Maven Central，以下坐标可直接使用。
+> 版本号**不在此写死**（每次发布递增，易忘更新）——推荐父 pom `<properties>` 统一管理：
+> `<jeeflow.version>见下方「获取最新版本」</jeeflow.version>`，升级只改一处。
+> 注意：`jeeflow-core` 不含 Spring 自动装配，仅引擎 + SPI（内存模式可跑）；Spring Boot 项目请用下文 Starter。
 
 ## 1. Maven 依赖
 
@@ -10,7 +13,7 @@
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-core</artifactId>
-    <version>1.1.0</version>
+    <version>${jeeflow.version}</version>
 </dependency>
 <dependency>
     <groupId>org.slf4j</groupId>
@@ -26,22 +29,42 @@
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-spring-boot2-starter</artifactId>
-    <version>1.1.0</version>
+    <version>${jeeflow.version}</version>
 </dependency>
 
 <!-- Spring Boot 3.x -->
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-spring-boot3-starter</artifactId>
-    <version>1.1.0</version>
+    <version>${jeeflow.version}</version>
 </dependency>
 
 <!-- Spring Boot 4.x -->
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-spring-boot4-starter</artifactId>
-    <version>1.1.0</version>
+    <version>${jeeflow.version}</version>
 </dependency>
+```
+
+## 获取最新版本
+
+发布后版本号递增，用以下任一方式确认**当前最新发布版**（勿凭记忆写死）：
+
+```bash
+# ① 命令行（脚本友好）：maven-metadata.xml 的 <release> 即最新版
+curl -s https://repo1.maven.org/maven2/com/mldong/jeeflow/jeeflow-spring-boot4-starter/maven-metadata.xml
+
+# ② 或直接查中央仓库页面
+#    https://central.sonatype.com/artifact/com.mldong.jeeflow/jeeflow-spring-boot4-starter
+```
+
+拿到版本号后，更新父 pom `<properties>`（推荐）或直接替换 `<version>`：
+
+```xml
+<properties>
+    <jeeflow.version>此处填最新版</jeeflow.version>
+</properties>
 ```
 
 ## 2. 内存模式（5 行跑起来）
