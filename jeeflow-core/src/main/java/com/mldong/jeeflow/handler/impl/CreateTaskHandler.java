@@ -40,6 +40,8 @@ public class CreateTaskHandler implements IHandler {
         String operator = execution.getOperator();
 
         // 获取候选人
+        // 当前节点上下文（TransitionModel 直连 fire 时未走 NodeModel.execute，需显式设置）
+        execution.setNodeModel(taskModel);
         List<String> actors = resolveActors(taskModel, model, execution);
 
         List<ProcessTask> tasks;
