@@ -230,9 +230,15 @@ public class JeeflowFacade {
         data.put("businessNo", inst.getBusinessNo());
         data.put("operator", inst.getOperator());
         data.put("variables", inst.getVariables());
+        data.put("formData", formDataOf(inst.getVariables(), FlowConst.FORM_DATA_PREFIX)); // issues/15
         data.put("createTime", String.valueOf(inst.getCreateTime()));
         data.put("createUser", inst.getCreateUser());
         ProcessInstance.ProcessDefine def0 = repository.findDefineById(inst.getDefineId());
+        if (def0 != null) {
+            data.put("displayName", def0.getDisplayName()); // issues/15
+            data.put("name", def0.getName());
+            data.put("version", def0.getVersion());
+        }
         data.put("jsonObject", def0 != null ? parseGraph(def0.getContent()) : null); // issues/05
         // 任务列表（issues/05-4）：全量 tasks + activeTaskList（仅 DOING）+ 任务行 ext/isFirstTaskNode
         String firstTaskNodeId = firstTaskNodeId(data.get("jsonObject"));
@@ -444,8 +450,9 @@ public class JeeflowFacade {
             vo.put("performType", t.getPerformType() != null ? t.getPerformType().getCode() : null);
             vo.put("taskState", t.getTaskState());
             vo.put("operator", t.getActorId());
-            vo.put("finishTime", String.valueOf(t.getFinishTime()));
+            vo.put("finishTime", fmtTime(t.getFinishTime()));
             vo.put("variable", t.getVariables());
+            vo.put("ext", t.getVariables() != null ? t.getVariables() : new LinkedHashMap<>()); // issues/15
             rows.add(vo);
         }
         return ok(rows);
@@ -906,6 +913,19 @@ public class JeeflowFacade {
         return null;
     }
 
+    /** issues/15：表单数据派生——取 vars 中 prefix 前缀字段，输出「带前缀 + 去前缀副本」（对齐 boot3 getFormData/getTaskFormData） */
+    private Map<String, Object> formDataOf(Map<String, Object> vars, String prefix) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (vars == null) return out;
+        vars.forEach((k, v) -> {
+            if (k != null && k.startsWith(prefix)) {
+                out.put(k, v);
+                out.put(k.substring(prefix.length()), v);
+            }
+        });
+        return out;
+    }
+
     private Map<String, Object> taskVo(ProcessTask t) {
         Map<String, Object> vo = new LinkedHashMap<>();
         vo.put("id", t.getTaskId());
@@ -919,6 +939,7 @@ public class JeeflowFacade {
         vo.put("formKey", t.getFormKey());
         vo.put("taskParentId", t.getParentTaskId());
         vo.put("taskActorIdList", t.getActorIds());
+        vo.put("taskFormData", formDataOf(t.getVariables(), FlowConst.TASK_FORM_DATA_PREFIX)); // issues/15
         return vo;
     }
 
@@ -1033,6 +1054,7 @@ public class JeeflowFacade {
         m.put("ext", ext);
         m.put("instanceExt", instanceExt);
         m.put("version", r.getProcessDefineVersion());
+        m.put("taskFormData", formDataOf(parseJsonMap(r.getVariable()), FlowConst.TASK_FORM_DATA_PREFIX)); // issues/15
         return m;
     }
 

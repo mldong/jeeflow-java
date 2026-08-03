@@ -542,4 +542,58 @@ public class JeeflowFacadeTest {
         assertOk(r);
         assertEquals(1, (int) extRepo.findDesignById(designId).getIsDeployed());
     }
+
+    // ═══ issues/15：formData / taskFormData / 审批记录 ext 契约 ═══
+
+    @Test
+    public void testFormDataContract() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Map<String, Object> r = call("processInstance/startAndExecute", args("processDefineId", def.getId(),
+                "operator", "zhangsan", "f_reasonType", "休假", "f_amount", 500));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        // 实例详情：formData（f_ 前缀 + 去前缀副本）+ displayName/name/version
+        r = call("processInstance/detail", args("id", instanceId));
+        assertOk(r);
+        Map<String, Object> data = (Map<String, Object>) r.get("data");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> formData = (Map<String, Object>) data.get("formData");
+        assertNotNull("formData 应返回（issues/15）: " + r, formData);
+        assertEquals("休假", formData.get("f_reasonType"));
+        assertEquals("休假", formData.get("reasonType"));
+        assertEquals(500, ((Number) formData.get("f_amount")).intValue());
+        assertEquals("01-simple", data.get("name"));
+        assertNotNull(data.get("displayName"));
+        assertNotNull(data.get("version"));
+
+        // 执行任务（tf_ 前缀变量 → 任务变量）→ 待办/已办行 taskFormData + 审批记录 ext
+        r = call("processTask/todoList", args("operator", "leader"));
+        assertOk(r);
+        List<?> rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertFalse(rows.isEmpty());
+        Long taskId = toLong(((Map<String, Object>) rows.get(0)).get("id"));
+        r = call("processTask/execute", args("processTaskId", taskId, "operator", "leader",
+                "tf_approvalComment", "同意"));
+        assertOk(r);
+
+        r = call("processTask/doneList", args("operator", "leader"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertFalse(rows.isEmpty());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> taskFormData = (Map<String, Object>) ((Map<String, Object>) rows.get(0)).get("taskFormData");
+        assertNotNull("任务行 taskFormData 应返回（issues/15）: " + r, taskFormData);
+        assertEquals("同意", taskFormData.get("tf_approvalComment"));
+        assertEquals("同意", taskFormData.get("approvalComment"));
+
+        r = call("processInstance/approvalRecord", args("id", instanceId));
+        assertOk(r);
+        rows = (List<?>) r.get("data");
+        boolean hasExt = false;
+        for (Object o : rows) {
+            if (((Map<String, Object>) o).get("ext") != null) hasExt = true;
+        }
+        assertTrue("审批记录行应含 ext（issues/15）: " + r, hasExt);
+    }
 }
