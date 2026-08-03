@@ -169,6 +169,38 @@ public interface IUserProvider {
 
 ---
 
+## IOrgUserProvider（可选，v1.6.0）
+
+组织维度取人——内置组织 handler（部门领导/分管领导/角色）的数据源。
+**业务方只实现数据接口，不写 handler**（原来 boot4 的 8 个 handler 只剩 1 个数据实现）。
+
+```java
+public interface IOrgUserProvider {
+    /** 部门领导（deptId → 领导 userId 列表） */
+    List<String> findDeptLeaders(String deptId);
+    /** 部门分管领导（deptId → 分管领导 userId 列表） */
+    List<String> findDeptMainLeaders(String deptId);
+    /** 按角色取人（roleCode → userId 列表） */
+    List<String> findByRole(String roleCode);
+}
+```
+
+```java
+// 业务实现：适配组织服务
+public class JeeflowOrgUserProvider implements IOrgUserProvider {
+    @Override public List<String> findDeptLeaders(String deptId) { return deptApi.getLeaderIds(deptId); }
+    @Override public List<String> findDeptMainLeaders(String deptId) { return deptApi.getMainLeaderIds(deptId); }
+    @Override public List<String> findByRole(String roleCode) { return userApi.findByRoleCode(roleCode); }
+}
+```
+
+> 引擎内置 7 个通用 handler，流程定义里 `assignmentHandler` 写 Java 类全限定名即可
+> 内置 handler 的**场景/配置/注意事项**见 [用户指南 07 · 参与者解析](../../guides/07-assignment-handlers.md)。
+
+---
+
+## ITransactionTemplate（可选）
+
 ## ITransactionTemplate（可选）
 
 事务模板。Spring Boot 项目自动使用 `TransactionTemplate`。
