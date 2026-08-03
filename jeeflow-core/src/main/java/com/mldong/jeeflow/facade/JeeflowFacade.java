@@ -981,6 +981,11 @@ public class JeeflowFacade {
                     rows.add(defineRowToMap((IProcessRepository.DefineRow) row));
                 } else if (row instanceof ProcessSurrogate) {
                     rows.add(surrogateRowToMap((ProcessSurrogate) row));
+                } else if (row instanceof Map) {
+                    // 已转换的行数据（如 candidatePage 候选映射结果）直接透传
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> m = (Map<String, Object>) row;
+                    rows.add(m);
                 } else {
                     rows.add(beanToMap(row));
                 }

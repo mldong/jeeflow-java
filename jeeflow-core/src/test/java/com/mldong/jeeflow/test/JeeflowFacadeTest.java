@@ -9,6 +9,7 @@ import com.mldong.jeeflow.facade.JeeflowFacade;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
 import com.mldong.jeeflow.spi.IProcessRepository;
+import com.mldong.jeeflow.spi.IOrgUserProvider;
 import com.mldong.jeeflow.spi.IUserProvider;
 import com.mldong.jeeflow.spi.IUserProvider.UserInfo;
 import org.junit.Before;
@@ -17,6 +18,8 @@ import org.junit.Test;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +32,7 @@ import static org.junit.Assert.*;
 public class JeeflowFacadeTest {
 
     private JeeflowFacade facade;
+    private JeeflowEngine engine;
     private MemoryProcessRepository repo;
     private MemoryProcessExtRepository extRepo;
     private IProcessRepository rawRepo;
@@ -52,7 +56,16 @@ public class JeeflowFacadeTest {
             }
         });
 
-        JeeflowEngine engine = new JeeflowEngineImpl();
+        ServiceContext.put("org", new IOrgUserProvider() {
+            @Override public List<String> findDeptLeaders(String deptId) { return null; }
+            @Override public List<String> findDeptMainLeaders(String deptId) { return null; }
+            @Override public List<String> findByRole(String roleCode) {
+                if ("finance".equals(roleCode)) return Arrays.asList("finA", "finB");
+                return null;
+            }
+        });
+
+        engine = new JeeflowEngineImpl();
         engine.configure(config);
         rawRepo = repo;
         facade = new JeeflowFacade(engine, repo, extRepo);
@@ -595,5 +608,44 @@ public class JeeflowFacadeTest {
             if (((Map<String, Object>) o).get("ext") != null) hasExt = true;
         }
         assertTrue("审批记录行应含 ext（issues/15）: " + r, hasExt);
+    }
+
+    // ═══ candidatePage 双源候选（issues/16 GlobalCandidateHandler 语义）═══
+
+    @Test
+    public void testCandidatePageDualSource() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("12-candidate-page.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("id"));
+
+        r = call("processTask/todoList", args("operator", "leader"));
+        assertOk(r);
+        List<?> rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertFalse(rows.isEmpty());
+        Long taskId = toLong(((Map<String, Object>) rows.get(0)).get("id"));
+
+        // candidatePage：当前任务 apply → 后继节点 review 的候选
+        // （startAndExecute 已自动完成 apply，直接用 engine 启动拿 apply 任务）
+        com.mldong.jeeflow.domain.FlowData startArgs = com.mldong.jeeflow.domain.FlowData.create();
+        com.mldong.jeeflow.domain.ProcessInstance inst2 =
+                engine.startProcessInstanceById(def.getId(), "user1", startArgs);
+        List<com.mldong.jeeflow.domain.ProcessTask> applyTasks =
+                repo.findDoingTasks(inst2.getInstanceId(), new String[]{});
+        assertFalse(applyTasks.isEmpty());
+        assertEquals("apply", applyTasks.get(0).getTaskName());
+        r = call("processTask/candidatePage", args("processTaskId", applyTasks.get(0).getTaskId()));
+        assertOk(r);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>)
+                ((Map<String, Object>) r.get("data")).get("rows");
+        assertNotNull("candidatePage 应返回候选: " + r, candidates);
+        List<String> userIds = new ArrayList<>();
+        for (Map<String, Object> c : candidates) userIds.add(String.valueOf(c.get("userId")));
+        assertTrue("应含 candidateUsers 指定人 userA: " + userIds, userIds.contains("userA"));
+        assertTrue("应含 candidateUsers 指定人 userB: " + userIds, userIds.contains("userB"));
+        assertTrue("应含 candidateGroups 角色成员 finA: " + userIds, userIds.contains("finA"));
+        assertTrue("应含 candidateGroups 角色成员 finB: " + userIds, userIds.contains("finB"));
     }
 }

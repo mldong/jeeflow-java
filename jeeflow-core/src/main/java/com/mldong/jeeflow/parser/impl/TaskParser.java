@@ -34,6 +34,15 @@ public class TaskParser extends AbstractNodeParser {
 
         // 解析候选人属性
         taskModel.setCandidateHandler(properties.getStr(EXT_FIELD_CANDIDATE_HANDLER_KEY));
+        // 候选人（v1.6.0 对齐 Go/Python/Node：顶层 candidateUsers/candidateGroups）
+        String candUsers = properties.getStr(EXT_FIELD_CANDIDATE_USERS_KET);
+        String candGroups = properties.getStr(EXT_FIELD_CANDIDATE_GROUPS_KEY);
+        if (candUsers != null || candGroups != null) {
+            FlowData ext = taskModel.getExt();
+            if (candUsers != null) ext.set(EXT_FIELD_CANDIDATE_USERS_KET, candUsers);
+            if (candGroups != null) ext.set(EXT_FIELD_CANDIDATE_GROUPS_KEY, candGroups);
+            taskModel.setExt(ext);
+        }
 
         // 解析会签属性
         taskModel.setCountersignType(CountersignTypeEnum.codeOf(properties.getStr(EXT_FIELD_COUNTERSIGN_TYPE_KEY)));

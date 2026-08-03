@@ -5,6 +5,7 @@ import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.interceptor.Action;
 import com.mldong.jeeflow.interceptor.FlowInterceptor;
 import com.mldong.jeeflow.interceptor.CandidateHandler;
+import com.mldong.jeeflow.spi.IOrgUserProvider;
 import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.domain.Candidate;
 import com.mldong.jeeflow.util.StringUtils;
@@ -94,6 +95,32 @@ public class ProcessModel extends BaseModel {
                 List<Candidate> candidates = handler.handle(taskModel);
                 if (candidates != null) res.addAll(candidates);
             } catch (Exception ignored) {}
+        }
+        // 内置解析（v1.6.0，对齐 boot4 GlobalCandidateHandler 双源语义）：
+        // ① candidateUsers —— 逗号分隔 userId，直接作为候选人
+        String candidateUsers = taskModel.getCandidateUsers();
+        if (StringUtils.isNotEmpty(candidateUsers)) {
+            for (String userId : candidateUsers.split(",")) {
+                String uid = userId.trim();
+                if (!uid.isEmpty()) res.add(new Candidate(uid, uid, "user"));
+            }
+        }
+        // ② candidateGroups —— 逗号分隔角色标识，IOrgUserProvider.findByRole 取人
+        String candidateGroups = taskModel.getCandidateGroups();
+        if (StringUtils.isNotEmpty(candidateGroups)) {
+            IOrgUserProvider orgProvider = ServiceContext.find(IOrgUserProvider.class);
+            if (orgProvider != null) {
+                for (String roleCode : candidateGroups.split(",")) {
+                    String rc = roleCode.trim();
+                    if (rc.isEmpty()) continue;
+                    List<String> userIds = orgProvider.findByRole(rc);
+                    if (userIds != null) {
+                        for (String uid : userIds) {
+                            if (uid != null && !uid.isEmpty()) res.add(new Candidate(uid, uid, "user"));
+                        }
+                    }
+                }
+            }
         }
         return res.stream().distinct().collect(Collectors.toList());
     }
