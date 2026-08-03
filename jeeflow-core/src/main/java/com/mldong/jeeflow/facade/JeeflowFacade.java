@@ -986,6 +986,8 @@ public class JeeflowFacade {
                     rows.add(defineRowToMap((IProcessRepository.DefineRow) row));
                 } else if (row instanceof ProcessSurrogate) {
                     rows.add(surrogateRowToMap((ProcessSurrogate) row));
+                } else if (row instanceof ProcessDesign) {
+                    rows.add(designRowToMap((ProcessDesign) row));
                 } else if (row instanceof Map) {
                     // 已转换的行数据（如 candidatePage 候选映射结果）直接透传
                     @SuppressWarnings("unchecked")
@@ -1081,6 +1083,24 @@ public class JeeflowFacade {
         m.put("createUser", r.getCreateUser());
         m.put("updateTime", fmtTime(r.getUpdateTime()));
         m.put("updateUser", r.getUpdateUser());
+        return m;
+    }
+
+    /** 委托行：时间格式化 */
+    /** 流程设计行：时间格式化（processDesign/page） */
+    private Map<String, Object> designRowToMap(ProcessDesign d) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", d.getId());
+        m.put("name", d.getName());
+        m.put("displayName", d.getDisplayName());
+        m.put("type", d.getType());
+        m.put("icon", d.getIcon());
+        m.put("isDeployed", d.getIsDeployed());
+        m.put("remark", d.getRemark());
+        m.put("createTime", fmtTime(d.getCreateTime()));
+        m.put("createUser", d.getCreateUser());
+        m.put("updateTime", fmtTime(d.getUpdateTime()));
+        m.put("updateUser", d.getUpdateUser());
         return m;
     }
 

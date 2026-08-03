@@ -194,6 +194,15 @@ public class JeeflowFacadeTest {
         Long designId = toLong(((Map<String, Object>) r.get("data")).get("id"));
         assertNotNull(designId);
 
+        // designPage：时间格式化（processDesign/page 应与 processDefine/page 一致 yyyy-MM-dd HH:mm:ss）
+        r = call("processDesign/page", args());
+        assertOk(r);
+        List<?> dRows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertFalse("designPage 应有行: " + r, dRows.isEmpty());
+        Object ct = ((Map<String, Object>) dRows.get(0)).get("createTime");
+        assertTrue("designPage 时间应格式化为 yyyy-MM-dd HH:mm:ss: " + ct,
+                ct != null && ct.toString().matches("[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"));
+
         // detail：含历史
         r = call("processDesign/detail", args("id", designId));
         assertOk(r);

@@ -106,6 +106,7 @@ public class JeeflowAutoConfiguration {
             ObjectProvider<IProcessRepository> repository,
             ObjectProvider<IJsonProvider> jsonProvider,
             ObjectProvider<IUserProvider> userProvider,
+            ObjectProvider<IOrgUserProvider> orgProvider,
             ObjectProvider<ITransactionTemplate> txTemplate,
             ObjectProvider<IExpressionEvaluator> exprEvaluator,
             ObjectProvider<IIdGenerator> idGenerator) {
@@ -117,6 +118,8 @@ public class JeeflowAutoConfiguration {
         repository.ifAvailable(r -> ServiceContext.put("repository", r));
         jsonProvider.ifAvailable(j -> ServiceContext.put("json", j));
         userProvider.ifAvailable(u -> ServiceContext.put("user", u));
+        // 组织用户提供者（v1.6.0，可选）：业务方定义 Bean 才启用——组织 handler 数据源
+        orgProvider.ifAvailable(o -> ServiceContext.put("org", o));
         txTemplate.ifAvailable(t -> ServiceContext.put("tx", t));
         exprEvaluator.ifAvailable(e -> ServiceContext.put("expr", e));
         idGenerator.ifAvailable(i -> ServiceContext.put("idGen", i));
