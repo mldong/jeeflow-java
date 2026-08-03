@@ -90,7 +90,7 @@ public class MyOrgUserProvider implements IOrgUserProvider {
 }
 ```
 
-启用后的能力（详见[用户指南 07 · 参与者解析](../../../guides/07-assignment-handlers.md)）：
+启用后的能力（详见[用户指南 07 · 参与者解析](../../guides/07-assignment-handlers.md)）：
 - 内置组织 handler：`DeptLeaderAssignmentHandler` / `DeptMainLeaderAssignmentHandler` /
   `ApplicantDeptLeaderAssignmentHandler` / `ApplicantDeptMainLeaderAssignmentHandler` / `TaskRoleAssigneeHandler`
 - candidatePage 的 `candidateGroups` 角色候选
