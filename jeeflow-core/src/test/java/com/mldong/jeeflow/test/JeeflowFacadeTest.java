@@ -618,7 +618,7 @@ public class JeeflowFacadeTest {
         Map<String, Object> r = call("processInstance/startAndExecute",
                 args("processDefineId", def.getId(), "operator", "user1"));
         assertOk(r);
-        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("id"));
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
 
         r = call("processTask/todoList", args("operator", "leader"));
         assertOk(r);
@@ -647,5 +647,43 @@ public class JeeflowFacadeTest {
         assertTrue("应含 candidateUsers 指定人 userB: " + userIds, userIds.contains("userB"));
         assertTrue("应含 candidateGroups 角色成员 finA: " + userIds, userIds.contains("finA"));
         assertTrue("应含 candidateGroups 角色成员 finB: " + userIds, userIds.contains("finB"));
+    }
+
+    // ═══ startAndExecute 预指派人（f_nextNodeOperator → tf_，对齐 boot3）═══
+
+    @Test
+    public void testStartAndExecutePreAssign() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+
+        // 发起并预指派人：f_nextNodeOperator=userA → 自动完成 apply → task1 参与者 = userA（非 leader）
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1",
+                        com.mldong.jeeflow.enums.FlowConst.PROCESS_START_NEXT_NODE_OPERATOR, "userA"));
+        assertOk(r);
+        Long inst1 = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        r = call("processTask/todoList", args("operator", "userA"));
+        assertOk(r);
+        List<?> rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertFalse("userA 应收到 task1 待办（预指派人）: " + r, rows.isEmpty());
+        assertEquals("task1", ((Map<String, Object>) rows.get(0)).get("taskName"));
+
+        // 未指定时按 assignee（leader）→ 第二个实例 task1 参与者是 leader（userA 待办不应新增）
+        r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1"));
+        assertOk(r);
+        Long inst2 = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        java.util.List<com.mldong.jeeflow.domain.ProcessTask> t2 =
+                repo.findDoingTasks(inst2, new String[]{});
+        assertFalse(t2.isEmpty());
+        assertEquals("未指定时 task1 参与者应为 leader: " + t2.get(0).getActorIds(),
+                java.util.List.of("leader"), t2.get(0).getActorIds());
+        r = call("processTask/todoList", args("operator", "userA"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        for (Object o : rows) {
+            Long pid = toLong(((Map<String, Object>) o).get("processInstanceId"));
+            assertFalse("第二个实例的 task1 不应出现在 userA 待办: " + r, pid.equals(inst2));
+        }
     }
 }

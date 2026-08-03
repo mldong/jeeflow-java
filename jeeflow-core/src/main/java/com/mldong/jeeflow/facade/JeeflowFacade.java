@@ -165,6 +165,11 @@ public class JeeflowFacade {
         for (ProcessTask task : doingTasks) {
             repository.addTaskActor(task.getTaskId(), List.of(operator));
             flowArgs.put(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode());
+            // 对齐 boot3：f_nextNodeOperator（发起时预指派人）→ tf_nextNodeOperator（引擎执行参数）
+            Object startNextOp = flowArgs.get(FlowConst.PROCESS_START_NEXT_NODE_OPERATOR);
+            if (startNextOp != null && !startNextOp.toString().isEmpty()) {
+                flowArgs.put(FlowConst.NEXT_NODE_OPERATOR, startNextOp);
+            }
             engine.executeProcessTask(task.getTaskId(), operator, flowArgs);
         }
         Map<String, Object> data = new LinkedHashMap<>();
