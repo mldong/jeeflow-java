@@ -66,6 +66,37 @@ public IUserProvider myUserProvider() {
 }
 ```
 
+## 组织维度 SPI（IOrgUserProvider，v1.6.0）
+
+> **默认不开启**：Starter 只收集你声明的 `IOrgUserProvider` Bean，未声明则不注册——
+> 内置组织 handler（部门领导/分管领导/角色）返回**空参与者**（任务不创建），
+> 不影响 assignee/表单字段/发起人语义的流程。
+
+**启用方式**：声明一个 `IOrgUserProvider` Bean 即可（Starter 自动注册进引擎上下文）：
+
+```java
+@Bean
+public IOrgUserProvider myOrgUserProvider() {
+    return new MyOrgUserProvider();  // 实现 findDeptLeaders/findDeptMainLeaders/findByRole
+}
+```
+
+```java
+// 实现：对接组织架构服务（只写数据接口，不写 handler）
+public class MyOrgUserProvider implements IOrgUserProvider {
+    @Override public List<String> findDeptLeaders(String deptId) { return deptApi.getLeaderIds(deptId); }
+    @Override public List<String> findDeptMainLeaders(String deptId) { return deptApi.getMainLeaderIds(deptId); }
+    @Override public List<String> findByRole(String roleCode) { return userApi.findByRoleCode(roleCode); }
+}
+```
+
+启用后的能力（详见[用户指南 07 · 参与者解析](../../../guides/07-assignment-handlers.md)）：
+- 内置组织 handler：`DeptLeaderAssignmentHandler` / `DeptMainLeaderAssignmentHandler` /
+  `ApplicantDeptLeaderAssignmentHandler` / `ApplicantDeptMainLeaderAssignmentHandler` / `TaskRoleAssigneeHandler`
+- candidatePage 的 `candidateGroups` 角色候选
+
+> 集成方原 `WfOrgUserProviderConfig` 补偿注册可删除（jeeflow 已内置装配）。
+
 ## 配置属性
 
 ```yaml
