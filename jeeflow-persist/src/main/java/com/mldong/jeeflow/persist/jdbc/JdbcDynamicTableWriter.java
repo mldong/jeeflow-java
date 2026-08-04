@@ -31,19 +31,24 @@ import java.util.function.Function;
 public class JdbcDynamicTableWriter implements DynamicTableWriter {
 
     private static final String SYS_PREFIX = "sys_";
-    /** 列探测——MySQL：EXTRA(自增) + COLUMN_KEY(主键)；H2/PG：IS_IDENTITY + JOIN 主键约束（标准 SQL 兼容） */
+    /** 列探测（issues/22：限定当前 schema，防多库同名表列重复）——
+     *  MySQL：DATABASE() + EXTRA(自增) + COLUMN_KEY(主键)；H2/PG：CURRENT_SCHEMA() + IS_IDENTITY + JOIN 主键约束 */
     private static final String SCHEMA_SQL_MYSQL =
             "SELECT column_name, extra, column_key FROM information_schema.columns "
-                    + "WHERE UPPER(table_name) = UPPER(?) ORDER BY ordinal_position";
+                    + "WHERE UPPER(table_name) = UPPER(?) AND table_schema = DATABASE() "
+                    + "ORDER BY ordinal_position";
     private static final String SCHEMA_SQL_STD =
             "SELECT c.column_name, c.is_identity, c.column_default, "
                     + "CASE WHEN kcu.column_name IS NOT NULL THEN 'PRI' ELSE '' END AS column_key "
                     + "FROM information_schema.columns c "
                     + "LEFT JOIN information_schema.table_constraints tc "
                     + "  ON tc.table_name = c.table_name AND tc.constraint_type = 'PRIMARY KEY' "
+                    + "  AND tc.table_schema = c.table_schema "
                     + "LEFT JOIN information_schema.key_column_usage kcu "
                     + "  ON kcu.constraint_name = tc.constraint_name AND kcu.column_name = c.column_name "
-                    + "WHERE UPPER(c.table_name) = UPPER(?) ORDER BY c.ordinal_position";
+                    + "  AND kcu.table_schema = c.table_schema "
+                    + "WHERE UPPER(c.table_name) = UPPER(?) AND c.table_schema = CURRENT_SCHEMA() "
+                    + "ORDER BY c.ordinal_position";
 
     private final DataSource dataSource;
     private final Map<String, List<ColumnMeta>> schemaCache = new ConcurrentHashMap<>();

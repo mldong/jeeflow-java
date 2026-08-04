@@ -231,4 +231,24 @@ public class JdbcDynamicTableWriterTest {
             put("title", "x");
         }});
     }
+
+    /** ⑫ 多 schema 同名表（issues/22）：information_schema 限定当前 schema，列不重复 */
+    @Test
+    public void testSchemaScopedProbe() throws Exception {
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+            st.execute("CREATE SCHEMA IF NOT EXISTS OTHER_SCHEMA");
+            st.execute("CREATE TABLE IF NOT EXISTS OTHER_SCHEMA.biz_leave (" +
+                    "id BIGINT PRIMARY KEY, ghost_col VARCHAR(20))");
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("title", "schema-ok");
+        data.put("ghost_col", "ghost");   // 其他 schema 的列不应被探测到
+        writer.insert("biz_leave", data); // 若 ghost_col 混入探测会因列不存在报错
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT title FROM biz_leave")) {
+            assertTrue(rs.next());
+            assertEquals("schema-ok", rs.getString("title"));
+        }
+    }
 }
