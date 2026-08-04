@@ -46,6 +46,9 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
     /** 用户列默认值（issues/19：优先取 data 中已注入的 apply_user_id=流程 operator，
      *  否则用此配置值，缺省 "system"）——多数框架业务表 create_user/update_user 为 BIGINT 存 userId */
     private Object defaultUserValue = "system";
+    /** 列匹配（issues/20）：默认宽松——驼峰↔下划线归一匹配（表单字段 companyName ↔ 表列 company_name）；
+     *  需要精确控制列名的集成方显式开启严格模式（忽略大小写精确匹配） */
+    private boolean strictColumnMatch = false;
 
     public JdbcDynamicTableWriter(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -59,6 +62,7 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
     public void setUpdateUserColumn(String updateUserColumn) { this.updateUserColumn = updateUserColumn; }
     public void setIsDeletedColumn(String isDeletedColumn) { this.isDeletedColumn = isDeletedColumn; }
     public void setDefaultUserValue(Object defaultUserValue) { this.defaultUserValue = defaultUserValue; }
+    public void setStrictColumnMatch(boolean strictColumnMatch) { this.strictColumnMatch = strictColumnMatch; }
 
     // ── DynamicTableWriter ─────────────────────────────────────────────────────
 
@@ -68,7 +72,7 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
         List<String> result = new ArrayList<>();
         for (String column : columns) {
             if (column == null || column.trim().isEmpty()) continue;
-            if (containsColumn(meta, column.trim()) && !result.contains(column.trim())) {
+            if (findColumn(meta, column.trim()) != null && !result.contains(column.trim())) {
                 result.add(column.trim());
             }
         }
@@ -79,14 +83,15 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
     public Object insert(String tableName, Map<String, Object> data) {
         validateTableName(tableName);
         List<ColumnMeta> meta = tableMeta(tableName);
-        // 列过滤（保序）
+        // 列过滤（保序）——写入用表列原名（宽松模式下驼峰 key 落库为下划线列名）
         List<String> columns = new ArrayList<>();
         List<Object> values = new ArrayList<>();
         for (Map.Entry<String, Object> e : data.entrySet()) {
             String col = e.getKey();
             if (col == null) continue;
-            if (containsColumn(meta, col.trim())) {
-                columns.add(col.trim());
+            ColumnMeta m = findColumn(meta, col.trim());
+            if (m != null) {
+                columns.add(m.getColumnName());
                 values.add(e.getValue());
             }
         }
@@ -179,11 +184,21 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
         return meta;
     }
 
-    private boolean containsColumn(List<ColumnMeta> meta, String column) {
+    /** 列匹配（issues/20）：严格=忽略大小写精确；宽松（默认）=驼峰↔下划线归一匹配 */
+    private ColumnMeta findColumn(List<ColumnMeta> meta, String column) {
         for (ColumnMeta m : meta) {
-            if (m.getColumnName().equalsIgnoreCase(column)) return true;
+            if (strictColumnMatch) {
+                if (m.getColumnName().equalsIgnoreCase(column)) return m;
+            } else {
+                if (normalizeColumn(m.getColumnName()).equals(normalizeColumn(column))) return m;
+            }
         }
-        return false;
+        return null;
+    }
+
+    /** 列名归一：转小写 + 去下划线（companyName / company_name / COMPANY_NAME 等价） */
+    private static String normalizeColumn(String name) {
+        return name.toLowerCase().replace("_", "");
     }
 
     /** 表名安全：非空、非 sys_ 前缀、无非法字符 */

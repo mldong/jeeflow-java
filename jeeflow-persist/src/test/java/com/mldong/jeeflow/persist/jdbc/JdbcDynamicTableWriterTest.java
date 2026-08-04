@@ -147,4 +147,40 @@ public class JdbcDynamicTableWriterTest {
             assertNotNull(rs.getString("create_time"));
         }
     }
+
+    /** ⑧ 宽松列匹配（issues/20）：驼峰表单字段 ↔ 下划线表列，写入保持表列原名 */
+    @Test
+    public void testLooseCamelMatch() throws Exception {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("startTime", "09:00:00");   // 驼峰 key
+        data.put("processInstanceId", 55L);  // 驼峰 key
+        writer.insert("biz_leave", data);
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT start_time, process_instance_id FROM biz_leave")) {
+            assertTrue("驼峰 key 应落到下划线列", rs.next());
+            assertEquals("09:00:00", rs.getString("start_time"));
+            assertEquals(55L, rs.getLong("process_instance_id"));
+        }
+        // filterColumns 宽松匹配
+        assertEquals(2, writer.filterColumns("biz_leave",
+                Arrays.asList("startTime", "processInstanceId", "no_such")).size());
+    }
+
+    /** ⑨ 严格列匹配（issues/20）：显式开启后驼峰不再匹配 */
+    @Test
+    public void testStrictColumnMatch() throws Exception {
+        writer.setStrictColumnMatch(true);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("startTime", "09:00:00");   // 严格模式：驼峰不匹配表列 start_time
+        data.put("title", "strict");
+        writer.insert("biz_leave", data);
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT title, start_time FROM biz_leave")) {
+            assertTrue(rs.next());
+            assertEquals("strict", rs.getString("title"));
+            assertNull("严格模式下驼峰 key 应被过滤", rs.getString("start_time"));
+        }
+    }
 }
