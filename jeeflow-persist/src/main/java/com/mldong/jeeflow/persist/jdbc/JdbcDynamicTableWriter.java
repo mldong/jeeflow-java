@@ -30,7 +30,6 @@ import java.util.function.Function;
  */
 public class JdbcDynamicTableWriter implements DynamicTableWriter {
 
-    private static final String SYS_PREFIX = "sys_";
     /** 列探测（issues/22：限定当前 schema，防多库同名表列重复）——
      *  MySQL：DATABASE() + EXTRA(自增) + COLUMN_KEY(主键)；H2/PG：CURRENT_SCHEMA() + IS_IDENTITY + JOIN 主键约束 */
     private static final String SCHEMA_SQL_MYSQL =
@@ -113,16 +112,21 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
             if (key != null) {
                 columns.add(col);
                 values.add(data.get(key));
-                continue;
             }
-            // 主键生成（issues/21）：非自增主键表且 data 无主键值 → 调生成器；未配置 → 清晰报错
-            if (m.isPrimaryKey() && !m.isAutoIncrement()) {
+        }
+        // 主键生成（issues/21）：非自增主键表且 data 无主键值 → 调生成器；未配置 → 清晰报错
+        Object generatedPk = null;
+        for (ColumnMeta m : meta) {
+            if (m.isPrimaryKey() && !m.isAutoIncrement()
+                    && findDataKey(data, m.getColumnName()) == null) {   // data 已有主键值则用之
                 if (primaryKeyGenerator == null) {
-                    throw new IllegalArgumentException("表[" + tableName + "]主键[" + col
+                    throw new IllegalArgumentException("表[" + tableName + "]主键[" + m.getColumnName()
                             + "]非自增且未配置主键生成器（请调用 setPrimaryKeyGenerator，如雪花 IdWorker）");
                 }
-                columns.add(col);
-                values.add(primaryKeyGenerator.apply(tableName));
+                Object pk = primaryKeyGenerator.apply(tableName);
+                columns.add(m.getColumnName());
+                values.add(pk);
+                if (generatedPk == null) generatedPk = pk;   // 记录生成主键（子表外键用，issues/23）
             }
         }
         if (columns.isEmpty()) return null;
@@ -144,7 +148,7 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
             try (ResultSet rs = ps.getGeneratedKeys()) {
                 if (rs.next()) return rs.getObject(1);
             }
-            return null;
+            return generatedPk;   // 非自增生成器场景：返回生成的主键值
         } catch (SQLException e) {
             throw new RuntimeException("动态表插入失败: " + tableName + " -> " + e.getMessage(), e);
         }
@@ -279,18 +283,7 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
 
     /** 表名安全：非空、非 sys_ 前缀、无非法字符 */
     private void validateTableName(String tableName) {
-        if (tableName == null || tableName.trim().isEmpty()) {
-            throw new IllegalArgumentException("表名不能为空");
-        }
-        String t = tableName.trim();
-        if (t.toLowerCase().startsWith(SYS_PREFIX)) {
-            throw new IllegalArgumentException("拒绝写入系统表: " + t);
-        }
-        for (char c : t.toCharArray()) {
-            if (!Character.isLetterOrDigit(c) && c != '_') {
-                throw new IllegalArgumentException("表名含非法字符: " + t);
-            }
-        }
+        TableNames.validate(tableName);
     }
 
     /** 值转换：LocalDateTime → 字符串（驱动无关的时间格式） */
@@ -300,4 +293,5 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
         }
         return value;
     }
+
 }

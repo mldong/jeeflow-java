@@ -22,6 +22,12 @@
             <groupId>com.mldong.jeeflow</groupId>
             <artifactId>jeeflow-core</artifactId>
         </dependency>
+        <!-- 元数据 JSON 配置加载（issues/23 JsonMetaProvider；集成方几乎必有 jackson） -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.13.5</version>
+        </dependency>
 
         <!-- 测试 -->
         <dependency>
@@ -32,13 +38,6 @@
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- 测试用 JSON provider（拦截器集成测试解析流程定义） -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>2.13.5</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
