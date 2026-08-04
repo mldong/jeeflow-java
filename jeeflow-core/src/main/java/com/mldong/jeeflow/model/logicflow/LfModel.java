@@ -18,6 +18,7 @@ public class LfModel extends BaseModel {
     private String preInterceptors;
     private String postInterceptors;
     private String relTableName;
+    private String persistMode;
     private List<LfNode> nodes;
     private List<LfEdge> edges;
 
@@ -35,6 +36,8 @@ public class LfModel extends BaseModel {
     public void setPostInterceptors(String postInterceptors) { this.postInterceptors = postInterceptors; }
     public String getRelTableName() { return relTableName; }
     public void setRelTableName(String relTableName) { this.relTableName = relTableName; }
+    public String getPersistMode() { return persistMode; }
+    public void setPersistMode(String persistMode) { this.persistMode = persistMode; }
     public List<LfNode> getNodes() { return nodes; }
     public void setNodes(List<LfNode> nodes) { this.nodes = nodes; }
     public List<LfEdge> getEdges() { return edges; }

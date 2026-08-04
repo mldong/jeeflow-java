@@ -31,6 +31,9 @@ public abstract class NodeModel extends BaseModel implements Action {
         execution.setNodeModel(this);
         execPreInterceptors(execution);
         exec(execution);
+        // 流转链中 CreateTaskHandler 等会改写 nodeModel（标记"当前创建的任务节点"），
+        // post 拦截器必须看到的是本节点——重新设置（1.8.0：字段权限/状态字段按节点判定）
+        execution.setNodeModel(this);
         execPostInterceptors(execution);
     }
 

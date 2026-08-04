@@ -28,6 +28,8 @@ public class ProcessModel extends BaseModel {
     private String preInterceptors;
     private String postInterceptors;
     private String relTableName;
+    /** 持久化模式（1.8.0，issues 同步演进）：缺省 ARCHIVE（结束归档）/ SYNC（发起入库→节点推进→结束定稿） */
+    private String persistMode;
     private FlowData ext = FlowData.create();
     private List<NodeModel> nodes = new ArrayList<>();
     private List<TaskModel> tasks = new ArrayList<>();
@@ -161,6 +163,8 @@ public class ProcessModel extends BaseModel {
     public void setPostInterceptors(String postInterceptors) { this.postInterceptors = postInterceptors; }
     public String getRelTableName() { return relTableName; }
     public void setRelTableName(String relTableName) { this.relTableName = relTableName; }
+    public String getPersistMode() { return persistMode; }
+    public void setPersistMode(String persistMode) { this.persistMode = persistMode; }
     public FlowData getExt() { return ext; }
     public void setExt(FlowData ext) { this.ext = ext; }
     public List<NodeModel> getNodes() { return nodes; }

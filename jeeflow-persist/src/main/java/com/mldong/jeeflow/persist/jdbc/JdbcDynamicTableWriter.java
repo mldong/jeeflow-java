@@ -154,6 +154,44 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
         }
     }
 
+    /**
+     * 按条件列更新（1.8.0 SYNC 同步演进）——列过滤 + 宽松匹配 + 系统字段 update 组由调用方填充。
+     * 条件列（whereColumn）不参与 SET。
+     *
+     * @return 更新行数
+     */
+    public int update(String tableName, Map<String, Object> data, String whereColumn, Object whereValue) {
+        validateTableName(tableName);
+        List<ColumnMeta> meta = tableMeta(tableName);
+        List<String> setCols = new ArrayList<>();
+        List<Object> setVals = new ArrayList<>();
+        for (ColumnMeta m : meta) {
+            if (m.getColumnName().equalsIgnoreCase(whereColumn)) continue;   // 条件列排除
+            String key = findDataKey(data, m.getColumnName());
+            if (key != null) {
+                setCols.add(m.getColumnName());
+                setVals.add(data.get(key));
+            }
+        }
+        if (setCols.isEmpty()) return 0;
+        StringBuilder sql = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
+        for (int i = 0; i < setCols.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append(setCols.get(i)).append(" = ?");
+        }
+        sql.append(" WHERE ").append(whereColumn).append(" = ?");
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < setVals.size(); i++) {
+                ps.setObject(i + 1, toJdbcValue(setVals.get(i)));
+            }
+            ps.setObject(setVals.size() + 1, toJdbcValue(whereValue));
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new RuntimeException("动态表更新失败: " + tableName + " -> " + e.getMessage(), e);
+        }
+    }
+
     @Override
     public boolean exists(String tableName, String bizKey, Object bizKeyValue) {
         validateTableName(tableName);

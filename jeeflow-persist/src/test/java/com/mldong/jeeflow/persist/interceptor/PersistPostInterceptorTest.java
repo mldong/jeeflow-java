@@ -357,4 +357,155 @@ public class PersistPostInterceptorTest {
             assertEquals("同链重复触发应仅 1 条", 1, rs.getInt(1));
         }
     }
+
+    /** ⑭ SYNC 同步演进全链路（1.8.0）：发起 INSERT → 任务 UPDATE（字段权限 + tf_ 冗余 + 状态字段）→ 结束定稿 */
+    @Test
+    public void testSyncModeFullCycle() throws Exception {
+        registerInterceptor();
+        // SYNC 业务表：f_ 列 + tf_ 冗余列 + 状态字段列（节点 ID）
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS biz_sync");
+            st.execute("CREATE TABLE biz_sync (" +
+                    "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                    "title VARCHAR(100)," +
+                    "amount DECIMAL(10,2)," +
+                    "opinion VARCHAR(200)," +
+                    "apply INT," +
+                    "task1 INT," +
+                    "finish INT," +
+                    "process_instance_id BIGINT," +
+                    "apply_user_id VARCHAR(50)," +
+                    "apply_dept_id VARCHAR(50)," +
+                    "create_time VARCHAR(30)," +
+                    "create_user VARCHAR(50)," +
+                    "update_time VARCHAR(30)," +
+                    "update_user VARCHAR(50)," +
+                    "is_deleted INT" +
+                    ")");
+        }
+        // 流程：persistMode=SYNC + task1 节点字段权限（title 只读 / amount 可编辑）+ 结束节点改名 finish（end 为 SQL 保留字）
+        byte[] bytes = Files.readAllBytes(Paths.get(
+                "../jeeflow-core/src/test/resources/flows/01-simple.json"));
+        String content = new String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+                .replace("\"type\": \"approval\"",
+                        "\"type\": \"approval\", \"relTableName\": \"biz_sync\", \"persistMode\": \"SYNC\", \"postInterceptors\": \"com.mldong.jeeflow.persist.interceptor.PersistPostInterceptor\"")
+                .replace("\"assignee\": \"leader\"",
+                        "\"assignee\": \"leader\", \"field\": {\"PERMISSION_title\": 1, \"PERMISSION_amount\": 2}")
+                .replace("\"id\": \"end\"", "\"id\": \"finish\"")
+                .replace("\"targetNodeId\": \"end\"", "\"targetNodeId\": \"finish\"");
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setName("simple");
+        def.setDisplayName("01-simple.json");
+        def.setType("approval");
+        def.setState(1);
+        def.setVersion(1);
+        def.setContent(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        repo.addDefine(def);
+
+        // ① 发起 → INSERT（title/amount；状态字段按当前节点 start 探测——表无 start 列则不写）
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1",
+                FlowData.create().set("f_title", "年假申请").set("f_amount", 800).set("u_deptId", "D01"));
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT title, amount, process_instance_id FROM biz_sync")) {
+            assertTrue("发起应 INSERT", rs.next());
+            assertEquals("年假申请", rs.getString("title"));
+            assertEquals(800.0, rs.getDouble("amount"), 0.001);
+        }
+
+        // ② apply 完成 → UPDATE（apply 节点无权限声明，f_ 全量；apply 状态字段=10 DOING）
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask t : doing) {
+            if ("apply".equals(t.getTaskName())) {
+                repo.addTaskActor(t.getTaskId(), Arrays.asList("user1"));
+                engine.executeProcessTask(t.getTaskId(), "user1",
+                        FlowData.create().set("submitType", 0));
+            }
+        }
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT apply FROM biz_sync")) {
+            assertTrue(rs.next());
+            assertEquals(10, rs.getInt("apply"));   // DOING
+        }
+
+        // ③ task1（leader）→ UPDATE：title 只读不更新 / amount 可编辑更新 / opinion(tf_) / task1 状态
+        // （task1 为末节点，完成后自动流转结束节点定稿，见 ④ 汇总断言）
+        doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        repo.addTaskActor(doing.get(0).getTaskId(), Arrays.asList("leader"));
+        engine.executeProcessTask(doing.get(0).getTaskId(), "leader",
+                FlowData.create().set("submitType", 1).set("tf_opinion", "同意")
+                        .set("f_title", "修改标题").set("f_amount", 999));
+
+        // ④ 结束 → UPDATE 最终状态（finish=20 FINISHED）
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT title, amount, opinion, task1, finish FROM biz_sync")) {
+            assertTrue(rs.next());
+            assertEquals("只读字段不更新", "年假申请", rs.getString("title"));
+            assertEquals("可编辑字段更新", 999.0, rs.getDouble("amount"), 0.001);
+            assertEquals("tf_ 冗余", "同意", rs.getString("opinion"));
+            assertEquals(10, rs.getInt("task1"));
+            assertEquals(20, rs.getInt("finish"));   // FINISHED
+            assertFalse("应仅 1 条（先插后更）", rs.next());
+        }
+    }
+
+    /** ⑮ SYNC 驳回：结束 UPDATE 最终状态 end=45（REJECT），数据不丢 */
+    @Test
+    public void testSyncModeReject() throws Exception {
+        registerInterceptor();
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS biz_sync2");
+            st.execute("CREATE TABLE biz_sync2 (" +
+                    "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                    "title VARCHAR(100)," +
+                    "apply INT," +
+                    "finish INT," +
+                    "process_instance_id BIGINT," +
+                    "create_user VARCHAR(50)," +
+                    "is_deleted INT" +
+                    ")");
+        }
+        byte[] bytes = Files.readAllBytes(Paths.get(
+                "../jeeflow-core/src/test/resources/flows/01-simple.json"));
+        String content = new String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+                .replace("\"type\": \"approval\"",
+                        "\"type\": \"approval\", \"relTableName\": \"biz_sync2\", \"persistMode\": \"SYNC\", \"postInterceptors\": \"com.mldong.jeeflow.persist.interceptor.PersistPostInterceptor\"")
+                .replace("\"id\": \"end\"", "\"id\": \"finish\"")
+                .replace("\"targetNodeId\": \"end\"", "\"targetNodeId\": \"finish\"");
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setName("simple");
+        def.setDisplayName("01-simple.json");
+        def.setType("approval");
+        def.setState(1);
+        def.setVersion(1);
+        def.setContent(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        repo.addDefine(def);
+
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1",
+                FlowData.create().set("f_title", "驳回单").set("u_deptId", "D01"));
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask t : doing) {
+            if ("apply".equals(t.getTaskName())) {
+                repo.addTaskActor(t.getTaskId(), Arrays.asList("user1"));
+                engine.executeProcessTask(t.getTaskId(), "user1",
+                        FlowData.create().set("submitType", 0));
+            }
+        }
+        doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        repo.addTaskActor(doing.get(0).getTaskId(), Arrays.asList("leader"));
+        engine.executeProcessTask(doing.get(0).getTaskId(), "leader",
+                FlowData.create().set("submitType", 2));   // 驳回
+
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT title, finish, create_user FROM biz_sync2")) {
+            assertTrue("驳回也应有记录", rs.next());
+            assertEquals("驳回单", rs.getString("title"));
+            assertEquals("最终状态应为 REJECT", 45, rs.getInt("finish"));
+            assertEquals("user1", rs.getString("create_user"));
+            assertFalse("应仅 1 条", rs.next());
+        }
+    }
 }

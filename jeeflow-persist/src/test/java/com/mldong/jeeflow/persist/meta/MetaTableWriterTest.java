@@ -10,6 +10,8 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.Arrays;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -270,6 +272,10 @@ public class MetaTableWriterTest {
         Object addressObj = result.get("address");
         assertTrue(addressObj instanceof Map);
         assertEquals("深圳市", ((Map<?, ?>) addressObj).get("city"));
+        // issues/24 读侧：EXPAND 展开列（province/city/detail_addr）不重复平铺带出（对象形式已消费）
+        assertNull("EXPAND 展开列不应平铺冗余", result.get("province"));
+        assertNull("EXPAND 展开列不应平铺冗余", result.get("city"));
+        assertNull("EXPAND 展开列不应平铺冗余", result.get("detail_addr"));
         Object relObj = result.get("addressRel");
         assertTrue(relObj instanceof Map);
         assertEquals("广州市", ((Map<?, ?>) relObj).get("city"));
@@ -279,5 +285,78 @@ public class MetaTableWriterTest {
         Map<?, ?> first = (Map<?, ?>) ((List<?>) itemsObj).get(0);
         assertEquals("电脑", first.get("name"));
         assertEquals(888L, ((Number) result.get("process_instance_id")).longValue());
+    }
+
+    /** ⑤ issues/24 写侧：ONE2MANY 子表递归插入继承主表 apply_user_id（BIGINT create_user 不回落 "system"） */
+    @Test
+    public void testSubTableUserPropagation() throws Exception {
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS biz_meta_parent");
+            st.execute("CREATE TABLE biz_meta_parent (" +
+                    "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                    "title VARCHAR(100)," +
+                    "apply_user_id BIGINT," +
+                    "create_user BIGINT," +
+                    "is_deleted INT" +
+                    ")");
+            st.execute("DROP TABLE IF EXISTS biz_meta_child");
+            st.execute("CREATE TABLE biz_meta_child (" +
+                    "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                    "parent_id BIGINT," +
+                    "item_name VARCHAR(100)," +
+                    "create_user BIGINT," +
+                    "update_user BIGINT," +
+                    "is_deleted INT" +
+                    ")");
+        }
+        IDynamicMetaProvider provider = tableName -> {
+            if ("biz_meta_parent".equals(tableName)) {
+                TableMeta meta = new TableMeta();
+                meta.setTableName("biz_meta_parent");
+                FieldMeta title = new FieldMeta();
+                title.setName("title");
+                FieldMeta items = new FieldMeta();
+                items.setName("items");
+                items.setStorageType(StorageType.ONE2MANY);
+                items.setTargetTable("biz_meta_child");
+                items.setForeignKey("parent_id");
+                meta.setFields(Arrays.asList(title, items));
+                return meta;
+            }
+            if ("biz_meta_child".equals(tableName)) {
+                TableMeta meta = new TableMeta();
+                meta.setTableName("biz_meta_child");
+                FieldMeta itemName = new FieldMeta();
+                itemName.setName("itemName");
+                meta.setFields(Arrays.asList(itemName));
+                return meta;
+            }
+            return null;
+        };
+        MetaTableWriter writer = new MetaTableWriter(base, provider);
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("title", "传播测试");
+        data.put("apply_user_id", 1567738052492341249L);   // 拦截器场景 = 流程 operator（数字 userId）
+        data.put("items", Collections.singletonList(
+                new HashMap<String, Object>() {{ put("itemName", "测试项目A"); }}));
+        Object pk = writer.insert("biz_meta_parent", data);
+        assertNotNull(pk);
+
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT create_user FROM biz_meta_child WHERE parent_id = " + pk)) {
+            assertTrue(rs.next());
+            assertEquals("子表 create_user 应继承 operator（不回落 system）",
+                    1567738052492341249L, rs.getLong("create_user"));
+            assertFalse(rs.next());
+        }
+        // 主表 create_user 同样 = operator
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT create_user FROM biz_meta_parent WHERE id = " + pk)) {
+            assertTrue(rs.next());
+            assertEquals(1567738052492341249L, rs.getLong("create_user"));
+        }
     }
 }

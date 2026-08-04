@@ -68,13 +68,24 @@ public class MetaTableReader {
                     if (v != null) result.put(f.getName(), v);
             }
         }
-        // 未在元数据中的列（process_instance_id/apply_user_id/系统字段）原样带出（key 统一小写，跨方言一致）
+        // 未在元数据中的列（process_instance_id/apply_user_id/系统字段）原样带出（key 统一小写，跨方言一致）；
+        // issues/24：EXPAND 展开列（挂在 expandFields 值集合）视为已消费（对象形式已带出），不重复平铺
         for (Map.Entry<String, Object> e : row.entrySet()) {
-            if (meta.findFieldByColumn(e.getKey()) == null) {
+            if (meta.findFieldByColumn(e.getKey()) == null && !isExpandColumn(meta, e.getKey())) {
                 result.putIfAbsent(e.getKey().toLowerCase(), e.getValue());
             }
         }
         return result;
+    }
+
+    /** 该列是否为某字段的 EXPAND 展开列（issues/24） */
+    private boolean isExpandColumn(TableMeta meta, String columnName) {
+        for (FieldMeta f : meta.getFields()) {
+            for (String col : f.safeExpandFields().values()) {
+                if (col.equalsIgnoreCase(columnName)) return true;
+            }
+        }
+        return false;
     }
 
     /** EXPAND 反展开：多列 → 对象 */

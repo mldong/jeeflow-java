@@ -65,6 +65,7 @@ public final class ModelParser {
         processModel.setPostInterceptors(lfModel.getPostInterceptors());
         processModel.setPreInterceptors(lfModel.getPreInterceptors());
         processModel.setRelTableName(lfModel.getRelTableName());
+        processModel.setPersistMode(lfModel.getPersistMode());
 
         // 解析各节点
         for (LfNode node : nodes) {

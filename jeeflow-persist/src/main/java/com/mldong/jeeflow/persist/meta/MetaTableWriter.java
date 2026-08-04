@@ -82,7 +82,7 @@ public class MetaTableWriter implements DynamicTableWriter {
         }
         // 子表递归插入（外键=主表主键，同事务语义由基础 writer 连接管理）
         for (Map.Entry<String, Object> e : subData.entrySet()) {
-            insertSubTable(meta, meta.findField(e.getKey()), e.getValue(), pk);
+            insertSubTable(meta, meta.findField(e.getKey()), e.getValue(), pk, data);
         }
         return pk;
     }
@@ -98,34 +98,78 @@ public class MetaTableWriter implements DynamicTableWriter {
     }
 
     /** ONE2ONE/ONE2MANY：子表递归插入（阶段③，外键=主表主键） */
-    private void insertSubTable(TableMeta parentMeta, FieldMeta f, Object v, Object parentPk) {
+    private void insertSubTable(TableMeta parentMeta, FieldMeta f, Object v, Object parentPk,
+                                Map<String, Object> parentData) {
         if (parentPk == null) {
             throw new IllegalStateException("主表主键缺失，无法插入子表: " + f.getName());
         }
         String fk = f.getForeignKey() != null ? f.getForeignKey() : parentMeta.getPrimaryKey();
+        // issues/24：继承主表操作人上下文（apply_user_id=流程 operator），
+        // 子表 fillSystemFields 用户列与主表一致（BIGINT create_user 不回落 "system"）
+        Object operator = parentData.get("apply_user_id");
         if (f.getStorageType() == StorageType.ONE2ONE && v instanceof Map) {
-            insertSubRow(f, (Map<?, ?>) v, fk, parentPk);
+            insertSubRow(f, (Map<?, ?>) v, fk, parentPk, operator);
         } else if (f.getStorageType() == StorageType.ONE2MANY && v instanceof List) {
             for (Object item : (List<?>) v) {
-                if (item instanceof Map) insertSubRow(f, (Map<?, ?>) item, fk, parentPk);
+                if (item instanceof Map) insertSubRow(f, (Map<?, ?>) item, fk, parentPk, operator);
             }
         }
     }
 
-    /** 子表单条插入（外键注入 + 递归走子表自身元数据） */
+    /** 子表单条插入（外键注入 + 递归走子表自身元数据 + 操作人上下文继承） */
     @SuppressWarnings("unchecked")
-    private void insertSubRow(FieldMeta f, Map<?, ?> subData, String fk, Object parentPk) {
+    private void insertSubRow(FieldMeta f, Map<?, ?> subData, String fk, Object parentPk, Object operator) {
         Map<String, Object> row = new LinkedHashMap<>();
         for (Map.Entry<?, ?> e : subData.entrySet()) {
             row.put(String.valueOf(e.getKey()), e.getValue());
         }
         row.put(fk, parentPk);
+        if (operator != null) {
+            row.putIfAbsent("apply_user_id", operator);   // 子表单显式同名字段优先
+        }
         insert(f.getTargetTable(), row);
     }
 
     @Override
     public boolean exists(String tableName, String bizKey, Object bizKeyValue) {
         return base.exists(tableName, bizKey, bizKeyValue);
+    }
+
+    /**
+     * 按条件列更新（1.8.0 SYNC 同步演进）——按元数据 storageType 组装 SET 列
+     * （NORMAL/JSON/EXPAND；ONE2ONE/ONE2MANY 子表不参与中途更新），未消费字段直通。
+     */
+    @Override
+    public int update(String tableName, Map<String, Object> data, String whereColumn, Object whereValue) {
+        TableMeta meta = provider.loadTableMeta(tableName);
+        if (meta == null) {
+            return base.update(tableName, data, whereColumn, whereValue);   // 无元数据：回落
+        }
+        Map<String, Object> row = new LinkedHashMap<>();
+        for (FieldMeta f : meta.getFields()) {
+            if (f.getStorageType() == StorageType.ONE2ONE || f.getStorageType() == StorageType.ONE2MANY) {
+                continue;   // 子表不参与中途更新（仅发起 INSERT）
+            }
+            Object v = data.get(f.getName());
+            if (v == null) continue;
+            switch (f.getStorageType()) {
+                case JSON:
+                    row.put(f.getColumnName(), toJson(v));
+                    break;
+                case EXPAND:
+                    expandInto(f, v, row);
+                    break;
+                default:
+                    row.put(f.getColumnName(), v);
+            }
+        }
+        // 未消费字段（流程上下文 process_instance_id 等 + 状态字段）直通基础 writer
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            if (meta.findField(e.getKey()) == null) {
+                row.putIfAbsent(e.getKey(), e.getValue());
+            }
+        }
+        return base.update(tableName, row, whereColumn, whereValue);
     }
 
     @Override

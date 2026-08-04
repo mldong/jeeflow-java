@@ -38,4 +38,15 @@ public interface DynamicTableWriter {
      * @param insert true=插入（填 create*），false=更新（只填 update*）
      */
     void fillSystemFields(Map<String, Object> data, boolean insert);
+
+    /**
+     * 按条件列更新（1.8.0 SYNC 同步演进）——data 按列过滤后 SET，条件列不参与 SET。
+     * 不支持更新的 writer（默认实现）抛 UnsupportedOperationException。
+     *
+     * @return 更新行数
+     */
+    default int update(String tableName, Map<String, Object> data, String whereColumn, Object whereValue) {
+        throw new UnsupportedOperationException(
+                "当前 writer 不支持 update（SYNC 同步演进需要）：" + getClass().getName());
+    }
 }
