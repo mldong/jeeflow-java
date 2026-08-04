@@ -7,11 +7,14 @@
 
 ## 依赖
 
+> 版本号不写死——由集成方在父 pom 的 `<jeeflow.version>` 属性统一管理
+> （升级只改一处，参考 SDK 集成文档 getting-started）：
+
 ```xml
 <dependency>
     <groupId>com.mldong.jeeflow</groupId>
     <artifactId>jeeflow-persist</artifactId>
-    <version>1.6.2</version>
+    <version>${jeeflow.version}</version>
 </dependency>
 ```
 
