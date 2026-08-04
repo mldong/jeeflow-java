@@ -390,7 +390,7 @@ public class PersistPostInterceptorTest {
                 .replace("\"type\": \"approval\"",
                         "\"type\": \"approval\", \"relTableName\": \"biz_sync\", \"persistMode\": \"SYNC\", \"postInterceptors\": \"com.mldong.jeeflow.persist.interceptor.PersistPostInterceptor\"")
                 .replace("\"assignee\": \"leader\"",
-                        "\"assignee\": \"leader\", \"field\": {\"PERMISSION_title\": 1, \"PERMISSION_amount\": 2}")
+                        "\"assignee\": \"leader\", \"field\": {\"PERMISSION_f_title\": 1, \"PERMISSION_amount\": 2}")
                 .replace("\"id\": \"end\"", "\"id\": \"finish\"")
                 .replace("\"targetNodeId\": \"end\"", "\"targetNodeId\": \"finish\"");
         ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();

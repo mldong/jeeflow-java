@@ -186,10 +186,16 @@ public class PersistPostInterceptor implements FlowInterceptor {
         return data;
     }
 
-    /** 字段可编辑判定：无声明或 EDIT(2) 可更新；READ_ONLY(1)/HIDDEN(3) 不更新 */
+    /**
+     * 字段可编辑判定：无声明或 EDIT(2) 可更新；READ_ONLY(1)/HIDDEN(3) 不更新。
+     * 键格式兼容两种（issues/25）：
+     * - `PERMISSION_f_{表单字段全名}`——前端 vben5-wf 设计器约定（优先）
+     * - `PERMISSION_{去前缀名}`——后端 1.8.0 首版格式（兼容）
+     */
     private boolean isEditable(Map<String, Object> fieldPerm, String fieldName) {
         if (fieldPerm == null || fieldPerm.isEmpty()) return true;
-        Object p = fieldPerm.get(PERMISSION_PREFIX + fieldName);
+        Object p = fieldPerm.get(PERMISSION_PREFIX + FIELD_PREFIX + fieldName);
+        if (p == null) p = fieldPerm.get(PERMISSION_PREFIX + fieldName);
         if (p == null) return true;
         int perm = toInt(p);
         return perm == PERM_EDIT;
