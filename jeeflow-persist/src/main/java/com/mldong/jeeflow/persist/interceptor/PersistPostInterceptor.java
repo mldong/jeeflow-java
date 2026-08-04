@@ -60,6 +60,13 @@ public class PersistPostInterceptor implements FlowInterceptor {
         Integer submitType = toInt(execution.getArgs().get(FlowConst.SUBMIT_TYPE));
         if (submitType == null || submitType != ProcessSubmitTypeEnum.AGREE.getCode()) return;
 
+        // 同链重复触发防护（issues/19）：最后任务节点与结束节点都会触发后置拦截器，
+        // 同一执行链内只插一次（args 为本次执行链 FlowData，跨请求不共享）。
+        // exists 保留作为跨请求/重启的幂等兜底（先查后插语义不变）。
+        String chainKey = "__persist_executed_" + instance.getInstanceId();
+        if (Boolean.TRUE.equals(execution.getArgs().get(chainKey))) return;
+        execution.getArgs().put(chainKey, true);
+
         String tableName = execution.getProcessModel().getRelTableName();
         if (tableName == null || tableName.trim().isEmpty()) {
             tableName = execution.getProcessModel().getName();   // 缺省回落流程 name

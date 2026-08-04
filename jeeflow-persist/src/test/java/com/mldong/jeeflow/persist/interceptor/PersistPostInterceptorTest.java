@@ -151,7 +151,7 @@ public class PersistPostInterceptorTest {
             assertEquals("user1", rs.getString("apply_user_id"));
             assertEquals("D01", rs.getString("apply_dept_id"));
             assertNotNull("create_time 应填充", rs.getString("create_time"));
-            assertEquals("system", rs.getString("create_user"));
+            assertEquals("user1", rs.getString("create_user")); // issues/19: 默认用户值优先 operator
             assertEquals(0, rs.getInt("is_deleted"));
             assertFalse("应只有一条", rs.next());
         }
@@ -257,6 +257,104 @@ public class PersistPostInterceptorTest {
              ResultSet rs = st.executeQuery("SELECT COUNT(1) FROM biz_leave")) {
             assertTrue(rs.next());
             assertEquals("首次应入库 1 条", 1, rs.getInt(1));
+        }
+    }
+
+    /** ⑫ BIGINT 用户列（issues/19）：多数框架表 create_user 是 BIGINT 存 userId——
+     *  fillSystemFields 默认用户值优先 operator，插入不报类型错误 */
+    @Test
+    public void testBigintUserColumn() throws Exception {
+        registerInterceptor();
+        // 建 BIGINT 用户列的业务表（boot4 场景：operator 为数字 userId）
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS biz_settle");
+            st.execute("CREATE TABLE biz_settle (" +
+                    "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                    "title VARCHAR(100)," +
+                    "process_instance_id BIGINT," +
+                    "apply_user_id BIGINT," +
+                    "create_user BIGINT," +
+                    "update_user BIGINT," +
+                    "is_deleted INT" +
+                    ")");
+        }
+        byte[] bytes = Files.readAllBytes(Paths.get(
+                "../jeeflow-core/src/test/resources/flows/01-simple.json"));
+        String content = new String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+                .replace("\"type\": \"approval\"",
+                        "\"type\": \"approval\", \"relTableName\": \"biz_settle\", \"postInterceptors\": \"com.mldong.jeeflow.persist.interceptor.PersistPostInterceptor\"");
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setName("simple");
+        def.setDisplayName("01-simple.json");
+        def.setType("approval");
+        def.setState(1);
+        def.setVersion(1);
+        def.setContent(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        repo.addDefine(def);
+
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "123",
+                FlowData.create().set("f_title", "结算单").set("u_deptId", "D01"));
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask t : doing) {
+            if ("apply".equals(t.getTaskName())) {
+                repo.addTaskActor(t.getTaskId(), Arrays.asList("123"));
+                engine.executeProcessTask(t.getTaskId(), "123",
+                        FlowData.create().set("submitType", 0));
+            }
+        }
+        doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        repo.addTaskActor(doing.get(0).getTaskId(), Arrays.asList("leader"));
+        engine.executeProcessTask(doing.get(0).getTaskId(), "leader",
+                FlowData.create().set("submitType", 1));
+
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT create_user, apply_user_id FROM biz_settle")) {
+            assertTrue("BIGINT 用户列应插入成功", rs.next());
+            assertEquals("create_user 应为 operator", 123L, rs.getLong("create_user"));
+            assertEquals("apply_user_id 应为 operator", 123L, rs.getLong("apply_user_id"));
+        }
+    }
+
+    /** ⑬ 同链二次触发（issues/19）：最后任务节点与结束节点都会触发后置拦截器——
+     *  同一次执行链（共享 args）仅插 1 条 */
+    @Test
+    public void testSameChainDoubleTrigger() throws Exception {
+        registerInterceptor();
+        ProcessInstance.ProcessDefine def = registerFlow();
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1",
+                FlowData.create().set("f_title", "t").set("u_deptId", "D01"));
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask t : doing) {
+            if ("apply".equals(t.getTaskName())) {
+                repo.addTaskActor(t.getTaskId(), Arrays.asList("user1"));
+                engine.executeProcessTask(t.getTaskId(), "user1",
+                        FlowData.create().set("submitType", 0));
+            }
+        }
+        doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        repo.addTaskActor(doing.get(0).getTaskId(), Arrays.asList("leader"));
+        engine.executeProcessTask(doing.get(0).getTaskId(), "leader",
+                FlowData.create().set("submitType", 1));
+
+        // 构造同链 Execution（共享同一 args FlowData），模拟最后任务节点 + 结束节点各触发一次
+        com.mldong.jeeflow.core.Execution execution = new com.mldong.jeeflow.core.Execution();
+        execution.setProcessModel(new com.mldong.jeeflow.model.ProcessModel());
+        execution.getProcessModel().setRelTableName("biz_leave");
+        execution.setProcessInstance(inst);
+        execution.setProcessInstanceId(inst.getInstanceId());
+        FlowData args = FlowData.create().set("submitType", 1);
+        execution.setArgs(args);
+        com.mldong.jeeflow.persist.interceptor.PersistPostInterceptor interceptor =
+                new com.mldong.jeeflow.persist.interceptor.PersistPostInterceptor();
+        interceptor.intercept(execution);   // 第一次：落库
+        interceptor.intercept(execution);   // 同链第二次：内存标记跳过
+
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(1) FROM biz_leave")) {
+            assertTrue(rs.next());
+            assertEquals("同链重复触发应仅 1 条", 1, rs.getInt(1));
         }
     }
 }

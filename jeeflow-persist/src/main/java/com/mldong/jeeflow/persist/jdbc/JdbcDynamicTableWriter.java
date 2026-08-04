@@ -43,6 +43,9 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
     private String updateTimeColumn = "update_time";
     private String updateUserColumn = "update_user";
     private String isDeletedColumn = "is_deleted";
+    /** 用户列默认值（issues/19：优先取 data 中已注入的 apply_user_id=流程 operator，
+     *  否则用此配置值，缺省 "system"）——多数框架业务表 create_user/update_user 为 BIGINT 存 userId */
+    private Object defaultUserValue = "system";
 
     public JdbcDynamicTableWriter(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -55,6 +58,7 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
     public void setUpdateTimeColumn(String updateTimeColumn) { this.updateTimeColumn = updateTimeColumn; }
     public void setUpdateUserColumn(String updateUserColumn) { this.updateUserColumn = updateUserColumn; }
     public void setIsDeletedColumn(String isDeletedColumn) { this.isDeletedColumn = isDeletedColumn; }
+    public void setDefaultUserValue(Object defaultUserValue) { this.defaultUserValue = defaultUserValue; }
 
     // ── DynamicTableWriter ─────────────────────────────────────────────────────
 
@@ -132,15 +136,24 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
         if (insert) {
             // 插入：create* + update* + isDeleted 全填（很多表插入时即填 update 列）
             if (createTimeColumn != null) data.putIfAbsent(createTimeColumn, now);
-            if (createUserColumn != null) data.putIfAbsent(createUserColumn, "system");
+            if (createUserColumn != null) data.putIfAbsent(createUserColumn, resolveDefaultUser(data));
             if (updateTimeColumn != null) data.putIfAbsent(updateTimeColumn, now);
-            if (updateUserColumn != null) data.putIfAbsent(updateUserColumn, "system");
+            if (updateUserColumn != null) data.putIfAbsent(updateUserColumn, resolveDefaultUser(data));
             if (isDeletedColumn != null) data.putIfAbsent(isDeletedColumn, 0);
         } else {
             // 更新：只填 update*
             if (updateTimeColumn != null) data.put(updateTimeColumn, now);
-            if (updateUserColumn != null) data.putIfAbsent(updateUserColumn, "system");
+            if (updateUserColumn != null) data.putIfAbsent(updateUserColumn, resolveDefaultUser(data));
         }
+    }
+
+    /**
+     * 默认用户值（issues/19）：优先取 data 中已注入的 {@code apply_user_id}
+     * （拦截器场景 = 流程 operator，BIGINT 用户列表开箱即用），否则回落配置默认值。
+     */
+    private Object resolveDefaultUser(Map<String, Object> data) {
+        Object operator = data.get("apply_user_id");
+        return operator != null ? operator : defaultUserValue;
     }
 
     // ── 内部 ───────────────────────────────────────────────────────────────────
