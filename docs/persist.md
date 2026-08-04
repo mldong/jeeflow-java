@@ -59,7 +59,7 @@ ServiceContext.put("dynamicTableWriter", new JdbcDynamicTableWriter(dataSource))
 
 语义：结束节点 + 实例 FINISHED + submitType=AGREE 时，实例 `f_` 字段（去前缀）+
 流程上下文（`process_instance_id`/`apply_user_id`/`apply_dept_id`）+ 系统字段写入业务表；
-`process_instance_id` 幂等（先查后插）；表不存在显性报错；不同意/退回不入库。
+`process_instance_id` 幂等（先查后插）+ 同链内存标记（1.6.3：最后任务节点与结束节点都会触发后置拦截器，同链只插一次）；用户列 create_user/update_user 默认取 operator（1.6.3）；表不存在显性报错；不同意/退回不入库。
 
 ## 测试
 
