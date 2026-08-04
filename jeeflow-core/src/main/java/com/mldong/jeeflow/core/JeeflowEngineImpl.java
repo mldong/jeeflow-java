@@ -206,6 +206,10 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
         ProcessModel model = ModelParser.parse(define.getContent());
 
+        // issues/26：办理提交的 f_ 字段按任务节点字段权限过滤（只读/隐藏不入变量）——
+        // 被拒值无法经流程变量落到下游节点写入，上游只读声明不可被绕过
+        args = FlowUtil.filterFieldByPerm(args, model, task.getTaskName());
+
         // 完成任务——聚合根内部修改了 instance 中的 task 状态
         instance.completeTask(taskId, operator, args);
 

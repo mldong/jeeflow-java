@@ -508,4 +508,93 @@ public class PersistPostInterceptorTest {
             assertFalse("应仅 1 条", rs.next());
         }
     }
+
+    /** ⑯ issues/26：办理提交被拒字段（只读/隐藏）不入变量——下游无权限节点无法绕过上游只读 */
+    @Test
+    public void testSyncPermBypass() throws Exception {
+        registerInterceptor();
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS biz_perm3");
+            st.execute("CREATE TABLE biz_perm3 (" +
+                    "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                    "title VARCHAR(100)," +
+                    "amount DECIMAL(10,2)," +
+                    "apply INT," +
+                    "approve1 INT," +
+                    "approve2 INT," +
+                    "finish INT," +
+                    "process_instance_id BIGINT," +
+                    "create_user VARCHAR(50)," +
+                    "is_deleted INT" +
+                    ")");
+        }
+        // 三任务节点：apply → approve1（PERMISSION_f_title=1 只读）→ approve2（无权限声明）→ finish
+        String content = "{"
+                + "\"name\": \"perm3\", \"displayName\": \"权限绕过验证\", \"type\": \"approval\","
+                + "\"relTableName\": \"biz_perm3\", \"persistMode\": \"SYNC\","
+                + "\"postInterceptors\": \"com.mldong.jeeflow.persist.interceptor.PersistPostInterceptor\","
+                + "\"nodes\": ["
+                + "{\"id\": \"start\", \"type\": \"snaker:start\", \"properties\": {\"width\": 50, \"height\": 50}, \"text\": {\"value\": \"开始\"}},"
+                + "{\"id\": \"apply\", \"type\": \"snaker:task\", \"properties\": {\"form\": \"apply-form\", \"assignee\": \"applicant\", \"taskType\": 0, \"performType\": 0}, \"text\": {\"value\": \"发起申请\"}},"
+                + "{\"id\": \"approve1\", \"type\": \"snaker:task\", \"properties\": {\"form\": \"f1\", \"assignee\": \"leader1\", \"taskType\": 0, \"performType\": 0, \"field\": {\"PERMISSION_f_title\": 1, \"PERMISSION_amount\": 2}}, \"text\": {\"value\": \"审批一\"}},"
+                + "{\"id\": \"approve2\", \"type\": \"snaker:task\", \"properties\": {\"form\": \"f2\", \"assignee\": \"leader2\", \"taskType\": 0, \"performType\": 0}, \"text\": {\"value\": \"审批二\"}},"
+                + "{\"id\": \"finish\", \"type\": \"snaker:end\", \"properties\": {\"width\": 50, \"height\": 50}, \"text\": {\"value\": \"结束\"}}"
+                + "],"
+                + "\"edges\": ["
+                + "{\"id\": \"e0\", \"sourceNodeId\": \"start\", \"targetNodeId\": \"apply\", \"properties\": {}},"
+                + "{\"id\": \"e1\", \"sourceNodeId\": \"apply\", \"targetNodeId\": \"approve1\", \"properties\": {}},"
+                + "{\"id\": \"e2\", \"sourceNodeId\": \"approve1\", \"targetNodeId\": \"approve2\", \"properties\": {}},"
+                + "{\"id\": \"e3\", \"sourceNodeId\": \"approve2\", \"targetNodeId\": \"finish\", \"properties\": {}}"
+                + "]}";
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setName("perm3");
+        def.setDisplayName("perm3");
+        def.setType("approval");
+        def.setState(1);
+        def.setVersion(1);
+        def.setContent(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        repo.addDefine(def);
+
+        // 发起 → INSERT（title=原始标题）
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1",
+                FlowData.create().set("f_title", "原始标题").set("f_amount", 800).set("u_deptId", "D01"));
+
+        // ① apply 完成
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask t : doing) {
+            if ("apply".equals(t.getTaskName())) {
+                repo.addTaskActor(t.getTaskId(), Arrays.asList("user1"));
+                engine.executeProcessTask(t.getTaskId(), "user1", FlowData.create().set("submitType", 0));
+            }
+        }
+        // ② approve1（只读 title）办理提交 TRY_HACK → 引擎入口过滤 → 不入变量 → 不落库
+        doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask t : doing) {
+            if ("approve1".equals(t.getTaskName())) {
+                repo.addTaskActor(t.getTaskId(), Arrays.asList("leader1"));
+                engine.executeProcessTask(t.getTaskId(), "leader1",
+                        FlowData.create().set("submitType", 1).set("f_title", "TRY_HACK"));
+            }
+        }
+        // ③ approve2（无权限声明）完成——变量无 TRY_HACK，title 保持原值
+        doing = repo.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask t : doing) {
+            if ("approve2".equals(t.getTaskName())) {
+                repo.addTaskActor(t.getTaskId(), Arrays.asList("leader2"));
+                engine.executeProcessTask(t.getTaskId(), "leader2",
+                        FlowData.create().set("submitType", 1).set("f_amount", 999));
+            }
+        }
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT title, amount, approve1, approve2, finish FROM biz_perm3")) {
+            assertTrue(rs.next());
+            assertEquals("只读字段被拒值不应落库（下游无权限节点也不可绕过）", "原始标题", rs.getString("title"));
+            assertEquals(999.0, rs.getDouble("amount"), 0.001);
+            assertEquals(10, rs.getInt("approve1"));
+            assertEquals(10, rs.getInt("approve2"));
+            assertEquals(20, rs.getInt("finish"));
+            assertFalse(rs.next());
+        }
+    }
 }

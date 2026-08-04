@@ -2,13 +2,16 @@ package com.mldong.jeeflow.util;
 
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.enums.FlowConst;
+import com.mldong.jeeflow.model.NodeModel;
 import com.mldong.jeeflow.model.ProcessModel;
+import com.mldong.jeeflow.model.TaskModel;
 import com.mldong.jeeflow.spi.IUserProvider;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -103,4 +106,54 @@ public final class FlowUtil {
     private static java.time.LocalDateTime toLocalDateTime(Date date) {
         return java.time.LocalDateTime.ofInstant(date.toInstant(), java.time.ZoneId.systemDefault());
     }
+
+    // ─── 字段权限（issues/26：办理入口过滤） ──────────────────────────────────
+
+    /** 字段权限键前缀（任务节点 properties.field，vben5-wf 机制，与 persist 拦截器同契约） */
+    public static final String FIELD_PERMISSION_PREFIX = "PERMISSION_";
+    /** 表单字段前缀（f_） */
+    public static final String FORM_FIELD_PREFIX = "f_";
+
+    /**
+     * 办理提交按任务节点字段权限过滤（issues/26）：任务节点 field 声明为只读(1)/隐藏(3)的
+     * f_ 字段，办理提交的值**不并入流程变量**——被拒值无法经变量落到下游节点写入，
+     * 上游只读声明不可被绕过。键格式双兼容（issues/25）：PERMISSION_f_{全名} 优先，
+     * PERMISSION_{去前缀名} 兼容；2 可编辑/无声明放行。tf_ 等非表单键不受影响。
+     *
+     * @return 过滤后的新 args（未命中任务节点/无权限声明时返回原 args）
+     */
+    public static FlowData filterFieldByPerm(FlowData args, ProcessModel model, String taskName) {
+        if (args == null || model == null || taskName == null) return args;
+        NodeModel node = model.getNode(taskName);
+        if (!(node instanceof TaskModel)) return args;
+        FlowData fieldPerm = ((TaskModel) node).getExt();
+        if (fieldPerm == null || fieldPerm.isEmpty()) return args;
+        FlowData filtered = FlowData.create();
+        for (Map.Entry<String, Object> e : args.entrySet()) {
+            String key = e.getKey();
+            if (key.startsWith(FORM_FIELD_PREFIX) && key.length() > FORM_FIELD_PREFIX.length()) {
+                String fieldName = key.substring(FORM_FIELD_PREFIX.length());
+                Object p = fieldPerm.get(FIELD_PERMISSION_PREFIX + FORM_FIELD_PREFIX + fieldName);
+                if (p == null) p = fieldPerm.get(FIELD_PERMISSION_PREFIX + fieldName);
+                if (p != null) {
+                    int perm = toInt(p);
+                    if (perm == 1 || perm == 3) continue;   // 只读/隐藏：剔除（不入变量）
+                }
+            }
+            filtered.set(key, e.getValue());
+        }
+        return filtered;
+    }
+
+    private static int toInt(Object value) {
+        if (value instanceof Number) return ((Number) value).intValue();
+        if (value != null) {
+            try {
+                return Integer.parseInt(value.toString());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return -1;
+    }
+
 }
