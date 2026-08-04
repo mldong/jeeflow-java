@@ -61,6 +61,27 @@ ServiceContext.put("dynamicTableWriter", new JdbcDynamicTableWriter(dataSource))
 流程上下文（`process_instance_id`/`apply_user_id`/`apply_dept_id`）+ 系统字段写入业务表；
 `process_instance_id` 幂等（先查后插）+ 同链内存标记（1.6.3：最后任务节点与结束节点都会触发后置拦截器，同链只插一次）；用户列 create_user/update_user 默认取 operator（1.6.3）；表不存在显性报错；不同意/退回不入库。
 
+## 同步演进模式（SYNC，1.8.0）
+
+流程定义顶层加 `"persistMode": "SYNC"`（缺省 `ARCHIVE`——保持"结束同意归档"不变），
+改为**全程留痕**：提交申请即入库（start 节点 INSERT 全量）→ 任务节点推进 UPDATE →
+结束节点定稿最终状态（FINISHED=20 / REJECT=45），不管成功失败都入库。
+
+- **状态字段**：值 = 实例状态码，列名优先 `{节点ID}_{状态码}`（如 `task1_10`），
+  无该列回落 `{节点ID}`（如 `task1`）；任务节点统一写 DOING(10)（任务推进状态），
+  结束节点写实例最终状态
+- **字段权限**（任务节点级）：节点 `properties.field.PERMISSION_{字段名}`——
+  `1` 只读 / `2` 可编辑 / `3` 隐藏（缺省可编辑）；非任务节点不覆盖业务字段（只定稿状态）
+- **`tf_` 冗余**：任务节点提交的 `tf_` 前缀变量（如 `tf_opinion` 审批意见）去前缀冗余到
+  业务表对应列（列过滤由 writer 做，无列则丢弃）
+- **幂等**：同链标记改节点级（`__persist_executed_{instanceId}_{节点ID}`）——任务推进与
+  结束定稿是不同节点都要生效；`process_instance_id` 先查后插/更兜底
+- **writer.update**：参数化 UPDATE（列过滤组装 SET、条件列排除防注入），
+  `update(tableName, data, "process_instance_id", instanceId)`
+
+示例：`{"persistMode": "SYNC", "relTableName": "biz_leave", ...}`，业务表建
+`apply` / `task1` / `finish` 状态列（INT）+ `opinion` 列（tf_ 冗余，可选）。
+
 ## 测试
 
 ```bash
