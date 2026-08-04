@@ -61,6 +61,15 @@ ServiceContext.put("dynamicTableWriter", new JdbcDynamicTableWriter(dataSource))
 流程上下文（`process_instance_id`/`apply_user_id`/`apply_dept_id`）+ 系统字段写入业务表；
 `process_instance_id` 幂等（先查后插）+ 同链内存标记（1.6.3：最后任务节点与结束节点都会触发后置拦截器，同链只插一次）；用户列 create_user/update_user 默认取 operator（1.6.3）；表不存在显性报错；不同意/退回不入库。
 
+
+**流程定义配置字段语义**（顶层，与 `name`/`nodes` 同层）：
+
+| 字段 | 取值 | 语义 |
+|------|------|------|
+| `relTableName` | 表名 | 业务表名——数据写入哪张表；**缺省回落流程 `name`**；表不存在 = 配置错误显性报错 |
+| `persistMode` | `ARCHIVE` / `SYNC`（缺省 `ARCHIVE`） | 持久化模式——`ARCHIVE`：流程结束且同意落库一次；`SYNC`：发起即入库 → 节点推进 → 结束定稿，全程留痕。非 `SYNC` 值回落 `ARCHIVE` |
+
+
 ## 同步演进模式（SYNC，1.8.0）
 
 流程定义顶层加 `"persistMode": "SYNC"`（缺省 `ARCHIVE`——保持"结束同意归档"不变），
