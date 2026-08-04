@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.mldong.jeeflow</groupId>
         <artifactId>jeeflow-parent</artifactId>
-        <version>1.6.3</version>
+        <version>1.6.4</version>
     </parent>
 
     <artifactId>jeeflow-spring-boot4-starter</artifactId>
