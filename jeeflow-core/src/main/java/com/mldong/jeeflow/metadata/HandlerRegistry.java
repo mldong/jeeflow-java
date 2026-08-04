@@ -22,6 +22,23 @@ public class HandlerRegistry {
 
     private final Map<Class<?>, List<HandlerMeta>> handlers = new LinkedHashMap<>();
 
+    /** 构造即注册内置通用 handler 元数据（v1.6.0，issues/16）——集成方零注册即得字典 */
+    public HandlerRegistry() {
+        registerBuiltins();
+    }
+
+    /** 内置通用参与者 handler 元数据（注册名 = 内置类全限定名，四语言一致） */
+    private void registerBuiltins() {
+        Class<?> type = com.mldong.jeeflow.interceptor.AssignmentHandler.class;
+        register(type, "com.mldong.jeeflow.interceptor.impl.OperatorAssignmentHandler", "流程发起人", -9999, null);
+        register(type, "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$ApplicantDeptLeaderAssignmentHandler", "发起人所属部门经理", 10, null);
+        register(type, "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$ApplicantDeptMainLeaderAssignmentHandler", "发起人所属部门分管领导", 20, null);
+        register(type, "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$DeptLeaderAssignmentHandler", "当前用户所属部门经理", 30, null);
+        register(type, "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$DeptMainLeaderAssignmentHandler", "当前用户所属部门分管领导", 40, null);
+        register(type, "com.mldong.jeeflow.interceptor.impl.FormFieldAssigneeHandler", "根据表单字段值分配参与者", 50, null);
+        register(type, "com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$TaskRoleAssigneeHandler", "根据任务节点唯一编码关联角色分配参与者", 60, null);
+    }
+
     /** 注册单个处理器元数据 */
     public void register(HandlerMeta meta) {
         handlers.computeIfAbsent(meta.getType(), k -> new ArrayList<>()).add(meta);

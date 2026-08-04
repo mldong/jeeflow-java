@@ -75,11 +75,16 @@ public class MetadataTest {
         registry.register(FlowInterceptor.class, "com.example.LogInterceptor", "日志记录", 1, "pre");
 
         List<HandlerMeta> assignments = registry.listHandlers(AssignmentHandler.class);
-        assertEquals(2, assignments.size());
-        // order 升序
-        assertEquals("com.example.BossHandler", assignments.get(0).getClassName());
-        assertEquals("老板审批", assignments.get(0).getDisplayName());
+        // 内置 7 个通用 handler（v1.6.0 issues/16）+ 2 个自定义
+        assertEquals(9, assignments.size());
+        // order 升序：内置 OperatorAssignmentHandler order=-9999 最前
+        assertEquals("com.mldong.jeeflow.interceptor.impl.OperatorAssignmentHandler",
+                assignments.get(0).getClassName());
+        assertEquals("流程发起人", assignments.get(0).getDisplayName());
         assertEquals("AssignmentHandler", assignments.get(0).getTypeName());
+        // 自定义注册仍生效
+        assertEquals("com.example.BossHandler", assignments.get(1).getClassName());
+        assertEquals("老板审批", assignments.get(1).getDisplayName());
 
         // 拦截器分组过滤
         List<HandlerMeta> pre = registry.listHandlers(FlowInterceptor.class, "pre");
@@ -94,9 +99,9 @@ public class MetadataTest {
 
     @Test
     public void testEmptyRegistry() {
+        // 构造即内置 7 个通用 handler（v1.6.0 issues/16），空注册表不再为空
         HandlerRegistry registry = new HandlerRegistry();
-        assertTrue(registry.listHandlers(AssignmentHandler.class).isEmpty());
-        assertTrue(registry.listHandlerTypes().isEmpty());
+        assertEquals(7, registry.listHandlers(AssignmentHandler.class).size());
     }
 
     @Test(expected = IllegalArgumentException.class)
