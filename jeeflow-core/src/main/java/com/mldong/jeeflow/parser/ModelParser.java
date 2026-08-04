@@ -49,14 +49,8 @@ public final class ModelParser {
 
         LfModel lfModel = json.fromJson(jsonStr, LfModel.class);
         ProcessModel processModel = new ProcessModel();
-        List<LfNode> nodes = lfModel.getNodes();
-        List<LfEdge> edges = lfModel.getEdges();
 
-        if (nodes == null || nodes.isEmpty() || edges == null || edges.isEmpty()) {
-            return processModel;
-        }
-
-        // 流程定义基本信息
+        // 流程定义基本信息（无论有无节点都要解析——空设计稿保存时 updateDefine 的 name/type 同步依赖，issues/27 验证发现）
         processModel.setName(lfModel.getName());
         processModel.setDisplayName(lfModel.getDisplayName());
         processModel.setType(lfModel.getType());
@@ -66,6 +60,13 @@ public final class ModelParser {
         processModel.setPreInterceptors(lfModel.getPreInterceptors());
         processModel.setRelTableName(lfModel.getRelTableName());
         processModel.setPersistMode(lfModel.getPersistMode());
+
+        List<LfNode> nodes = lfModel.getNodes();
+        List<LfEdge> edges = lfModel.getEdges();
+
+        if (nodes == null || nodes.isEmpty() || edges == null || edges.isEmpty()) {
+            return processModel;
+        }
 
         // 解析各节点
         for (LfNode node : nodes) {

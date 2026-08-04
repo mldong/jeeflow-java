@@ -41,6 +41,12 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         if (this.repository == null) {
             throw new JeeflowException(WfErrEnum.SPI_NOT_REGISTERED);
         }
+        // issues/29：action 权限码映射默认实现——集成方未注册时内置默认（boot3 注解语义归纳），
+        // 特殊集成方可覆盖注册
+        if (ServiceContext.find(com.mldong.jeeflow.spi.IActionPermissionProvider.class) == null) {
+            ServiceContext.put(com.mldong.jeeflow.spi.IActionPermissionProvider.class.getName(),
+                    new com.mldong.jeeflow.spi.DefaultActionPermissionProvider());
+        }
         return this;
     }
 

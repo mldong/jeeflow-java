@@ -5,6 +5,8 @@ import com.mldong.jeeflow.core.JeeflowEngine;
 import com.mldong.jeeflow.core.JeeflowEngineImpl;
 import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.domain.ProcessInstance;
+import com.mldong.jeeflow.domain.ProcessDesign;
+import com.mldong.jeeflow.domain.ProcessDesignHis;
 import com.mldong.jeeflow.facade.JeeflowFacade;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
@@ -320,6 +322,17 @@ public class JeeflowFacadeTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> r2 = (Map<String, Object>) facadeNoExt.flow("processDesign/page", args());
         assertEquals(Integer.valueOf(99999999), r2.get("code"));
+    }
+
+    /** bizData mock 读取器（同 MetaTableReader 契约，public 供 facade 反射调用） */
+    public static class MockMetaTableReader {
+        public Map<String, Object> readByProcessInstance(String tableName, Object processInstanceId) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("tableName", tableName);
+            m.put("processInstanceId", processInstanceId);
+            m.put("title", "业务数据");
+            return m;
+        }
     }
 
     private static Long toLong(Object val) {
@@ -695,4 +708,174 @@ public class JeeflowFacadeTest {
             assertFalse("第二个实例的 task1 不应出现在 userA 待办: " + r, pid.equals(inst2));
         }
     }
+
+
+    /** 测试辅助：读 01-simple 流程定义并注入 relTableName（bizData 测试用） */
+    private String simpleFlowWithRelTable(String relTableName) throws Exception {
+        String json = new String(Files.readAllBytes(
+                Paths.get("src/test/resources/flows/01-simple.json")), StandardCharsets.UTF_8);
+        return json.replace("\"type\": \"approval\"", "\"type\": \"approval\", \"relTableName\": \"" + relTableName + "\"");
+    }
+
+    /** 测试辅助：直接建一条设计记录 */
+    private void saveDesign(Long id, String name, String displayName, String type) {
+        ProcessDesign d = new ProcessDesign();
+        d.setId(id);
+        d.setName(name);
+        d.setDisplayName(displayName);
+        d.setType(type);
+        d.setIcon(null);
+        d.setRemark(null);
+        d.setIsDeployed(0);
+        extRepo.saveDesign(d);
+    }
+
+    // ═══ issues/27：updateDefine 兼容 boot3 顶层 JSON ═══
+
+    @Test
+    public void testUpdateDefineTopLevelJson() throws Exception {
+        saveDesign(100L, "old", "旧名", "approval");
+        // 保存设计（顶层 JSON 无 content）
+        Map<String, Object> r = call("processDesign/updateDefine", args(
+                "processDesignId", 100L, "operator", "user1",
+                "name", "topjson", "displayName", "顶层JSON流程", "type", "approval",
+                "relTableName", "biz_top", "persistMode", "SYNC",
+                "nodes", new ArrayList<>(), "edges", new ArrayList<>()));
+        assertOk(r);
+        // 设计信息同步（name 来自顶层 JSON）
+        ProcessDesign d = extRepo.findDesignById(100L);
+        assertNotNull(d);
+        assertEquals("topjson", d.getName());
+        assertEquals("顶层JSON流程", d.getDisplayName());
+        // 历史内容 = 顶层 JSON 序列化（含 nodes/edges，不含 processDesignId/operator）
+        List<ProcessDesignHis> his = extRepo.listDesignHis(100L);
+        assertFalse("应写入内容快照", his.isEmpty());
+        String content = new String(his.get(0).getContent(), StandardCharsets.UTF_8);
+        assertTrue("content 应含 nodes: " + content, content.contains("\"nodes\""));
+        assertFalse("content 不应含 processDesignId", content.contains("processDesignId"));
+        assertFalse("content 不应含 operator", content.contains("\"operator\""));
+    }
+
+    // ═══ issues/28：批量语义 + listByType + bizData ═══
+
+    @Test
+    public void testBatchRemoveAndUpDown() throws Exception {
+        // 两个设计 → 发布为两个定义
+        Long[] defineIds = new Long[2];
+        int i = 0;
+        for (Long id : Arrays.asList(201L, 202L)) {
+            saveDesign(id, "batch" + id, "批量流程" + id, "approval");
+            call("processDesign/updateDefine", args(
+                    "processDesignId", id, "operator", "user1",
+                    "name", "batch" + id, "displayName", "批量流程" + id, "type", "approval",
+                    "nodes", new ArrayList<>(), "edges", new ArrayList<>()));
+            Map<String, Object> dr = call("processDesign/deploy", args("id", id, "operator", "user1"));
+            assertOk(dr);
+            defineIds[i++] = toLong(((Map<String, Object>) dr.get("data")).get("processDefineId"));
+        }
+        // 批量上下架 {ids, opType}
+        Map<String, Object> r = call("processDefine/upAndDown", args(
+                "ids", Arrays.asList(defineIds[0], defineIds[1]), "opType", 0));
+        assertOk(r);
+        assertEquals(Integer.valueOf(0), rawRepo.findDefineById(defineIds[0]).getState());
+        assertEquals(Integer.valueOf(0), rawRepo.findDefineById(defineIds[1]).getState());
+        // 批量删除设计 {ids}（单 {id} 回归）
+        r = call("processDesign/remove", args("ids", Arrays.asList(201L, 202L)));
+        assertOk(r);
+        assertNull(extRepo.findDesignById(201L));
+        assertNull(extRepo.findDesignById(202L));
+        r = call("processDesign/remove", args("id", 203L));
+        assertOk(r);
+    }
+
+    @Test
+    public void testDesignListByType() throws Exception {
+        saveDesign(301L, "leave1", "请假", "approval");
+        saveDesign(302L, "reimburse1", "报销", "finance");
+        call("processDesign/updateDefine", args(
+                "processDesignId", 301L, "operator", "user1",
+                "name", "leave1", "displayName", "请假", "type", "approval",
+                "nodes", new ArrayList<>(), "edges", new ArrayList<>()));
+        call("processDesign/updateDefine", args(
+                "processDesignId", 302L, "operator", "user1",
+                "name", "reimburse1", "displayName", "报销", "type", "finance",
+                "nodes", new ArrayList<>(), "edges", new ArrayList<>()));
+        Map<String, Object> r = call("processDesign/listByType", args());
+        assertOk(r);
+        @SuppressWarnings("unchecked")
+        Map<String, List<Map<String, Object>>> groups =
+                (Map<String, List<Map<String, Object>>>) r.get("data");
+        assertTrue("应含 approval 分组: " + groups.keySet(), groups.containsKey("approval"));
+        assertTrue("应含 finance 分组: " + groups.keySet(), groups.containsKey("finance"));
+        assertEquals("leave1", groups.get("approval").get(0).get("name"));
+        assertEquals("reimburse1", groups.get("finance").get(0).get("name"));
+        // jsonObject 回显（最新设计稿）
+        assertNotNull(groups.get("approval").get(0).get("jsonObject"));
+    }
+
+    /** bizData：未注册 MetaTableReader → 清晰报错 */
+    @Test
+    public void testBizDataUnregistered() throws Exception {
+        // 真实实例 + 未注册 MetaTableReader
+        saveDesign(400L, "bizflow", "业务流程", "approval");
+        call("processDesign/updateDefine", args(
+                "processDesignId", 400L, "operator", "user1",
+                "content", simpleFlowWithRelTable("biz_leave")));
+        Map<String, Object> dr = call("processDesign/deploy", args("id", 400L, "operator", "user1"));
+        assertOk(dr);
+        Long defineId = toLong(((Map<String, Object>) dr.get("data")).get("processDefineId"));
+        Map<String, Object> sr = call("processInstance/startAndExecute", args(
+                "processDefineId", defineId, "operator", "user1", "title", "x"));
+        assertOk(sr);
+        Long instId = toLong(((Map<String, Object>) sr.get("data")).get("processInstanceId"));
+        Map<String, Object> r = call("processInstance/bizData", args("processInstanceId", instId));
+        assertNotEquals("未注册应报错", Integer.valueOf(0), r.get("code"));
+        assertTrue("报错应提示注册: " + r, String.valueOf(r.get("msg")).contains("metaTableReader"));
+    }
+
+    /** bizData：注册读取器（mock，同 MetaTableReader 契约）→ 回显正常 */
+    @Test
+    public void testBizDataRegistered() throws Exception {
+        // mock 读取器（public 静态类——facade 反射调用需可访问）
+        ServiceContext.put("metaTableReader", new MockMetaTableReader());
+        // 发布带 relTableName 的定义
+        saveDesign(401L, "bizflow", "业务流程", "approval");
+        call("processDesign/updateDefine", args(
+                "processDesignId", 401L, "operator", "user1",
+                "content", simpleFlowWithRelTable("biz_leave")));
+        Map<String, Object> dr = call("processDesign/deploy", args("id", 401L, "operator", "user1"));
+        assertOk(dr);
+        Long defineId = toLong(((Map<String, Object>) dr.get("data")).get("processDefineId"));
+        // 发起实例
+        Map<String, Object> r = call("processInstance/startAndExecute", args(
+                "processDefineId", defineId, "operator", "user1", "title", "x"));
+        assertOk(r);
+        Long instId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        r = call("processInstance/bizData", args("processInstanceId", instId));
+        assertOk(r);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) r.get("data");
+        assertEquals("biz_leave", data.get("tableName"));
+        assertEquals("业务数据", data.get("title"));
+    }
+
+    // ═══ issues/29：action 权限码 SPI 默认实现 ═══
+
+    @Test
+    public void testActionPermissionDefaultProvider() {
+        com.mldong.jeeflow.spi.IActionPermissionProvider provider =
+                ServiceContext.find(com.mldong.jeeflow.spi.IActionPermissionProvider.class);
+        assertNotNull("引擎 configure 应注册默认实现", provider);
+        // 默认规则：wf:{action:/→:}
+        assertArrayEquals(new String[]{"wf:processDefine:page"}, provider.permissionCodes("processDefine/page"));
+        // OR 语义：detail 任一码
+        String[] or = provider.permissionCodes("processDefine/detail");
+        assertTrue(or.length >= 2);
+        assertTrue(Arrays.asList(or).contains("wf:processDefine:detail"));
+        assertTrue(Arrays.asList(or).contains("wf:processDesign:listByType"));
+        // 放行（登录即可）
+        assertNull(provider.permissionCodes("processInstance/detail"));
+        assertNull(provider.permissionCodes("processInstance/bizData"));
+    }
+
 }

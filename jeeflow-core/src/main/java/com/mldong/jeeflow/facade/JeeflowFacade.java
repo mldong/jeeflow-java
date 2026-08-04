@@ -32,6 +32,7 @@ import com.mldong.jeeflow.spi.PageResult;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Arrays;
@@ -103,6 +104,8 @@ public class JeeflowFacade {
                 case "processDesign/remove": return designRemove(args);
                 case "processDesign/deploy": return designDeploy(args);
                 case "processDesign/redeploy": return designRedeploy(args);
+                case "processDesign/listByType": return designListByType(args);   // issues/28
+                case "processInstance/bizData": return bizData(args);             // issues/28
                 // ── 视图端点（v1.2.0）──
                 case "processDefine/getLastByName": return getLastByName(args);
                 case "processInstance/highLight": return highLight(args);
@@ -200,15 +203,30 @@ public class JeeflowFacade {
     }
 
     private Map<String, Object> defineRemove(Map<String, Object> args) {
-        Long id = toLong(args.get("id"));
-        repository.removeDefine(id);
+        // issues/28：兼容 {ids} 批量与单 {id}
+        Object ids = args.get("ids");
+        if (ids instanceof Collection) {
+            for (Object id : (Collection<?>) ids) {
+                repository.removeDefine(toLong(id));
+            }
+        } else {
+            repository.removeDefine(toLong(args.get("id")));
+        }
         return ok();
     }
 
     private Map<String, Object> defineUpAndDown(Map<String, Object> args) {
-        Long id = toLong(args.get("id"));
-        int state = Integer.parseInt(args.get("state").toString());
-        repository.updateDefineState(id, state);
+        // issues/28：兼容 {ids, opType} 批量（boot3 前端 IdsParam 惯例）与单 {id, state}
+        Object ids = args.get("ids");
+        Object stateObj = args.get("opType") != null ? args.get("opType") : args.get("state");
+        int state = Integer.parseInt(stateObj.toString());
+        if (ids instanceof Collection) {
+            for (Object id : (Collection<?>) ids) {
+                repository.updateDefineState(toLong(id), state);
+            }
+        } else {
+            repository.updateDefineState(toLong(args.get("id")), state);
+        }
         return ok();
     }
 
@@ -721,8 +739,15 @@ public class JeeflowFacade {
     }
 
     private Map<String, Object> designRemove(Map<String, Object> args) {
-        Long id = toLong(args.get("id"));
-        ext().removeDesign(id);
+        // issues/28：兼容 {ids} 批量（boot3 前端 IdsParam 惯例）与单 {id}
+        Object ids = args.get("ids");
+        if (ids instanceof Collection) {
+            for (Object id : (Collection<?>) ids) {
+                ext().removeDesign(toLong(id));
+            }
+        } else {
+            ext().removeDesign(toLong(args.get("id")));
+        }
         return ok();
     }
 
@@ -825,6 +850,97 @@ public class JeeflowFacade {
         return ok(Map.of(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
     }
 
+    // ═══ issues/28：集成适配下沉 ═══
+
+    /**
+     * 按类型分组列出流程设计（发起申请页数据契约）——不依赖框架字典：
+     * designPage 全量 → 按 type 分组 → 组内每 name 取最新 define 的
+     * {processDefineId, name, displayName, icon, remark, jsonObject}。
+     */
+    private Map<String, Object> designListByType(Map<String, Object> args) {
+        IProcessExtRepository ext = ext();
+        PageQuery query = queryParser.parse(args);
+        query.setPageNum(1);
+        query.setPageSize(Integer.MAX_VALUE - 1);
+        PageResult<ProcessDesign> page = ext.pageDesigns(query);
+        // 每 name 最新 define（version 最大）
+        PageQuery defQuery = new PageQuery(1, Integer.MAX_VALUE - 1);
+        PageResult<IProcessRepository.DefineRow> defPage = repository.pageDefines(defQuery);
+        Map<String, IProcessRepository.DefineRow> latestByName = new LinkedHashMap<>();
+        for (IProcessRepository.DefineRow row : defPage.getRows()) {
+            IProcessRepository.DefineRow prev = latestByName.get(row.getName());
+            if (prev == null || row.getVersion() > prev.getVersion()) {
+                latestByName.put(row.getName(), row);
+            }
+        }
+        Map<String, List<Map<String, Object>>> groups = new LinkedHashMap<>();
+        for (ProcessDesign d : page.getRows()) {
+            String type = d.getType() == null ? "" : d.getType();
+            List<Map<String, Object>> items = groups.computeIfAbsent(type, k -> new ArrayList<>());
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("processDesignId", d.getId());
+            item.put("name", d.getName());
+            item.put("displayName", d.getDisplayName());
+            item.put("icon", d.getIcon());
+            item.put("remark", d.getRemark());
+            IProcessRepository.DefineRow latest = latestByName.get(d.getName());
+            item.put("processDefineId", latest != null ? latest.getId() : null);
+            item.put("processDefineState", latest != null ? latest.getState() : null);
+            // jsonObject：最新设计稿内容（设计器回显）
+            List<ProcessDesignHis> his = ext.listDesignHis(d.getId());
+            if (!his.isEmpty()) {
+                item.put("jsonObject", parseGraph(his.get(0).getContent()));
+            }
+            items.add(item);
+        }
+        return ok(groups);
+    }
+
+    /** 按流程实例回显业务数据（issues/28）：MetaTableReader 由集成方注册（issues/23），未注册明确报错 */
+    private Map<String, Object> bizData(Map<String, Object> args) {
+        Long processInstanceId = toLong(args.get("processInstanceId") != null
+                ? args.get("processInstanceId") : args.get("id"));
+        if (processInstanceId == null) return error("processInstanceId 缺失");
+        // 表名：实例 → 定义 relTableName（回落流程 name）
+        ProcessInstance inst = repository.findInstanceById(processInstanceId);
+        if (inst == null) return error("流程实例不存在");
+        ProcessInstance.ProcessDefine define = repository.findDefineById(inst.getDefineId());
+        if (define == null) return error("流程定义不存在");
+        String tableName = resolveRelTableName(define.getContent());
+        if (tableName == null) return error("流程定义未配置 relTableName");
+        // issues/28：MetaTableReader 由集成方注册（issues/23 约定注册名 metaTableReader），
+        // core 不编译期依赖 persist——按名查找，未注册明确报错
+        Object reader = com.mldong.jeeflow.core.ServiceContext.findByName("metaTableReader", Object.class);
+        if (reader == null) return error("业务数据读取器未注册（ServiceContext.put(\"metaTableReader\", new MetaTableReader(...))，需引入 jeeflow-persist）");
+        try {
+            java.lang.reflect.Method m = reader.getClass().getMethod(
+                    "readByProcessInstance", String.class, Object.class);
+            Object result = m.invoke(reader, tableName, processInstanceId);
+            return result == null ? ok() : ok(result);
+        } catch (Exception e) {
+            return error("业务数据读取失败: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
+        }
+    }
+
+    /** 从流程定义 content 顶层解析 relTableName（缺省回落 name） */
+    private String resolveRelTableName(byte[] content) {
+        if (content == null) return null;
+        try {
+            IJsonProvider json = com.mldong.jeeflow.core.ServiceContext.find(IJsonProvider.class);
+            if (json == null) return null;
+            Map<String, Object> meta = json.fromJson(new String(content, StandardCharsets.UTF_8), Map.class);
+            if (meta == null) return null;
+            String tableName = meta.get("relTableName") != null
+                    ? meta.get("relTableName").toString().trim() : null;
+            if (tableName == null || tableName.isEmpty()) {
+                tableName = meta.get("name") != null ? meta.get("name").toString().trim() : null;
+            }
+            return (tableName == null || tableName.isEmpty()) ? null : tableName;
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
     // ═══ 委托代理（需扩展仓储） ═══
 
     private Map<String, Object> surrogatePage(Map<String, Object> args) {
@@ -902,7 +1018,20 @@ public class JeeflowFacade {
 
     private byte[] contentBytes(Map<String, Object> args) {
         Object content = args.get("content");
-        if (content == null) return null;
+        if (content == null) {
+            // issues/27：兼容 boot3 顶层 JSON（无 content 字段，流程 JSON 顶层展开）——
+            // 非保留字段（除 processDesignId/operator）整体序列化为 content
+            Map<String, Object> copy = new LinkedHashMap<>(args);
+            copy.remove("processDesignId");
+            copy.remove("operator");
+            if (copy.isEmpty()) return null;
+            IJsonProvider json = com.mldong.jeeflow.core.ServiceContext.find(IJsonProvider.class);
+            if (json != null) {
+                content = json.toJson(copy);
+            } else {
+                return null;
+            }
+        }
         if (content instanceof byte[]) return (byte[]) content;
         return content.toString().getBytes(StandardCharsets.UTF_8);
     }
