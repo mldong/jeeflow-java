@@ -16,6 +16,7 @@
     <modules>
         <module>jeeflow-core</module>
         <module>jeeflow-repository-jdbc</module>
+        <module>jeeflow-persist</module>
         <module>jeeflow-spring-boot-autoconfigure</module>
         <module>jeeflow-spring-boot2-starter</module>
         <module>jeeflow-spring-boot3-starter</module>
