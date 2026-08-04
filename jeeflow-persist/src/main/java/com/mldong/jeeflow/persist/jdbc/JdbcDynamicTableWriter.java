@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * JDBC 动态表写入默认实现（issues/18）——零 ORM，仅依赖 {@link DataSource}。
@@ -30,12 +31,24 @@ import java.util.concurrent.ConcurrentHashMap;
 public class JdbcDynamicTableWriter implements DynamicTableWriter {
 
     private static final String SYS_PREFIX = "sys_";
-    private static final String SCHEMA_SQL =
-            "SELECT column_name FROM information_schema.columns "
+    /** 列探测——MySQL：EXTRA(自增) + COLUMN_KEY(主键)；H2/PG：IS_IDENTITY + JOIN 主键约束（标准 SQL 兼容） */
+    private static final String SCHEMA_SQL_MYSQL =
+            "SELECT column_name, extra, column_key FROM information_schema.columns "
                     + "WHERE UPPER(table_name) = UPPER(?) ORDER BY ordinal_position";
+    private static final String SCHEMA_SQL_STD =
+            "SELECT c.column_name, c.is_identity, c.column_default, "
+                    + "CASE WHEN kcu.column_name IS NOT NULL THEN 'PRI' ELSE '' END AS column_key "
+                    + "FROM information_schema.columns c "
+                    + "LEFT JOIN information_schema.table_constraints tc "
+                    + "  ON tc.table_name = c.table_name AND tc.constraint_type = 'PRIMARY KEY' "
+                    + "LEFT JOIN information_schema.key_column_usage kcu "
+                    + "  ON kcu.constraint_name = tc.constraint_name AND kcu.column_name = c.column_name "
+                    + "WHERE UPPER(c.table_name) = UPPER(?) ORDER BY c.ordinal_position";
 
     private final DataSource dataSource;
     private final Map<String, List<ColumnMeta>> schemaCache = new ConcurrentHashMap<>();
+    /** 方言（懒探测）：mysql 用 EXTRA/COLUMN_KEY，其余（H2/PG）用标准 SQL */
+    private volatile Boolean mysql;    // null=未探测
 
     /** 系统字段列约定（可配置；null = 不填充该列） */
     private String createTimeColumn = "create_time";
@@ -49,6 +62,8 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
     /** 列匹配（issues/20）：默认宽松——驼峰↔下划线归一匹配（表单字段 companyName ↔ 表列 company_name）；
      *  需要精确控制列名的集成方显式开启严格模式（忽略大小写精确匹配） */
     private boolean strictColumnMatch = false;
+    /** 主键生成器（issues/21）：非自增主键表（雪花/应用生成）插入时生成主键值，入参表名 */
+    private Function<String, Object> primaryKeyGenerator;
 
     public JdbcDynamicTableWriter(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -63,6 +78,7 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
     public void setIsDeletedColumn(String isDeletedColumn) { this.isDeletedColumn = isDeletedColumn; }
     public void setDefaultUserValue(Object defaultUserValue) { this.defaultUserValue = defaultUserValue; }
     public void setStrictColumnMatch(boolean strictColumnMatch) { this.strictColumnMatch = strictColumnMatch; }
+    public void setPrimaryKeyGenerator(Function<String, Object> primaryKeyGenerator) { this.primaryKeyGenerator = primaryKeyGenerator; }
 
     // ── DynamicTableWriter ─────────────────────────────────────────────────────
 
@@ -86,13 +102,22 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
         // 列过滤（保序）——写入用表列原名（宽松模式下驼峰 key 落库为下划线列名）
         List<String> columns = new ArrayList<>();
         List<Object> values = new ArrayList<>();
-        for (Map.Entry<String, Object> e : data.entrySet()) {
-            String col = e.getKey();
-            if (col == null) continue;
-            ColumnMeta m = findColumn(meta, col.trim());
-            if (m != null) {
-                columns.add(m.getColumnName());
-                values.add(e.getValue());
+        for (ColumnMeta m : meta) {
+            String col = m.getColumnName();
+            String key = findDataKey(data, col);
+            if (key != null) {
+                columns.add(col);
+                values.add(data.get(key));
+                continue;
+            }
+            // 主键生成（issues/21）：非自增主键表且 data 无主键值 → 调生成器；未配置 → 清晰报错
+            if (m.isPrimaryKey() && !m.isAutoIncrement()) {
+                if (primaryKeyGenerator == null) {
+                    throw new IllegalArgumentException("表[" + tableName + "]主键[" + col
+                            + "]非自增且未配置主键生成器（请调用 setPrimaryKeyGenerator，如雪花 IdWorker）");
+                }
+                columns.add(col);
+                values.add(primaryKeyGenerator.apply(tableName));
             }
         }
         if (columns.isEmpty()) return null;
@@ -170,18 +195,51 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
 
     private List<ColumnMeta> loadTableMeta(String tableName) {
         List<ColumnMeta> meta = new ArrayList<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(SCHEMA_SQL)) {
-            ps.setString(1, tableName);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    meta.add(new ColumnMeta(rs.getString(1), false));
+        try (Connection conn = dataSource.getConnection()) {
+            String sql = isMysql(conn) ? SCHEMA_SQL_MYSQL : SCHEMA_SQL_STD;
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, tableName);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        // MySQL: (1)column_name (2)extra (3)column_key
+                        // H2/PG:  (1)column_name (2)is_identity (3)column_default (4)column_key
+                        boolean primaryKey = "PRI".equalsIgnoreCase(rs.getString(isMysql(conn) ? 3 : 4));
+                        boolean autoIncrement;
+                        if (isMysql(conn)) {
+                            autoIncrement = rs.getString(2) != null
+                                    && rs.getString(2).toLowerCase().contains("auto_increment");
+                        } else {
+                            // H2: is_identity=YES；PG: is_identity=YES（identity）或 column_default 含 nextval（serial）
+                            autoIncrement = "YES".equalsIgnoreCase(rs.getString(2))
+                                    || (rs.getString(3) != null && rs.getString(3).contains("nextval"));
+                        }
+                        meta.add(new ColumnMeta(rs.getString(1), primaryKey, autoIncrement));
+                    }
                 }
             }
         } catch (SQLException e) {
             throw new RuntimeException("读取表结构失败: " + tableName + " -> " + e.getMessage(), e);
         }
         return meta;
+    }
+
+    /** 方言探测：MySQL 走 EXTRA/COLUMN_KEY；H2/PG 走标准 SQL（IS_IDENTITY + 主键约束 JOIN） */
+    private boolean isMysql(Connection conn) {
+        Boolean m = mysql;
+        if (m == null) {
+            synchronized (this) {
+                m = mysql;
+                if (m == null) {
+                    try {
+                        m = conn.getMetaData().getDatabaseProductName().toLowerCase().contains("mysql");
+                    } catch (SQLException e) {
+                        m = false;
+                    }
+                    mysql = m;
+                }
+            }
+        }
+        return m;
     }
 
     /** 列匹配（issues/20）：严格=忽略大小写精确；宽松（默认）=驼峰↔下划线归一匹配 */
@@ -199,6 +257,19 @@ public class JdbcDynamicTableWriter implements DynamicTableWriter {
     /** 列名归一：转小写 + 去下划线（companyName / company_name / COMPANY_NAME 等价） */
     private static String normalizeColumn(String name) {
         return name.toLowerCase().replace("_", "");
+    }
+
+    /** 在 data 中找匹配指定表列的 key（宽松模式驼峰 key 匹配下划线列） */
+    private String findDataKey(Map<String, Object> data, String col) {
+        for (String k : data.keySet()) {
+            if (k == null) continue;
+            if (strictColumnMatch) {
+                if (col.equalsIgnoreCase(k)) return k;
+            } else if (normalizeColumn(col).equals(normalizeColumn(k))) {
+                return k;
+            }
+        }
+        return null;
     }
 
     /** 表名安全：非空、非 sys_ 前缀、无非法字符 */

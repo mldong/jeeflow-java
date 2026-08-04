@@ -17,14 +17,22 @@ public class ColumnMeta {
     private final String columnName;
     /** 是否主键 */
     private final boolean primaryKey;
+    /** 是否自增（issues/21：非自增主键表需主键生成器） */
+    private final boolean autoIncrement;
 
     public ColumnMeta(String columnName, boolean primaryKey) {
+        this(columnName, primaryKey, false);
+    }
+
+    public ColumnMeta(String columnName, boolean primaryKey, boolean autoIncrement) {
         this.columnName = columnName;
         this.primaryKey = primaryKey;
+        this.autoIncrement = autoIncrement;
     }
 
     public String getColumnName() { return columnName; }
     public boolean isPrimaryKey() { return primaryKey; }
+    public boolean isAutoIncrement() { return autoIncrement; }
 
     /** 列名不区分大小写比较 */
     @Override

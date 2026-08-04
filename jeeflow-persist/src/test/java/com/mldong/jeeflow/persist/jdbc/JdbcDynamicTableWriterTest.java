@@ -183,4 +183,52 @@ public class JdbcDynamicTableWriterTest {
             assertNull("严格模式下驼峰 key 应被过滤", rs.getString("start_time"));
         }
     }
+
+    /** ⑩ 非自增主键生成（issues/21）：雪花/应用生成主键表，配生成器后插入成功 */
+    @Test
+    public void testPrimaryKeyGenerator() throws Exception {
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS biz_snow");
+            st.execute("CREATE TABLE biz_snow (" +
+                    "id BIGINT PRIMARY KEY," +           // 非自增主键（雪花）
+                    "title VARCHAR(100)," +
+                    "create_time VARCHAR(30)" +
+                    ")");
+        }
+        writer.setPrimaryKeyGenerator(t -> 888L);   // 模拟雪花生成器
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("title", "snow");
+        writer.insert("biz_snow", data);
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT id, title FROM biz_snow")) {
+            assertTrue(rs.next());
+            assertEquals("主键应由生成器生成", 888L, rs.getLong("id"));
+            assertEquals("snow", rs.getString("title"));
+        }
+        // data 已含主键值 → 用之，不调生成器
+        writer.insert("biz_snow", new LinkedHashMap<String, Object>() {{
+            put("id", 999L);
+            put("title", "manual");
+        }});
+        try (Connection conn = ds.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(1) FROM biz_snow WHERE id = 999")) {
+            assertTrue(rs.next());
+            assertEquals(1, rs.getInt(1));
+        }
+    }
+
+    /** ⑪ 非自增主键未配生成器（issues/21）：清晰报错，替代误导性的 SQL 异常 */
+    @Test(expected = IllegalArgumentException.class)
+    public void testMissingPrimaryKeyGenerator() throws Exception {
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS biz_snow2");
+            st.execute("CREATE TABLE biz_snow2 (id BIGINT PRIMARY KEY, title VARCHAR(100))");
+        }
+        // 未配置生成器
+        writer.insert("biz_snow2", new LinkedHashMap<String, Object>() {{
+            put("title", "x");
+        }});
+    }
 }
