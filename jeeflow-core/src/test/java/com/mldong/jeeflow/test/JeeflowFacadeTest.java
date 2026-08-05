@@ -384,6 +384,74 @@ public class JeeflowFacadeTest {
         assertTrue("应包含走过节点 task3: " + historyNodes, historyNodes.contains("task3"));
     }
 
+
+    // ═══ highLight nodeProgress 成员进度回显（issues/41，四语言对齐）═══
+
+    @Test
+    public void testHighLightNodeProgress() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("06-countersign-sequential.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        r = call("processInstance/highLight", args("id", instanceId));
+        assertOk(r);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> np = (Map<String, Object>) ((Map<String, Object>) r.get("data")).get("nodeProgress");
+        // 历史节点 apply：发起人 done + name 经 IUserProvider 解析
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> applyMembers = (List<Map<String, Object>>) ((Map<String, Object>) np.get("apply")).get("members");
+        assertEquals("user1", applyMembers.get(0).get("id"));
+        assertEquals(Boolean.TRUE, applyMembers.get(0).get("done"));
+        assertEquals("用户user1", applyMembers.get(0).get("name"));
+        // 顺序会签进行中：type=SEQUENTIAL、第一位 active、第二位无标记
+        @SuppressWarnings("unchecked")
+        Map<String, Object> task1 = (Map<String, Object>) np.get("task1");
+        assertEquals("SEQUENTIAL", task1.get("type"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> m1 = (List<Map<String, Object>>) task1.get("members");
+        assertEquals("userA", m1.get(0).get("id"));
+        assertEquals(Boolean.TRUE, m1.get(0).get("active"));
+        assertEquals("用户userA", m1.get(0).get("name"));
+        assertEquals("userB", m1.get(1).get("id"));
+        assertNull("userB 不应有 done 标记", m1.get(1).get("done"));
+        assertNull("userB 不应有 active 标记", m1.get(1).get("active"));
+        // 推进会签：userA done → userB active
+        List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, null);
+        for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
+            if ("task1".equals(t.getTaskName())) {
+                rawRepo.addTaskActor(t.getTaskId(), java.util.List.of("userA"));
+                call("processTask/execute", args("processTaskId", t.getTaskId(), "operator", "userA", "submitType", 1));
+            }
+        }
+        r = call("processInstance/highLight", args("id", instanceId));
+        assertOk(r);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> np2 = (Map<String, Object>) ((Map<String, Object>) r.get("data")).get("nodeProgress");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> m2 = (List<Map<String, Object>>) ((Map<String, Object>) np2.get("task1")).get("members");
+        assertEquals(Boolean.TRUE, m2.get(0).get("done"));
+        assertEquals(Boolean.TRUE, m2.get(1).get("active"));
+        // 全部完成 → 全部 done
+        doing = rawRepo.findDoingTasks(instanceId, null);
+        for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
+            if ("task1".equals(t.getTaskName())) {
+                rawRepo.addTaskActor(t.getTaskId(), java.util.List.of("userB"));
+                call("processTask/execute", args("processTaskId", t.getTaskId(), "operator", "userB", "submitType", 1));
+            }
+        }
+        r = call("processInstance/highLight", args("id", instanceId));
+        assertOk(r);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> np3 = (Map<String, Object>) ((Map<String, Object>) r.get("data")).get("nodeProgress");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> m3 = (List<Map<String, Object>>) ((Map<String, Object>) np3.get("task1")).get("members");
+        assertEquals(Boolean.TRUE, m3.get(0).get("done"));
+        assertEquals(Boolean.TRUE, m3.get(1).get("done"));
+        assertNull("完成后不应有 active", m3.get(1).get("active"));
+    }
+
     // ═══ 三个 detail 返回 jsonObject（issues/05-1）═══
 
     @Test

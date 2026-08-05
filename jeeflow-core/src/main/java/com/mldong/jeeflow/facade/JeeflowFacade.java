@@ -26,6 +26,8 @@ import com.mldong.jeeflow.spi.IProcessRepository;
 import com.mldong.jeeflow.spi.JeeflowQueryParser;
 import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
 import com.mldong.jeeflow.domain.Candidate;
+import com.mldong.jeeflow.model.TaskModel;
+import com.mldong.jeeflow.enums.CountersignTypeEnum;
 import com.mldong.jeeflow.spi.PageQuery;
 import com.mldong.jeeflow.spi.PageResult;
 
@@ -34,10 +36,14 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 统一门面（v1.1.0）——"接口即 POST + JSON body"风格的单入口
@@ -397,9 +403,11 @@ public class JeeflowFacade {
             }
         }
         ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        Map<String, Object> nodeProgress = new LinkedHashMap<>();
         if (def != null) {
             try {
                 ProcessModel model = ModelParser.parse(def.getContent());
+                nodeProgress = buildNodeProgress(model, history);
                 collectPath(model.getStart(), activeNodeNames, historyNodeNames, historyEdgeNames,
                         new java.util.HashSet<>(), inst.getVariables(), history);
             } catch (Exception ignored) {
@@ -409,7 +417,82 @@ public class JeeflowFacade {
         data.put("activeNodeNames", activeNodeNames);
         data.put("historyNodeNames", historyNodeNames);
         data.put("historyEdgeNames", historyEdgeNames);
+        data.put("nodeProgress", nodeProgress);
         return ok(data);
+    }
+
+    /** 节点成员进度（issue 41，对齐 Node/Go/Python）：按任务状态组装 nodeProgress——
+     *  会签节点带 type（PARALLEL/SEQUENTIAL），成员 done 按完成状态逐人标记、active 为进行中
+     *  当前位；动态参与人（无静态 actorIds）不返回；name 走 IUserProvider SPI 解析
+     *  （未注册/查不到缺省空串，前端降级显示 id）。成员取任务 actorIds 并集
+     *  （Java 引擎会签任务表驱动，无 operatorList 变量——与三语言同构） */
+    private Map<String, Object> buildNodeProgress(ProcessModel model, List<ProcessTask> history) {
+        Map<String, Object> progress = new LinkedHashMap<>();
+        List<String> names = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (ProcessTask t : history) {
+            if (seen.add(t.getTaskName())) names.add(t.getTaskName());
+        }
+        IUserProvider userProvider = ServiceContext.find(IUserProvider.class);
+        for (String name : names) {
+            List<ProcessTask> ts = history.stream()
+                    .filter(t -> name.equals(t.getTaskName())).collect(Collectors.toList());
+            if (ts.isEmpty()) continue;
+            Set<String> memberSet = new LinkedHashSet<>();
+            for (ProcessTask t : ts) memberSet.addAll(t.getActorIds());
+            List<String> members = new ArrayList<>(memberSet);
+            if (members.isEmpty()) continue; // 动态参与人：无静态成员，不返回
+            Set<String> doneSet = new HashSet<>();
+            for (ProcessTask t : ts) {
+                if (ProcessTaskStateEnum.FINISHED.getCode().equals(t.getTaskState())) {
+                    doneSet.addAll(t.getActorIds());
+                }
+            }
+            String activeActor = null;
+            for (ProcessTask t : ts) {
+                if (ProcessTaskStateEnum.DOING.getCode().equals(t.getTaskState())
+                        && !t.getActorIds().isEmpty()) {
+                    activeActor = t.getActorIds().get(0);
+                    break;
+                }
+            }
+            // 会签判定：模型节点属性（TaskParser codeOf 已兼容 'ALL' 字符串，issue 42）
+            boolean isCs = false;
+            String csType = null;
+            NodeModel node = model.getNode(name);
+            if (node instanceof TaskModel) {
+                TaskModel tm = (TaskModel) node;
+                isCs = ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(tm.getPerformType());
+                if (tm.getCountersignType() != null) {
+                    csType = tm.getCountersignType().name();
+                }
+            }
+            List<Map<String, Object>> memberList = new ArrayList<>();
+            for (String id : members) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", id);
+                m.put("name", resolveUserName(userProvider, id));
+                if (doneSet.contains(id)) m.put("done", true);
+                else if (id.equals(activeActor)) m.put("active", true);
+                memberList.add(m);
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("members", memberList);
+            if (isCs && csType != null) item.put("type", csType);
+            progress.put(name, item);
+        }
+        return progress;
+    }
+
+    /** 成员姓名解析（issue 43/E15）：IUserProvider SPI 解析 realName，查不到缺省空串 */
+    private String resolveUserName(IUserProvider userProvider, String userId) {
+        if (userProvider == null) return "";
+        try {
+            IUserProvider.UserInfo info = userProvider.getUser(userId);
+            return info != null && StringUtils.isNotEmpty(info.getRealName()) ? info.getRealName() : "";
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private void collectPath(NodeModel node, List<String> active,
