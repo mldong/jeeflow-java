@@ -277,6 +277,54 @@ public class JeeflowFullTest {
         assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), updated.getState());
     }
 
+
+    // ═══════════════════════════════════════════
+    // 测试 6.5：串行会签流转守卫（issues/44 E16）——全部成员完成才流转后续节点
+    // ═══════════════════════════════════════════
+    @Test
+    public void test065CountersignSequentialNoRepeatFlow() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("08-countersign-sequential-approve.json");
+        ProcessInstance inst = startFlow(def, FlowData.create());
+
+        // 发起后：apply + 会签任务（userA/userB 各一，全部 DOING）
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals(2, doing.size());
+        // 尚未流转到 approve
+        assertTrue("会签未完成前不应有审批任务",
+                repo.findDoingTasks(inst.getInstanceId(), null).stream()
+                        .noneMatch(t -> "approve".equals(t.getTaskName())));
+
+        // 完成第一个会签成员 → 仍不应流转 approve（非全部完成）
+        ProcessTask task1 = doing.stream().filter(t -> "task1".equals(t.getTaskName())).findFirst().get();
+        repo.addTaskActor(task1.getTaskId(), Arrays.asList("userA"));
+        task1.getActorIds().add("userA");
+        engine.executeProcessTask(task1.getTaskId(), "userA",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+        assertTrue("完成一个成员后不应创建审批任务（E16 守卫）",
+                repo.findDoingTasks(inst.getInstanceId(), null).stream()
+                        .noneMatch(t -> "approve".equals(t.getTaskName())));
+
+        // 完成第二个会签成员 → 流转一次：approve 仅 1 个任务
+        List<ProcessTask> doing2 = repo.findDoingTasks(inst.getInstanceId(), null);
+        ProcessTask task2 = doing2.stream().filter(t -> "task1".equals(t.getTaskName())).findFirst().get();
+        repo.addTaskActor(task2.getTaskId(), Arrays.asList("userB"));
+        task2.getActorIds().add("userB");
+        engine.executeProcessTask(task2.getTaskId(), "userB",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+        List<ProcessTask> approveTasks = repo.findDoingTasks(inst.getInstanceId(), null).stream()
+                .filter(t -> "approve".equals(t.getTaskName())).collect(java.util.stream.Collectors.toList());
+        assertEquals("全部完成才流转：approve 应只有 1 个任务", 1, approveTasks.size());
+
+        // 完成审批 → 流程结束
+        ProcessTask approve = approveTasks.get(0);
+        repo.addTaskActor(approve.getTaskId(), Arrays.asList("leader"));
+        approve.getActorIds().add("leader");
+        engine.executeProcessTask(approve.getTaskId(), "leader",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+        ProcessInstance updated = repo.findInstanceById(inst.getInstanceId());
+        assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), updated.getState());
+    }
+
     // ═══════════════════════════════════════════
     // 测试 7：按比例会签（2人完成即通过）
     // ═══════════════════════════════════════════

@@ -54,8 +54,10 @@ public class CountersignHandler implements IHandler {
         CountersignTypeEnum countersignType = taskModel.getCountersignType();
 
         if (CountersignTypeEnum.SEQUENTIAL.equals(countersignType)) {
-            // 串行会签：每次完成一人就推进
-            execution.setMerged(true);
+            // 串行会签：全部成员完成才流转（issues/44 E16——此前无条件 merged 导致
+            // 每次成员完成都重复流转后续节点）。对齐内置版"最后一人完成才 merged"
+            // 与 Node/Go/Python"doing 空才流转"语义：流转时机 = 全部完成
+            execution.setMerged(finishedCount >= allTasks.size());
         } else {
             // 并行会签：检查条件
             String cond = taskModel.getCountersignCompletionCondition();
