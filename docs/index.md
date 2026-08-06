@@ -11,6 +11,7 @@
 | [流程定义 JSON 格式](./flow-definition.md) | LogicFlow JSON 结构、节点类型、属性 |
 | [SPI 实现指南](./spi-guide.md) | `IProcessRepository` / `IUserProvider` 等 SPI 的实现 |
 | [Spring Boot 集成](./spring-boot.md) | starter 自动装配、配置项、事务 |
+| [Web 框架接入](./web-frameworks.md) | **任意 Web 框架接入门面**：Spring Boot/MVC/JAX-RS 转发层对照 |
 
 ## 演示站
 
