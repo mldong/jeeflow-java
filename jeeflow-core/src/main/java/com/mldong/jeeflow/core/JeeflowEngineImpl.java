@@ -85,20 +85,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             }
             // 6. 持久化
             repository.saveInstance(instance);
-            // 7. 处理抄送
-            Object ccUserIds = args.get(FlowConst.CC_ACTORS_START);
-            if (ccUserIds != null) {
-                String[] ccArr = null;
-                if (ccUserIds instanceof String) {
-                    ccArr = ((String) ccUserIds).split(",");
-                } else if (ccUserIds instanceof Collection) {
-                    Collection<?> coll = (Collection<?>) ccUserIds;
-                    ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
-                }
-                if (ccArr != null && ccArr.length > 0) {
-                    repository.createCcInstance(instance.getInstanceId(), operator, ccArr);
-                }
-            }
+            // 7. 处理抄送（issues/47 E19：f_ccActors 发起时 / tf_ccActors 办理时统一走 handleCcActors）
+            handleCcActors(instance.getInstanceId(), operator, args.get(FlowConst.CC_ACTORS_START));
             // 8. 构建 Execution 并执行开始节点
             Execution exec = buildExecution(model, instance, args, operator);
             model.getStart().execute(exec);
@@ -123,9 +111,26 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             if (node != null) {
                 node.execute(exec);
             }
+            // issues/47 E19：办理时抄送（tf_ccActors）创建 cc 实例（对齐发起时 f_ccActors 语义）
+            handleCcActors(exec.getProcessInstance().getInstanceId(), operator, args.get(FlowConst.CC_ACTORS));
             persistTasks(exec);
             return exec.getProcessTaskList();
         });
+    }
+
+    /** 抄送处理（issues/47 E19 抽取）：f_ccActors/tf_ccActors 统一走此逻辑 */
+    private void handleCcActors(Long instanceId, String operator, Object ccUserIds) {
+        if (ccUserIds == null) return;
+        String[] ccArr = null;
+        if (ccUserIds instanceof String) {
+            ccArr = ((String) ccUserIds).split(",");
+        } else if (ccUserIds instanceof Collection) {
+            Collection<?> coll = (Collection<?>) ccUserIds;
+            ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
+        }
+        if (ccArr != null && ccArr.length > 0) {
+            repository.createCcInstance(instanceId, operator, ccArr);
+        }
     }
 
     @Override

@@ -141,4 +141,19 @@ public class AssignmentHandlerTest {
         ProcessInstance updated = repo.findInstanceById(inst.getInstanceId());
         assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), updated.getState());
     }
+    // ═══ issues/48 E20：表单字段取人 f_ 前缀变量 ═══
+
+    @Test
+    public void testFormFieldAssigneeFPrefix() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("11-assignment-handler.json");
+        // f_ 前缀变量（前端表单提交格式）优先于裸名
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1",
+                FlowData.create().set("f_task1", "userA,userB"));
+        ProcessTask t1 = firstDoing(inst);
+        assertEquals("task1", t1.getTaskName());
+        assertEquals(2, t1.getActorIds().size());
+        assertTrue(t1.getActorIds().contains("userA"));
+        assertTrue(t1.getActorIds().contains("userB"));
+    }
+
 }

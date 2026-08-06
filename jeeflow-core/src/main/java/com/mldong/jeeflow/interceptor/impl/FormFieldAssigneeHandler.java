@@ -41,6 +41,8 @@ public class FormFieldAssigneeHandler implements AssignmentHandler {
     }
 
     private Object findFieldValue(FlowData args, String taskName) {
+        // issues/48 E20：表单字段变量为 f_ 前缀（f_approver），先匹配前缀再回落裸名（兼容存量）
+        if (args.containsKey("f_" + taskName)) return args.get("f_" + taskName);
         if (args.containsKey(taskName)) return args.get(taskName);
         Matcher matcher = NUMBER_SUFFIX_PATTERN.matcher(taskName);
         if (matcher.matches() && args.containsKey(matcher.group(1))) {

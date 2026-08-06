@@ -325,6 +325,32 @@ public class JeeflowFullTest {
         assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), updated.getState());
     }
 
+
+    // ═══════════════════════════════════════════
+    // 测试 6.6：办理时抄送（issues/47 E19）——tf_ccActors 创建 cc 实例
+    // ═══════════════════════════════════════════
+    @Test
+    public void test066ExecuteTaskCcActors() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        ProcessInstance inst = startFlow(def, FlowData.create());
+
+        // 办理 task1 时提交 tf_ccActors → 创建抄送
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        ProcessTask task1 = doing.stream().filter(t -> "task1".equals(t.getTaskName())).findFirst().get();
+        repo.addTaskActor(task1.getTaskId(), java.util.List.of("leader"));
+        task1.getActorIds().add("leader");
+        engine.executeProcessTask(task1.getTaskId(), "leader",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode())
+                        .set(FlowConst.CC_ACTORS, "wangqiang,zhaomin"));
+
+        // 抄送已创建（内存仓储 ccInstances 查询）
+        com.mldong.jeeflow.spi.PageResult<com.mldong.jeeflow.spi.IProcessRepository.InstanceRow> cc =
+                repo.pageCcInstances(new com.mldong.jeeflow.spi.PageQuery());
+        List<com.mldong.jeeflow.spi.IProcessRepository.InstanceRow> hit = cc.getRows().stream()
+                .filter(r -> r.getId() != null && r.getId().equals(inst.getInstanceId())).collect(java.util.stream.Collectors.toList());
+        assertFalse("办理时抄送应创建 cc 实例: " + cc.getRows(), hit.isEmpty());
+    }
+
     // ═══════════════════════════════════════════
     // 测试 7：按比例会签（2人完成即通过）
     // ═══════════════════════════════════════════
