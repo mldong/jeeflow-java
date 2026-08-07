@@ -1115,6 +1115,11 @@ public class JeeflowFacade {
                 return null;
             }
         }
+        if (content instanceof Map || content instanceof Collection) {
+            // content 为对象（前端直接传 JSON 对象）：序列化为 JSON 字符串
+            IJsonProvider json = com.mldong.jeeflow.core.ServiceContext.find(IJsonProvider.class);
+            if (json != null) return json.toJson(content).getBytes(StandardCharsets.UTF_8);
+        }
         if (content instanceof byte[]) return (byte[]) content;
         return content.toString().getBytes(StandardCharsets.UTF_8);
     }
