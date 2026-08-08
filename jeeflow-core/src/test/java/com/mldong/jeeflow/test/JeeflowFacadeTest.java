@@ -617,12 +617,15 @@ public class JeeflowFacadeTest {
         assertOk(r);
         Long defineId = toLong(((Map<String, Object>) r.get("data")).get("processDefineId"));
         assertEquals(1, (int) extRepo.findDesignById(designId).getIsDeployed());
+        Integer versionAfterDeploy = repo.findDefineById(defineId).getVersion();
 
         // 重新部署 → 同一 defineId（内容替换，version 不变）+ is_deployed=1
         r = call("processDesign/redeploy", args("id", designId, "operator", "zhangsan"));
         assertOk(r);
         assertEquals(defineId, toLong(((Map<String, Object>) r.get("data")).get("processDefineId")));
         assertEquals(1, (int) extRepo.findDesignById(designId).getIsDeployed());
+        // issues/59：redeploy 是替换语义，version 必须保持（JDBC 仓储曾因 def 未携带 version 兜底误写 1）
+        assertEquals("redeploy 后 version 应不变", versionAfterDeploy, repo.findDefineById(defineId).getVersion());
 
         // 设计稿内容变更（updateDefine，不同 content）→ 新快照 + is_deployed=0
         String content2 = new String(Files.readAllBytes(

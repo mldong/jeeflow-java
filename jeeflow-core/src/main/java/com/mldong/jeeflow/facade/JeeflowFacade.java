@@ -923,6 +923,8 @@ public class JeeflowFacade {
             def.setDisplayName(model.getDisplayName());
             def.setType(model.getType());
             def.setContent(bytes);
+            // issues/59：保留原 version（替换语义，不递增）；缺失时 JDBC 兜底会误写 1
+            def.setVersion(last.getVersion());
             def.setUpdateUser(toStr(args.get("operator"), "system"));
             repository.updateDefine(def);
             defineId = last.getId();
