@@ -12,7 +12,7 @@ spring:
       mode: always
       encoding: utf-8
       schema-locations: classpath:schema.sql
-      data-locations: classpath:data.sql
+      # 数据不再用 data.sql 双份维护：流程定义由 FlowSeedRunner 启动时直读共享 flows 目录
 
 jeeflow:
   worker-id: 1

@@ -1,8 +1,6 @@
 package com.mldong.jeeflow.demo;
 
-import com.mldong.jeeflow.core.JeeflowEngine;
 import com.mldong.jeeflow.facade.JeeflowFacade;
-import com.mldong.jeeflow.spi.IProcessRepository;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
@@ -15,15 +13,16 @@ import java.util.Map;
  * {@code "processDefine/page"}），body JSON 原样透传，返回 {@code {code, msg, data}}
  * （code=0 成功 / 99999999 失败，对齐 boot2 CommonResult）。
  * 路径和参数格式对齐 mldong-boot2，与门面 action 清单（spec §06）一一对应。</p>
+ *
+ * <p>门面 Bean 由 {@link DemoConfig} 装配（含扩展仓储与用户搜索钩子）。</p>
  */
 @RestController
 public class DemoController {
 
     private final JeeflowFacade facade;
 
-    public DemoController(JeeflowEngine engine, IProcessRepository repository) {
-        // 演示站未接入扩展仓储（design/surrogate 管理端点），门面按可空处理
-        this.facade = new JeeflowFacade(engine, repository, null);
+    public DemoController(JeeflowFacade facade) {
+        this.facade = facade;
     }
 
     /** 统一门面入口：/wf/{action}，action 支持多段（如 processDefine/page，{*action} 捕获剩余路径） */
