@@ -52,6 +52,26 @@ public class PersistPostInterceptor implements FlowInterceptor {
     public static final int PERM_EDIT = 2;
     public static final int PERM_HIDDEN = 3;
 
+    // ─── 元数据（issues/60 注册助手） ────────────────────────────────────────────
+
+    /** SPI 清单字典显示名（wf_flow_interceptor_post_process） */
+    public static final String META_DISPLAY_NAME = "业务数据自动入库";
+    /** SPI 清单排序 */
+    public static final int META_ORDER = 0;
+    /** SPI 清单分组（post 后置拦截器） */
+    public static final String META_GROUP = "post";
+
+    /**
+     * 注册助手（issues/60）：把本拦截器元数据注册到元数据注册中心，
+     * 供 SPI 清单字典（wf_flow_interceptor_post_process）展示——集成方在组装
+     * persist 实例的同一处一行调用，保证「字典有 ⟺ 实例有」同步，不写死字符串。
+     * 同名注册可覆盖引擎默认。
+     */
+    public static void registerMeta(com.mldong.jeeflow.metadata.HandlerRegistry registry) {
+        registry.register(com.mldong.jeeflow.interceptor.FlowInterceptor.class,
+                PersistPostInterceptor.class.getName(), META_DISPLAY_NAME, META_ORDER, META_GROUP);
+    }
+
     private DynamicTableWriter writer;
 
     public void setWriter(DynamicTableWriter writer) {

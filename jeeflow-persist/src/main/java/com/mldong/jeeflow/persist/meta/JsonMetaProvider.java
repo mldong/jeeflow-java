@@ -3,6 +3,7 @@ package com.mldong.jeeflow.persist.meta;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -80,7 +81,12 @@ public class JsonMetaProvider implements IDynamicMetaProvider {
         String resource = classpathDir + "/" + fileName;
         try (InputStream in = getClass().getClassLoader().getResourceAsStream(resource)) {
             if (in == null) return null;
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            // Java 8 兼容读全量（readAllBytes 为 Java 9+ API，pom target 8 下编译不过）
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+            return new String(bos.toByteArray(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("读取表元数据失败: " + resource + " -> " + e.getMessage(), e);
         }

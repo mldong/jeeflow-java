@@ -1,0 +1,30 @@
+# jeeflow-java demo Docker 镜像
+# 构建阶段：使用 maven 镜像（含 JDK 21）
+FROM maven:3.9-eclipse-temurin-21-alpine AS builder
+WORKDIR /build
+
+# 1. 复制所有 pom.xml（根 pom.xml 引用全部 8 个模块）
+COPY pom.xml ./
+COPY jeeflow-core/pom.xml jeeflow-core/
+COPY jeeflow-repository-jdbc/pom.xml jeeflow-repository-jdbc/
+COPY jeeflow-persist/pom.xml jeeflow-persist/
+COPY jeeflow-spring-boot-autoconfigure/pom.xml jeeflow-spring-boot-autoconfigure/
+COPY jeeflow-spring-boot2-starter/pom.xml jeeflow-spring-boot2-starter/
+COPY jeeflow-spring-boot3-starter/pom.xml jeeflow-spring-boot3-starter/
+COPY jeeflow-spring-boot4-starter/pom.xml jeeflow-spring-boot4-starter/
+COPY jeeflow-demo-boot4/pom.xml jeeflow-demo-boot4/
+RUN mvn -q dependency:go-offline -pl jeeflow-core,jeeflow-repository-jdbc,jeeflow-persist,jeeflow-spring-boot-autoconfigure,jeeflow-spring-boot4-starter,jeeflow-demo-boot4 -am
+
+# 2. 复制源码并构建
+COPY . .
+RUN mvn -q install -DskipTests -pl jeeflow-core,jeeflow-repository-jdbc,jeeflow-persist,jeeflow-spring-boot-autoconfigure,jeeflow-spring-boot4-starter
+RUN mvn -q -pl jeeflow-demo-boot4 package -DskipTests
+
+# 运行阶段
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+COPY --from=builder /build/jeeflow-demo-boot4/target/jeeflow-demo-boot4-*.jar /app/demo.jar
+# 共享 flows 目录（FlowSeedRunner 启动时从外部文件加载，不在 jar 里）
+COPY jeeflow-core/src/test/resources/flows /app/flows
+EXPOSE 8080
+CMD ["java", "-Djeeflow.flows.dir=/app/flows", "-jar", "demo.jar"]

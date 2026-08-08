@@ -337,7 +337,7 @@ public class JeeflowFullTest {
         // 办理 task1 时提交 tf_ccActors → 创建抄送
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
         ProcessTask task1 = doing.stream().filter(t -> "task1".equals(t.getTaskName())).findFirst().get();
-        repo.addTaskActor(task1.getTaskId(), java.util.List.of("leader"));
+        repo.addTaskActor(task1.getTaskId(), java.util.Arrays.asList("leader"));
         task1.getActorIds().add("leader");
         engine.executeProcessTask(task1.getTaskId(), "leader",
                 FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode())

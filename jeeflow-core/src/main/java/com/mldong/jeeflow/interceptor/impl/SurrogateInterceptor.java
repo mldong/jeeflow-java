@@ -8,6 +8,7 @@ import com.mldong.jeeflow.interceptor.FlowInterceptor;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -47,7 +48,7 @@ public class SurrogateInterceptor implements FlowInterceptor {
                         task.getActorIds().add(agent);
                         JeeflowEngine engine = execution.getEngine();
                         if (engine != null) {
-                            engine.getRepository().addTaskActor(task.getTaskId(), List.of(agent));
+                            engine.getRepository().addTaskActor(task.getTaskId(), Collections.singletonList(agent));
                         }
                     }
                 }

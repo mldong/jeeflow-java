@@ -18,6 +18,7 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -163,7 +164,7 @@ public class JdbcProcessExtRepository implements IProcessExtRepository {
     public List<ProcessDesignHis> listDesignHis(Long designId) {
         String sql = "SELECT id, process_design_id, content, create_time, create_user " +
                 "FROM wf_process_design_his WHERE process_design_id = ? ORDER BY id DESC";
-        return queryList(sql, List.of(designId), rs -> {
+        return queryList(sql, Collections.singletonList(designId), rs -> {
             ProcessDesignHis his = new ProcessDesignHis();
             his.setId(rs.getLong("id"));
             his.setProcessDesignId(rs.getLong("process_design_id"));

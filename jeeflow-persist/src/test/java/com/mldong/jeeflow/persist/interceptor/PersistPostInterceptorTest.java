@@ -597,4 +597,22 @@ public class PersistPostInterceptorTest {
             assertFalse(rs.next());
         }
     }
+
+    // ═══ issues/60：注册助手 ═══
+
+    @Test
+    public void testRegisterMeta() {
+        com.mldong.jeeflow.metadata.HandlerRegistry registry =
+                new com.mldong.jeeflow.metadata.HandlerRegistry();
+        PersistPostInterceptor.registerMeta(registry);
+        List<com.mldong.jeeflow.metadata.HandlerMeta> post =
+                registry.listHandlers(com.mldong.jeeflow.interceptor.FlowInterceptor.class, "post");
+        assertEquals(1, post.size());
+        assertEquals(PersistPostInterceptor.class.getName(), post.get(0).getClassName());
+        assertEquals("业务数据自动入库", post.get(0).getDisplayName());
+        // 同名覆盖：集成方二次注册（增强版同名）仍可覆盖/追加——按注册顺序列出
+        PersistPostInterceptor.registerMeta(registry);
+        assertEquals(2, registry.listHandlers(
+                com.mldong.jeeflow.interceptor.FlowInterceptor.class, "post").size());
+    }
 }

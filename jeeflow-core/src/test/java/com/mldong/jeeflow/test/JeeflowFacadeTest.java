@@ -283,7 +283,7 @@ public class JeeflowFacadeTest {
 
         // 抄送：创建 + 我的抄送 + 已读
         r = call("processInstance/createCCInstance",
-                args("processInstanceId", instanceId, "operator", "zhangsan", "actorIds", List.of("lisi", "wangwu")));
+                args("processInstanceId", instanceId, "operator", "zhangsan", "actorIds", Arrays.asList("lisi", "wangwu")));
         assertOk(r);
         r = call("processInstance/ccList", args("operator", "lisi"));
         assertOk(r);
@@ -297,10 +297,10 @@ public class JeeflowFacadeTest {
         assertEquals(1, ((List<?>) r.get("data")).size());
 
         // 加签/转交
-        r = call("processTask/addCandidate", args("processTaskId", doing.get(0).getTaskId(), "actorIds", List.of("zhaoliu")));
+        r = call("processTask/addCandidate", args("processTaskId", doing.get(0).getTaskId(), "actorIds", Arrays.asList("zhaoliu")));
         assertOk(r);
         assertTrue(rawRepo.findTaskActors(doing.get(0).getTaskId()).contains("zhaoliu"));
-        r = call("processTask/surrogate", args("processTaskId", doing.get(0).getTaskId(), "actorIds", List.of("sunqi")));
+        r = call("processTask/surrogate", args("processTaskId", doing.get(0).getTaskId(), "actorIds", Arrays.asList("sunqi")));
         assertOk(r);
         assertTrue(rawRepo.findTaskActors(doing.get(0).getTaskId()).contains("sunqi"));
 
@@ -356,14 +356,14 @@ public class JeeflowFacadeTest {
         List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, null);
         for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
             if ("task1".equals(t.getTaskName())) {
-                rawRepo.addTaskActor(t.getTaskId(), java.util.List.of("leader"));
+                rawRepo.addTaskActor(t.getTaskId(), java.util.Arrays.asList("leader"));
                 call("processTask/execute", args("processTaskId", t.getTaskId(), "operator", "leader", "submitType", 1));
             }
         }
         doing = rawRepo.findDoingTasks(instanceId, null);
         for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
             if ("task3".equals(t.getTaskName())) {
-                rawRepo.addTaskActor(t.getTaskId(), java.util.List.of("director"));
+                rawRepo.addTaskActor(t.getTaskId(), java.util.Arrays.asList("director"));
                 call("processTask/execute", args("processTaskId", t.getTaskId(), "operator", "director", "submitType", 1));
             }
         }
@@ -421,7 +421,7 @@ public class JeeflowFacadeTest {
         List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, null);
         for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
             if ("task1".equals(t.getTaskName())) {
-                rawRepo.addTaskActor(t.getTaskId(), java.util.List.of("userA"));
+                rawRepo.addTaskActor(t.getTaskId(), java.util.Arrays.asList("userA"));
                 call("processTask/execute", args("processTaskId", t.getTaskId(), "operator", "userA", "submitType", 1));
             }
         }
@@ -437,7 +437,7 @@ public class JeeflowFacadeTest {
         doing = rawRepo.findDoingTasks(instanceId, null);
         for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
             if ("task1".equals(t.getTaskName())) {
-                rawRepo.addTaskActor(t.getTaskId(), java.util.List.of("userB"));
+                rawRepo.addTaskActor(t.getTaskId(), java.util.Arrays.asList("userB"));
                 call("processTask/execute", args("processTaskId", t.getTaskId(), "operator", "userB", "submitType", 1));
             }
         }
@@ -770,7 +770,7 @@ public class JeeflowFacadeTest {
                 repo.findDoingTasks(inst2, new String[]{});
         assertFalse(t2.isEmpty());
         assertEquals("未指定时 task1 参与者应为 leader: " + t2.get(0).getActorIds(),
-                java.util.List.of("leader"), t2.get(0).getActorIds());
+                java.util.Arrays.asList("leader"), t2.get(0).getActorIds());
         r = call("processTask/todoList", args("operator", "userA"));
         assertOk(r);
         rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");

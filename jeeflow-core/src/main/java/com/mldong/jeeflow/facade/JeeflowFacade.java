@@ -25,6 +25,8 @@ import com.mldong.jeeflow.spi.IUserSearchProvider;
 import com.mldong.jeeflow.spi.IProcessRepository;
 import com.mldong.jeeflow.spi.JeeflowQueryParser;
 import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
+
+import java.util.Collections;
 import com.mldong.jeeflow.domain.Candidate;
 import com.mldong.jeeflow.model.TaskModel;
 import com.mldong.jeeflow.enums.CountersignTypeEnum;
@@ -172,7 +174,7 @@ public class JeeflowFacade {
         // boot2 startAndExecute：自动完成申请节点（assignee="applicant" → 发起人）
         List<ProcessTask> doingTasks = repository.findDoingTasks(inst.getInstanceId(), new String[]{});
         for (ProcessTask task : doingTasks) {
-            repository.addTaskActor(task.getTaskId(), List.of(operator));
+            repository.addTaskActor(task.getTaskId(), Collections.singletonList(operator));
             flowArgs.put(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode());
             // 对齐 boot3：f_nextNodeOperator（发起时预指派人）→ tf_nextNodeOperator（引擎执行参数）
             Object startNextOp = flowArgs.get(FlowConst.PROCESS_START_NEXT_NODE_OPERATOR);
@@ -190,7 +192,7 @@ public class JeeflowFacade {
         byte[] bytes = contentBytes(args);
         ProcessModel model = ModelParser.parse(bytes);
         Long defineId = saveDeployedDefine(model, bytes);
-        return ok(Map.of(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
+        return ok(Collections.singletonMap(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
     }
 
     private Map<String, Object> redeploy(Map<String, Object> args) {
@@ -847,7 +849,7 @@ public class JeeflowFacade {
         design.setIsDeployed(1);
         design.setUpdateUser(toStr(args.get("operator"), "system"));
         ext.updateDesign(design);
-        return ok(Map.of(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
+        return ok(Collections.singletonMap(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
     }
 
     /** 修改流程设计基本信息（对齐 boot3 ProcessDesignController.update，不写设计稿快照） */
@@ -932,7 +934,7 @@ public class JeeflowFacade {
         design.setIsDeployed(1);
         design.setUpdateUser(toStr(args.get("operator"), "system"));
         ext.updateDesign(design);
-        return ok(Map.of(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
+        return ok(Collections.singletonMap(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
     }
 
     // ═══ issues/28：集成适配下沉 ═══

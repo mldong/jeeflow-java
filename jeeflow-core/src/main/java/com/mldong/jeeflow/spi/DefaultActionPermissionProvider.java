@@ -1,5 +1,8 @@
 package com.mldong.jeeflow.spi;
 
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -16,19 +19,23 @@ import java.util.Set;
  */
 public class DefaultActionPermissionProvider implements IActionPermissionProvider {
 
-    /** boot3 注解 OR 语义的 action（任选其一即有权） */
-    private static final Map<String, String[]> OR_RULES = Map.ofEntries(
-            Map.entry("processDefine/detail", new String[]{"wf:processDefine:detail", "wf:processDesign:listByType"}),
-            Map.entry("processDefine/startAndExecute", new String[]{"wf:processDefine:startAndExecute", "wf:processDesign:listByType"}),
-            Map.entry("processDefine/getLastByName", new String[]{"wf:processDefine:detail", "wf:processDesign:listByType", "wf:processDefine:getLastByName"}),
-            Map.entry("processTask/candidatePage", new String[]{"wf:processTask:execute", "wf:processTask:candidatePage"}),
-            Map.entry("processTask/jumpAbleTaskNameList", new String[]{"wf:processTask:execute"}));
+    // Java 8 兼容初始化（Map.ofEntries/Set.of 为 Java 9+ API，pom target 8 下运行 NoSuchMethodError）
+    private static final Map<String, String[]> OR_RULES = new HashMap<>();
+    private static final Set<String> NO_PERM_ACTIONS = new HashSet<>();
 
-    /** boot3 无权限注解的 action（登录即可） */
-    private static final Set<String> NO_PERM_ACTIONS = Set.of(
-            "processInstance/detail", "processInstance/highLight", "processInstance/approvalRecord",
-            "processInstance/getAssigneeTextData", "processInstance/bizData",
-            "processTask/detail", "processTask/addCandidate", "processTask/latest");
+    static {
+        // boot3 注解 OR 语义的 action（任选其一即有权）
+        OR_RULES.put("processDefine/detail", new String[]{"wf:processDefine:detail", "wf:processDesign:listByType"});
+        OR_RULES.put("processDefine/startAndExecute", new String[]{"wf:processDefine:startAndExecute", "wf:processDesign:listByType"});
+        OR_RULES.put("processDefine/getLastByName", new String[]{"wf:processDefine:detail", "wf:processDesign:listByType", "wf:processDefine:getLastByName"});
+        OR_RULES.put("processTask/candidatePage", new String[]{"wf:processTask:execute", "wf:processTask:candidatePage"});
+        OR_RULES.put("processTask/jumpAbleTaskNameList", new String[]{"wf:processTask:execute"});
+        // boot3 无权限注解的 action（登录即可）
+        NO_PERM_ACTIONS.addAll(Arrays.asList(
+                "processInstance/detail", "processInstance/highLight", "processInstance/approvalRecord",
+                "processInstance/getAssigneeTextData", "processInstance/bizData",
+                "processTask/detail", "processTask/addCandidate", "processTask/latest"));
+    }
 
     @Override
     public String[] permissionCodes(String action) {
