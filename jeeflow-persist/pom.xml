@@ -14,15 +14,15 @@
     <packaging>jar</packaging>
 
     <name>jeeflow-persist</name>
-    <description>jeeflow 动态表写入组件（引擎无关）——列过滤 / 参数�?INSERT / 系统字段 / 幂等�? 工作流入库适配拦截器（issues/18�?/description>
+    <description>jeeflow 动态表写入组件（引擎无关）——列过滤 / 参数化 INSERT / 系统字段 / 幂等，+ 工作流入库适配拦截器（issues/18）</description>
 
     <dependencies>
-        <!-- 引擎核心（拦截器适配依赖 FlowInterceptor；writer 本身引擎无关�?-->
+        <!-- 引擎核心（拦截器适配依赖 FlowInterceptor；writer 本身引擎无关） -->
         <dependency>
             <groupId>com.mldong.jeeflow</groupId>
             <artifactId>jeeflow-core</artifactId>
         </dependency>
-        <!-- 元数�?JSON 配置加载（issues/23 JsonMetaProvider；集成方几乎必有 jackson�?-->
+        <!-- 元数据 JSON 配置加载（issues/23 JsonMetaProvider；集成方几乎必有 jackson） -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>

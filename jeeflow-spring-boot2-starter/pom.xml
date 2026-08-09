@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>jeeflow-spring-boot2-starter</name>
-    <description>jeeflow Spring Boot 2.x Starter（JDK 8�?/description>
+    <description>jeeflow Spring Boot 2.x Starter（JDK 8）</description>
 
     <dependencies>
         <dependency>
