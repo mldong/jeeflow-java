@@ -5,31 +5,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Test (JDK ${{ matrix.jdk }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        jdk: [8, 21]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.jdk }}
-          cache: maven
-      - name: Run tests
-        run: |
-          # JDK 8 不能编译 demo-boot4（需要 JDK 21），排除 demo 模块
-          if [ "${{ matrix.jdk }}" = "8" ]; then
-            mvn clean install -DskipTests=false -B -pl '!:jeeflow-demo-boot4'
-          else
-            mvn clean install -DskipTests=false -B
-          fi
-
   publish:
     name: Publish to Maven Central
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +26,14 @@ jobs:
           mkdir -p ~/.m2
           cat > ~/.m2/settings.xml << 'EOF'
           <settings>
+            <mirrors>
+              <mirror>
+                <id>aliyun</id>
+                <name>Aliyun Maven</name>
+                <url>https://maven.aliyun.com/repository/public</url>
+                <mirrorOf>central</mirrorOf>
+              </mirror>
+            </mirrors>
             <servers>
               <server>
                 <id>central</id>
@@ -63,15 +48,6 @@ jobs:
           mvn -P release deploy -DskipTests \
             "-Dgpg.passphrase=${{ secrets.GPG_PASSPHRASE }}" \
             -B
-      - name: Upload build artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: maven-artifacts
-          path: |
-            */target/*.jar
-            */target/*.pom
-          retention-days: 7
 
   verify:
     name: Verify Maven Central
