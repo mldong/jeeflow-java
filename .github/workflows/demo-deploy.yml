@@ -1,5 +1,7 @@
 name: Demo Deploy
 on:
+  push:
+    tags: ['v*.*.*']
   workflow_dispatch:
 
 jobs:
@@ -36,7 +38,7 @@ jobs:
         run: docker build -f Dockerfile.demo -t jeeflow-java-demo:latest .
       - name: Export image
         run: docker save jeeflow-java-demo:latest -o jeeflow-java-demo.tar
-      - name: Upload to server
+      - name: SCP image to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -44,6 +46,7 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           source: jeeflow-java-demo.tar
           target: /java_projects/jeeflow/demo/
+          overwrite: true
       - name: Load image and restart
         uses: appleboy/ssh-action@v1
         with:
