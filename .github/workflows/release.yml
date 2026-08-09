@@ -45,10 +45,21 @@ jobs:
           EOF
       - name: Publish to Maven Central
         run: |
-          mvn -P release deploy -DskipTests \
-            "-Dgpg.passphrase=${{ secrets.GPG_PASSPHRASE }}" \
-            -pl '!:jeeflow-demo-boot4' \
-            -B
+          # 重试 3 次（Sonatype 偶尔暂时性失败）
+          for i in 1 2 3; do
+            echo "=== 尝试发布 ($i/3) ==="
+            if mvn -P release deploy -DskipTests \
+              "-Dgpg.passphrase=${{ secrets.GPG_PASSPHRASE }}" \
+              -pl '!:jeeflow-demo-boot4' \
+              -B; then
+              echo "✅ 发布成功"
+              exit 0
+            fi
+            echo "⚠️ 第 $i 次尝试失败，等待 30 秒后重试..."
+            sleep 30
+          done
+          echo "❌ 3 次尝试均失败"
+          exit 1
 
   verify:
     name: Verify Maven Central
