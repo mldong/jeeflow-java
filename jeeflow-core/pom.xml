@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.mldong.jeeflow</groupId>
         <artifactId>jeeflow-parent</artifactId>
-        <version>1.8.13</version>
+        <version>1.8.14</version>
     </parent>
 
     <artifactId>jeeflow-core</artifactId>
@@ -17,13 +17,13 @@
     <description>jeeflow 工作流引擎核心——零框架依赖</description>
 
     <dependencies>
-        <!-- 日志门面（provided——由集成方提供具体实现，如 logback/log4j2） -->
+        <!-- 日志门面（provided——由集成方提供具体实现，�?logback/log4j2�?-->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
             <scope>provided</scope>
         </dependency>
-        <!-- 测试（不进 JAR） -->
+        <!-- 测试（不�?JAR�?-->
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>

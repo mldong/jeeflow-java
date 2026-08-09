@@ -7,14 +7,14 @@
     <parent>
         <groupId>com.mldong.jeeflow</groupId>
         <artifactId>jeeflow-parent</artifactId>
-        <version>1.8.13</version>
+        <version>1.8.14</version>
     </parent>
 
     <artifactId>jeeflow-repository-jdbc</artifactId>
     <packaging>jar</packaging>
 
     <name>jeeflow-repository-jdbc</name>
-    <description>jeeflow 工作流引擎 JDBC 仓储实现——纯 JDBC，零 ORM 依赖</description>
+    <description>jeeflow 工作流引�?JDBC 仓储实现——纯 JDBC，零 ORM 依赖</description>
 
     <dependencies>
         <!-- 引擎核心 -->
@@ -34,7 +34,7 @@
             <artifactId>h2</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- Jackson 用于测试中解析 JSON 流程定义 -->
+        <!-- Jackson 用于测试中解�?JSON 流程定义 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>

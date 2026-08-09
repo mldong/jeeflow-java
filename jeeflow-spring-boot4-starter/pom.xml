@@ -7,14 +7,14 @@
     <parent>
         <groupId>com.mldong.jeeflow</groupId>
         <artifactId>jeeflow-parent</artifactId>
-        <version>1.8.13</version>
+        <version>1.8.14</version>
     </parent>
 
     <artifactId>jeeflow-spring-boot4-starter</artifactId>
     <packaging>jar</packaging>
 
     <name>jeeflow-spring-boot4-starter</name>
-    <description>jeeflow Spring Boot 4.x Starter（JDK 17+）</description>
+    <description>jeeflow Spring Boot 4.x Starter（JDK 17+�?/description>
 
     <dependencies>
         <dependency>

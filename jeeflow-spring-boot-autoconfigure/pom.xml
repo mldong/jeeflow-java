@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.mldong.jeeflow</groupId>
         <artifactId>jeeflow-parent</artifactId>
-        <version>1.8.13</version>
+        <version>1.8.14</version>
     </parent>
 
     <artifactId>jeeflow-spring-boot-autoconfigure</artifactId>
@@ -26,7 +26,7 @@
             <artifactId>jeeflow-repository-jdbc</artifactId>
         </dependency>
 
-        <!-- Spring Boot（provided，由 starter 引入具体版本） -->
+        <!-- Spring Boot（provided，由 starter 引入具体版本�?-->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
@@ -53,7 +53,7 @@
             <version>2.13.5</version>
         </dependency>
 
-        <!-- slf4j (provided, 由最终项目提供) -->
+        <!-- slf4j (provided, 由最终项目提�? -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
