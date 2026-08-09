@@ -19,7 +19,13 @@ jobs:
           java-version: ${{ matrix.jdk }}
           cache: maven
       - name: Run tests
-        run: mvn clean install -DskipTests=false -B
+        run: |
+          # JDK 8 不能编译 demo-boot4（需要 JDK 21），排除 demo 模块
+          if [ "${{ matrix.jdk }}" = "8" ]; then
+            mvn clean install -DskipTests=false -B -pl '!:jeeflow-demo-boot4'
+          else
+            mvn clean install -DskipTests=false -B
+          fi
 
   publish:
     name: Publish to Maven Central
