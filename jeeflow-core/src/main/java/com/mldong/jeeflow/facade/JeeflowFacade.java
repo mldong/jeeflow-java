@@ -633,6 +633,12 @@ public class JeeflowFacade {
                             tm.put("name", node.getName());
                             tm.put("displayName", node.getDisplayName());
                             tm.put("type", node.getClass().getSimpleName().replace("Model", "").toLowerCase());
+                            // issues/62：taskModel 补 form/ext（节点字段权限，对齐 boot2 setTaskModel 整份挂载）
+                            if (node instanceof TaskModel) {
+                                TaskModel taskNode = (TaskModel) node;
+                                tm.put("form", taskNode.getForm());
+                                tm.put("ext", taskNode.getExt());
+                            }
                             vo.put("taskModel", tm);
                             break;
                         }

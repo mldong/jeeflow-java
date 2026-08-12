@@ -280,6 +280,13 @@ public class JeeflowFacadeTest {
         assertEquals("task1", data.get("taskName"));
         assertEquals(Boolean.TRUE, data.get("executable"));
         assertNotNull(data.get("taskModel"));
+        // issues/62：taskModel 补 form/ext（字段权限）
+        @SuppressWarnings("unchecked")
+        Map<String, Object> tm = (Map<String, Object>) data.get("taskModel");
+        assertEquals("leave-form", tm.get("form"));
+        Map<String, Object> tmExt = (Map<String, Object>) tm.get("ext");
+        assertEquals(Integer.valueOf(1), tmExt.get("PERMISSION_f_leaveType"));
+        assertEquals(Integer.valueOf(2), tmExt.get("PERMISSION_days"));
 
         // 抄送：创建 + 我的抄送 + 已读
         r = call("processInstance/createCCInstance",

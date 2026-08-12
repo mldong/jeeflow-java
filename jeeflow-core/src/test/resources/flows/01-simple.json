@@ -45,7 +45,11 @@
         "form": "leave-form",
         "assignee": "leader",
         "taskType": 0,
-        "performType": 0
+        "performType": 0,
+        "field": {
+          "PERMISSION_f_leaveType": 1,
+          "PERMISSION_days": 2
+        }
       },
       "text": {
         "value": "上级审批"
