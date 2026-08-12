@@ -37,8 +37,10 @@ jobs:
       - name: Build Docker image
         run: docker build -f Dockerfile.demo -t jeeflow-java-demo:latest .
       - name: Export image
-        run: docker save jeeflow-java-demo:latest -o jeeflow-java-demo.tar
-      - name: SCP image to server
+        run: |
+          docker save jeeflow-java-demo:latest -o jeeflow-java-demo.tar
+          chmod 644 jeeflow-java-demo.tar
+      - name: Upload to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -46,7 +48,6 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           source: jeeflow-java-demo.tar
           target: /java_projects/jeeflow/demo/
-          overwrite: true
       - name: Load image and restart
         uses: appleboy/ssh-action@v1
         with:
@@ -56,6 +57,8 @@ jobs:
           script: |
             cd /java_projects/jeeflow/demo
             docker load -i jeeflow-java-demo.tar
-            docker-compose up -d jeeflow-java-demo
+            # Stop and remove old container if exists
+            docker stop jeeflow-java-demo 2>/dev/null && docker rm jeeflow-java-demo 2>/dev/null || true
+            docker run -d --name jeeflow-java-demo --restart always -p 16080:8080 jeeflow-java-demo:latest
             rm -f jeeflow-java-demo.tar
-            echo "✅ Java demo deployed"
+            echo "✅ Java demo deployed (port 16080->8080)"
