@@ -30,6 +30,8 @@ jobs:
             </mirrors>
           </settings>
           EOF
+      - name: Install parent POM
+        run: mvn -q install -N -DskipTests
       - name: Install dependencies
         run: mvn -q install -DskipTests -pl jeeflow-core,jeeflow-repository-jdbc,jeeflow-spring-boot-autoconfigure,jeeflow-spring-boot4-starter
       - name: Build demo jar
