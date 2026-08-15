@@ -1,6 +1,6 @@
 # Java 演示站（Demo）
 
-> 演示站是运行在 :8080 的 Spring Boot 4 应用（H2 内存库 + 10 个示例流程），对接 jeeflow-ui 体验完整流程。SDK 集成方式见 [快速开始](./getting-started.md)。
+> 演示站是运行在 :8080 的 Spring Boot 4 应用（H2 内存库 + 14 个示例流程），对接 jeeflow-ui 体验完整流程。SDK 集成方式见 [快速开始](./getting-started.md)。
 
 ## 环境要求
 
@@ -17,7 +17,7 @@ Maven 3.6+。
 cd jeeflow-demo-boot4
 # ⚠️ 先安装依赖模块到 .m2，否则运行报 IUserProvider$UserInfo NoClassDefFoundError（.m2 是旧 jar）
 mvn -q install -DskipTests -pl jeeflow-core,jeeflow-repository-jdbc,jeeflow-spring-boot-autoconfigure,jeeflow-spring-boot4-starter
-# 启动（H2 内存库 + data.sql 种子流程，10 个示例流程）
+# 启动（H2 内存库，FlowSeedRunner 直读共享 flows 目录，14 个示例流程）
 mvn -q -pl jeeflow-demo-boot4 spring-boot:run
 # → http://localhost:8080
 ```
@@ -45,7 +45,7 @@ curl -s -X POST $B/wf/processDefine/startAndExecute -H "Content-Type: applicatio
 mvn test -pl jeeflow-core,jeeflow-repository-jdbc
 ```
 
-> `JeeflowFullTest` 统一用 `startFlow` helper 模拟 startAndExecute 契约（10 个流程 JSON 的第一个节点都是 apply 申请节点，测试不能假设 start 后第一个任务就是业务任务）。
+> `JeeflowFullTest` 统一用 `startFlow` helper 模拟 startAndExecute 契约（14 个流程 JSON 的第一个节点都是 apply 申请节点，测试不能假设 start 后第一个任务就是业务任务）。
 
 ## 生产部署
 
@@ -62,4 +62,4 @@ java -jar jeeflow-demo-boot4/target/*.jar --server.port=8080
 |------|------|------|
 | 启动报 `Lookup method resolution failed` / `NoClassDefFoundError: IUserProvider$UserInfo` | `.m2` 里是旧 jar | 先 `mvn install` 依赖模块（见上） |
 | define/page 的 createTime 为 null | data.sql 种子数据无时间列 | 演示数据问题，非 bug |
-| 改了流程 JSON 不生效 | 演示站从 data.sql 加载（与共享 JSON 双份） | 同步 `src/main/resources/data.sql` |
+| 改了流程 JSON 不生效 | 演示站启动时由 `FlowSeedRunner` 直读共享 flows 目录（无 data.sql 双份） | 重启演示站，或调 `/api/reset` 清库后自动重载 |
