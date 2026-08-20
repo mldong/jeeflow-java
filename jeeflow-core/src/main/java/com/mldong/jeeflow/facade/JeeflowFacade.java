@@ -1432,8 +1432,13 @@ public class JeeflowFacade {
         return s != null ? s : def;
     }
 
+    /** 解析时间入参：兼容 `yyyy-MM-dd HH:mm:ss`（前端 RangePicker/SPEC 契约）与 ISO `T`（issues/77） */
     private static LocalDateTime parseTime(Object val) {
         if (val == null) return null;
-        try { return LocalDateTime.parse(val.toString()); } catch (Exception e) { return null; }
+        String s = val.toString().trim();
+        if (s.isEmpty()) return null;
+        try { return LocalDateTime.parse(s, TIME_FMT); } catch (Exception ignored) { }
+        try { return LocalDateTime.parse(s); } catch (Exception ignored) { }
+        return null;
     }
 }

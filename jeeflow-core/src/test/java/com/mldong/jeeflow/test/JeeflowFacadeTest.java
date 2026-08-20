@@ -240,10 +240,10 @@ public class JeeflowFacadeTest {
     /** issues/77：委托编辑链路 save → detail 回显 → update 改字段 → detail 再回显断言变更 */
     @Test
     public void testSurrogateDetailAndUpdate() {
-        // 新增（带时间窗）
+        // 新增（带时间窗，用前端 RangePicker 实际提交的 yyyy-MM-dd HH:mm:ss 空格格式）
         Map<String, Object> r = call("processSurrogate/save", args(
                 "operator", "zhangsan", "surrogate", "lisi", "processName", "leave",
-                "startTime", "2026-08-01T00:00:00", "endTime", "2026-08-31T23:59:59", "enabled", 1));
+                "startTime", "2026-08-01 00:00:00", "endTime", "2026-08-31 23:59:59", "enabled", 1));
         assertOk(r);
         Long surrogateId = toLong(((Map<String, Object>) r.get("data")).get("id"));
         assertNotNull(surrogateId);
@@ -262,7 +262,7 @@ public class JeeflowFacadeTest {
         // update：改代理人/时间窗/启用状态（前端编辑表单不带 operator，授权人应保留）
         r = call("processSurrogate/update", args(
                 "id", surrogateId, "surrogate", "wangwu", "processName", "leave",
-                "startTime", "2026-09-01T00:00:00", "endTime", "2026-09-30T23:59:59", "enabled", 0));
+                "startTime", "2026-09-01 00:00:00", "endTime", "2026-09-30 23:59:59", "enabled", 0));
         assertOk(r);
         assertEquals(surrogateId, toLong(((Map<String, Object>) r.get("data")).get("id")));
 
