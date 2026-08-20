@@ -237,6 +237,52 @@ public class JeeflowFacadeTest {
         assertNull(extRepo.findSurrogateById(surrogateId));
     }
 
+    /** issues/77：委托编辑链路 save → detail 回显 → update 改字段 → detail 再回显断言变更 */
+    @Test
+    public void testSurrogateDetailAndUpdate() {
+        // 新增（带时间窗）
+        Map<String, Object> r = call("processSurrogate/save", args(
+                "operator", "zhangsan", "surrogate", "lisi", "processName", "leave",
+                "startTime", "2026-08-01T00:00:00", "endTime", "2026-08-31T23:59:59", "enabled", 1));
+        assertOk(r);
+        Long surrogateId = toLong(((Map<String, Object>) r.get("data")).get("id"));
+        assertNotNull(surrogateId);
+
+        // detail 回显：行结构齐全 + 时间格式化（前端 form.vue 用 startTime/endTime 组 RangePicker）
+        r = call("processSurrogate/detail", args("id", surrogateId));
+        assertOk(r);
+        Map<String, Object> d = (Map<String, Object>) r.get("data");
+        assertEquals("leave", d.get("processName"));
+        assertEquals("zhangsan", d.get("operator"));
+        assertEquals("lisi", d.get("surrogate"));
+        assertEquals(Integer.valueOf(1), d.get("enabled"));
+        assertEquals("2026-08-01 00:00:00", d.get("startTime"));
+        assertEquals("2026-08-31 23:59:59", d.get("endTime"));
+
+        // update：改代理人/时间窗/启用状态（前端编辑表单不带 operator，授权人应保留）
+        r = call("processSurrogate/update", args(
+                "id", surrogateId, "surrogate", "wangwu", "processName", "leave",
+                "startTime", "2026-09-01T00:00:00", "endTime", "2026-09-30T23:59:59", "enabled", 0));
+        assertOk(r);
+        assertEquals(surrogateId, toLong(((Map<String, Object>) r.get("data")).get("id")));
+
+        // detail 再回显：变更生效 + 授权人未被清空
+        r = call("processSurrogate/detail", args("id", surrogateId));
+        assertOk(r);
+        d = (Map<String, Object>) r.get("data");
+        assertEquals("wangwu", d.get("surrogate"));
+        assertEquals("zhangsan", d.get("operator"));
+        assertEquals(Integer.valueOf(0), d.get("enabled"));
+        assertEquals("2026-09-01 00:00:00", d.get("startTime"));
+        assertEquals("2026-09-30 23:59:59", d.get("endTime"));
+
+        // 负向：id 不存在
+        r = call("processSurrogate/detail", args("id", 99999L));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        r = call("processSurrogate/update", args("id", 99999L, "surrogate", "wangwu"));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+    }
+
     // ═══ 视图端点（v1.2.0） ═══
 
     @Test

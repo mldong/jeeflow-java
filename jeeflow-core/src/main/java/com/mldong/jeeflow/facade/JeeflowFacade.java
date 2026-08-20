@@ -131,6 +131,8 @@ public class JeeflowFacade {
                 // ── 委托代理（需扩展仓储）──
                 case "processSurrogate/page": return surrogatePage(args);
                 case "processSurrogate/save": return surrogateSave(args);
+                case "processSurrogate/update": return surrogateUpdate(args);   // issues/77
+                case "processSurrogate/detail": return surrogateDetail(args);   // issues/77
                 case "processSurrogate/remove": return surrogateRemove(args);
                 default:
                     return error("未知 action: " + action);
@@ -1055,13 +1057,7 @@ public class JeeflowFacade {
             surrogate = ext.findSurrogateById(id);
             if (surrogate == null) return error("委托记录不存在");
         }
-        surrogate.setProcessName(toStr(args.get("processName")));
-        surrogate.setOperator(toStr(args.get("operator"))); // 授权人 = 操作人
-        surrogate.setSurrogate(toStr(args.get("surrogate")));
-        surrogate.setStartTime(parseTime(args.get("startTime")));
-        surrogate.setEndTime(parseTime(args.get("endTime")));
-        surrogate.setEnabled(toInt(args.get("enabled"), 1));
-        surrogate.setUpdateUser(operator);
+        applySurrogateFields(surrogate, args, operator);
         if (id == null) {
             ext.saveSurrogate(surrogate);
         } else {
@@ -1070,6 +1066,42 @@ public class JeeflowFacade {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("id", surrogate.getId());
         return ok(data);
+    }
+
+    /** 委托更新（issues/77）：按 id 全字段更新，授权人缺省时保留原值（前端编辑表单不带 operator） */
+    private Map<String, Object> surrogateUpdate(Map<String, Object> args) {
+        IProcessExtRepository ext = ext();
+        String operator = toStr(args.get("operator"), "user1");
+        Long id = toLong(args.get("id"));
+        if (id == null) return error("id 缺失");
+        ProcessSurrogate surrogate = ext.findSurrogateById(id);
+        if (surrogate == null) return error("委托记录不存在");
+        applySurrogateFields(surrogate, args, operator);
+        ext.updateSurrogate(surrogate);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", surrogate.getId());
+        return ok(data);
+    }
+
+    /** 委托详情（issues/77）：按 id 查单条，返回行结构（时间格式化） */
+    private Map<String, Object> surrogateDetail(Map<String, Object> args) {
+        Long id = toLong(args.get("id"));
+        ProcessSurrogate surrogate = ext().findSurrogateById(id);
+        if (surrogate == null) return error("委托记录不存在");
+        return ok(surrogateRowToMap(surrogate));
+    }
+
+    /** 委托写入公共字段。授权人（operator）仅在显式传入时覆盖，避免 update 时清空原授权人 */
+    private void applySurrogateFields(ProcessSurrogate s, Map<String, Object> args, String operator) {
+        s.setProcessName(toStr(args.get("processName")));
+        if (args.containsKey("operator")) {
+            s.setOperator(toStr(args.get("operator"))); // 授权人 = 操作人
+        }
+        s.setSurrogate(toStr(args.get("surrogate")));
+        s.setStartTime(parseTime(args.get("startTime")));
+        s.setEndTime(parseTime(args.get("endTime")));
+        s.setEnabled(toInt(args.get("enabled"), 1));
+        s.setUpdateUser(operator);
     }
 
     private Map<String, Object> surrogateRemove(Map<String, Object> args) {
