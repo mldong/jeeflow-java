@@ -1053,6 +1053,7 @@ public class JeeflowFacade {
             surrogate = new ProcessSurrogate();
             surrogate.setCreateUser(operator);
             surrogate.setCreateTime(LocalDateTime.now());
+            surrogate.setOperator(operator); // 授权人 = 操作人（新建必有）
         } else {
             surrogate = ext.findSurrogateById(id);
             if (surrogate == null) return error("委托记录不存在");
