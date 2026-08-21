@@ -973,6 +973,15 @@ public class JeeflowFacadeTest {
         assertNotNull("candidatePage 应返回候选: " + r, candidates);
         List<String> userIds = new ArrayList<>();
         for (Map<String, Object> c : candidates) userIds.add(String.valueOf(c.get("userId")));
+        // issues/80：模型候选行键对齐前端 UserSelect（valueField='id'）——断言 id 键存在且可取值，不再依赖 userId
+        List<String> ids = new ArrayList<>();
+        for (Map<String, Object> c : candidates) {
+            assertNotNull("候选行应有 id 键（前端 valueField='id' 取值）: " + c, c.get("id"));
+            assertNotNull("候选行应有 realName 键: " + c, c.get("realName"));
+            ids.add(String.valueOf(c.get("id")));
+        }
+        assertEquals("id 与 userId 应一一对齐（行键归一）", userIds, ids);
+        assertTrue("id 应含 candidateUsers 指定人 userA: " + ids, ids.contains("userA"));
         assertTrue("应含 candidateUsers 指定人 userA: " + userIds, userIds.contains("userA"));
         assertTrue("应含 candidateUsers 指定人 userB: " + userIds, userIds.contains("userB"));
         assertTrue("应含 candidateGroups 角色成员 finA: " + userIds, userIds.contains("finA"));

@@ -687,6 +687,8 @@ public class JeeflowFacade {
         }
         if (candidateList != null && !candidateList.isEmpty()) {
             // 候选配置命中 → 用户信息映射（IUserSearchProvider 优先，其次 IUserProvider）
+            // issues/80：行键对齐前端 UserSelect（valueField='id' / labelField='realName'），
+            // 统一出口 {id, realName, userName?, deptName?}（userName/deptName 仅当 provider 可得）
             List<Map<String, Object>> rows = new ArrayList<>();
             for (Candidate c : candidateList) {
                 Map<String, Object> u = null;
@@ -701,6 +703,9 @@ public class JeeflowFacade {
                             u = new LinkedHashMap<>();
                             u.put("userId", info.getUserId());
                             u.put("realName", info.getRealName());
+                            if (info.getDeptName() != null) {
+                                u.put("deptName", info.getDeptName());
+                            }
                         }
                     }
                 }
@@ -709,7 +714,7 @@ public class JeeflowFacade {
                     u.put("userId", c.getActorId());
                     u.put("realName", c.getActorId());
                 }
-                rows.add(u);
+                rows.add(candidateRow(c.getActorId(), u));
             }
             return pageResult(PageResult.of(1, 10, rows.size(), rows));
         }
@@ -718,6 +723,35 @@ public class JeeflowFacade {
             return error("未配置 IUserSearchProvider（用户搜索钩子）");
         }
         return pageResult(userSearchProvider.page(queryParser.parse(args)));
+    }
+
+    /**
+     * candidatePage 模型候选行键归一（issues/80）——对齐前端 UserSelect 契约 {id, realName, userName?, deptName?}。
+     *
+     * <p>provider 返回行可能用 userId/id 任一作主键、且未必带 realName，此处统一：
+     * 主键收敛为 {@code id}（兼容 userId/id 两种来源），realName 缺失时回落 id，
+     * userName/deptName 仅在 provider 提供时透传。前端 valueField='id' 取值不再为空。</p>
+     */
+    private Map<String, Object> candidateRow(String actorId, Map<String, Object> src) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        Object id = src.get("id") != null ? src.get("id") : src.get("userId");
+        if (id == null) {
+            id = actorId;
+        }
+        row.put("id", String.valueOf(id));
+        Object realName = src.get("realName");
+        row.put("realName", realName != null ? realName : row.get("id"));
+        // 兼容旧消费方：provider 若已给出 userId 键则原样保留
+        if (src.get("userId") != null) {
+            row.put("userId", src.get("userId"));
+        }
+        if (src.get("userName") != null) {
+            row.put("userName", src.get("userName"));
+        }
+        if (src.get("deptName") != null) {
+            row.put("deptName", src.get("deptName"));
+        }
+        return row;
     }
 
     private Map<String, Object> taskSurrogate(Map<String, Object> args) {
