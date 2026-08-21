@@ -580,6 +580,151 @@ public class JeeflowFacadeTest {
         return null;
     }
 
+    // ═══ execute submitType 3/4/5/6/20 门面行为（issues/79，前端按钮全量暴露路径）═══
+
+    /** 02-multi-task：发起（apply 自动完成）→ 推进到名为 name 的任务节点 */
+    private Long startMultiTaskAt(String name) throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("02-multi-task.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        String[] order = {"task1", "task2", "task3"};
+        String[] actor = {"leader", "manager", "boss"};
+        int target = 0;
+        for (int i = 0; i < order.length; i++) if (order[i].equals(name)) target = i;
+        for (int i = 0; i < target; i++) {
+            Long tid = doingTaskId(instanceId, order[i]);
+            assertNotNull("应推进到 " + order[i], tid);
+            rawRepo.addTaskActor(tid, Arrays.asList(actor[i]));
+            assertOk(call("processTask/execute",
+                    args("processTaskId", tid, "operator", actor[i], "submitType", 1)));
+        }
+        return instanceId;
+    }
+
+    @Test
+    public void testExecuteSubmitTypeBehavior() throws Exception {
+        // ── submitType=3 ROLLBACK：task2 退回上一步 → task1 新待办（actor=退回操作人），实例保持 DOING(10)
+        Long rb = startMultiTaskAt("task2");
+        Long t2 = doingTaskId(rb, "task2");
+        rawRepo.addTaskActor(t2, Arrays.asList("manager"));
+        assertOk(call("processTask/execute", args("processTaskId", t2, "operator", "manager", "submitType", 3)));
+        Long rbTask1 = doingTaskId(rb, "task1");
+        assertNotNull("ROLLBACK 应在 task1 产生新待办", rbTask1);
+        assertTrue("退回任务 actor 应为退回操作人 manager",
+                rawRepo.findTaskActors(rbTask1).contains("manager"));
+        assertEquals("ROLLBACK 后实例应保持 DOING(10)", Integer.valueOf(10),
+                rawRepo.findInstanceById(rb).getState());
+
+        // ── submitType=4 JUMP：task3 跳转 apply（第一个任务节点 = start 直接后继，assignee=发起人）
+        //   taskName 取自 jumpAbleTaskNameList（已完成任务节点清单）
+        Long jp = startMultiTaskAt("task3");
+        Long t3 = doingTaskId(jp, "task3");
+        rawRepo.addTaskActor(t3, Arrays.asList("boss"));
+        Map<String, Object> jl = call("processTask/jumpAbleTaskNameList", args("processInstanceId", jp));
+        assertOk(jl);
+        List<?> items = (List<?>) jl.get("data");
+        assertTrue("jumpAble 应包含已完成的 task1/apply",
+                items.stream().anyMatch(m -> "task1".equals(((Map<?, ?>) m).get("value")))
+                        && items.stream().anyMatch(m -> "apply".equals(((Map<?, ?>) m).get("value"))));
+        assertOk(call("processTask/execute", args("processTaskId", t3, "operator", "boss",
+                "submitType", 4, "taskName", "apply")));
+        Long jpApply = doingTaskId(jp, "apply");
+        assertNotNull("JUMP 应在 apply（首任务节点）产生新待办", jpApply);
+        assertEquals("跳首任务节点 assignee 强制为发起人 zhangsan",
+                Arrays.asList("zhangsan"), rawRepo.findTaskActors(jpApply));
+        assertEquals("JUMP 后实例应保持 DOING(10)", Integer.valueOf(10),
+                rawRepo.findInstanceById(jp).getState());
+
+        // ── 负向：JUMP taskName 不存在 → 99999999 + 「无法找到节点模型」
+        Long jn = startMultiTaskAt("task2");
+        Long t2n = doingTaskId(jn, "task2");
+        rawRepo.addTaskActor(t2n, Arrays.asList("manager"));
+        Map<String, Object> jr = call("processTask/execute", args("processTaskId", t2n, "operator", "manager",
+                "submitType", 4, "taskName", "no-such-node"));
+        assertEquals(Integer.valueOf(99999999), jr.get("code"));
+        assertTrue("JUMP 无效节点应报「无法找到节点模型」: " + jr.get("msg"),
+                String.valueOf(jr.get("msg")).contains("无法找到节点模型"));
+
+        // ── submitType=5 RE_APPLY：task1 重新提交（前端 detail 抽屉场景，含 f_ 表单 + tf_nextNodeOperator）
+        Long ra = startMultiTaskAt("task1");
+        Long t1r = doingTaskId(ra, "task1");
+        rawRepo.addTaskActor(t1r, Arrays.asList("leader"));
+        assertOk(call("processTask/execute", args("processTaskId", t1r, "operator", "leader",
+                "submitType", 5, "tf_nextNodeOperator", "manager", "f_leaveType", "annual")));
+        assertEquals("RE_APPLY 后应推进到 task2", "task2",
+                rawRepo.findDoingTasks(ra, null).get(0).getTaskName());
+        assertEquals("tf_nextNodeOperator 应覆盖 task2 处理人",
+                Arrays.asList("manager"), rawRepo.findTaskActors(doingTaskId(ra, "task2")));
+        assertEquals("f_ 表单字段应落实例变量", "annual",
+                rawRepo.findInstanceById(ra).getVariables().get("f_leaveType"));
+        assertEquals("RE_APPLY 后实例应保持 DOING(10)", Integer.valueOf(10),
+                rawRepo.findInstanceById(ra).getState());
+
+        // ── submitType=6 ROLLBACK_TO_OPERATOR：task3 退回发起人 → apply 重执行、actor=发起人 zhangsan
+        Long ro = startMultiTaskAt("task3");
+        Long t3o = doingTaskId(ro, "task3");
+        rawRepo.addTaskActor(t3o, Arrays.asList("boss"));
+        assertOk(call("processTask/execute", args("processTaskId", t3o, "operator", "boss", "submitType", 6)));
+        Long roApply = doingTaskId(ro, "apply");
+        assertNotNull("ROLLBACK_TO_OPERATOR 应重执行首个任务节点 apply", roApply);
+        assertEquals("退回发起人 assignee 强制为发起人 zhangsan",
+                Arrays.asList("zhangsan"), rawRepo.findTaskActors(roApply));
+        assertEquals("退回发起人后实例应保持 DOING(10)", Integer.valueOf(10),
+                rawRepo.findInstanceById(ro).getState());
+
+        // ── 负向：非处理人执行被拒（NOT_ALLOWED_EXECUTE）
+        Long na = startMultiTaskAt("task1");
+        Long t1n = doingTaskId(na, "task1");
+        Map<String, Object> nr = call("processTask/execute",
+                args("processTaskId", t1n, "operator", "hacker", "submitType", 1));
+        assertEquals("非处理人执行应报 99999999", Integer.valueOf(99999999), nr.get("code"));
+        assertTrue("非处理人执行应报参与者错误: " + nr.get("msg"),
+                String.valueOf(nr.get("msg")).contains("不能执行"));
+    }
+
+    @Test
+    public void testExecuteReject() throws Exception {
+        // submitType=2 REJECT：task1 拒绝 → executeAndJumpToEnd → 实例 REJECT(45)
+        // （issues/79：补门面级 submitType=2 参数路径，与 PHP 对齐；Go/Python/Node 同补）
+        Long instId = startMultiTaskAt("task1");
+        Long t1 = doingTaskId(instId, "task1");
+        rawRepo.addTaskActor(t1, Arrays.asList("leader"));
+        assertOk(call("processTask/execute", args("processTaskId", t1, "operator", "leader", "submitType", 2)));
+        assertEquals("REJECT 后实例应为 REJECT(45)", Integer.valueOf(45),
+                rawRepo.findInstanceById(instId).getState());
+        assertTrue("REJECT 后应无 DOING 任务", rawRepo.findDoingTasks(instId, null).isEmpty());
+    }
+
+    @Test
+    public void testExecuteCountersignDisagree() throws Exception {
+        // 06-countersign-sequential：apply 自动完成 → task1 串行会签 userA（userB 未开始）
+        ProcessInstance.ProcessDefine def = registerFlow("06-countersign-sequential.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        Long taskA = doingTaskId(instanceId, "task1");
+        assertNotNull("会签节点应有 userA 的 DOING 任务", taskA);
+        rawRepo.addTaskActor(taskA, Arrays.asList("userA"));
+        // submitType=20：门面自动注入 countersignDisagreeFlag=1 → CountersignHandler 一票否决
+        // （merged=true → 会签节点提前流转 end），flag 落任务/实例变量
+        assertOk(call("processTask/execute", args("processTaskId", taskA, "operator", "userA", "submitType", 20)));
+        com.mldong.jeeflow.domain.ProcessInstance inst = rawRepo.findInstanceById(instanceId);
+        // 一票否决效果：会签节点被提前流转 end（若否决未生效，串行会签将停在 DOING 等 userB）
+        assertEquals("会签否决后实例应完成（end 节点 submitType≠2 → FINISHED 20）",
+                Integer.valueOf(20), inst.getState());
+        assertEquals("countersignDisagreeFlag=1 应落实例变量", Integer.valueOf(1),
+                inst.getVariables().get("countersignDisagreeFlag"));
+        com.mldong.jeeflow.domain.ProcessTask doneA = rawRepo.findTaskById(taskA);
+        assertEquals("否决任务应已完成", com.mldong.jeeflow.enums.ProcessTaskStateEnum.FINISHED.getCode(),
+                doneA.getTaskState());
+        assertEquals("countersignDisagreeFlag=1 应落任务变量", Integer.valueOf(1),
+                doneA.getVariables().get("countersignDisagreeFlag"));
+        assertEquals("否决人应记录为实际操作人", "userA", doneA.getActorId());
+    }
+
     // ═══ 列表字段契约 + 时间格式（issues/05-2 / 05-3）═══
 
     @Test
