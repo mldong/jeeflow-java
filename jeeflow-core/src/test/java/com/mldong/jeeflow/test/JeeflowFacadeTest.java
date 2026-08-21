@@ -541,6 +541,45 @@ public class JeeflowFacadeTest {
         assertNotNull(((Map<String, Object>) r.get("data")).get("jsonObject"));
     }
 
+    // ═══ taskDetail performType/taskType 出口数字契约（issues/78）═══
+
+    @Test
+    public void testTaskDetailPerformTypeNumeric() throws Exception {
+        // 普通流程：task1 performType=0、taskType=0（出口应为数字 0，非 null/非枚举 name）
+        ProcessInstance.ProcessDefine simple = registerFlow("01-simple.json");
+        Map<String, Object> s1 = call("processInstance/startAndExecute",
+                args("processDefineId", simple.getId(), "operator", "zhangsan"));
+        assertOk(s1);
+        Long simpleInstId = toLong(((Map<String, Object>) s1.get("data")).get("processInstanceId"));
+        Map<String, Object> d1 = call("processTask/detail",
+                args("id", doingTaskId(simpleInstId, "task1"), "operator", "leader"));
+        assertOk(d1);
+        Map<String, Object> vo1 = (Map<String, Object>) d1.get("data");
+        assertEquals("普通任务 performType 应为数字 0", Integer.valueOf(0), vo1.get("performType"));
+        assertEquals("普通任务 taskType 应为数字 0", Integer.valueOf(0), vo1.get("taskType"));
+
+        // 会签流程：task1 performType=1（出口应为数字 1，非字符串 "COUNTERSIGN"）
+        ProcessInstance.ProcessDefine seq = registerFlow("06-countersign-sequential.json");
+        Map<String, Object> s2 = call("processInstance/startAndExecute",
+                args("processDefineId", seq.getId(), "operator", "user1"));
+        assertOk(s2);
+        Long seqInstId = toLong(((Map<String, Object>) s2.get("data")).get("processInstanceId"));
+        Map<String, Object> d2 = call("processTask/detail",
+                args("id", doingTaskId(seqInstId, "task1"), "operator", "userA"));
+        assertOk(d2);
+        Map<String, Object> vo2 = (Map<String, Object>) d2.get("data");
+        assertEquals("会签任务 performType 应为数字 1", Integer.valueOf(1), vo2.get("performType"));
+        assertEquals("会签任务 taskType 应为数字 0", Integer.valueOf(0), vo2.get("taskType"));
+    }
+
+    /** 找指定实例下进行中、名为 name 的任务 id */
+    private Long doingTaskId(Long instanceId, String name) {
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findDoingTasks(instanceId, null)) {
+            if (name.equals(t.getTaskName())) return t.getTaskId();
+        }
+        return null;
+    }
+
     // ═══ 列表字段契约 + 时间格式（issues/05-2 / 05-3）═══
 
     @Test

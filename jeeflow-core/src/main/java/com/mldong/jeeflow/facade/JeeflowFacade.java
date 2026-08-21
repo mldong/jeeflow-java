@@ -1197,8 +1197,9 @@ public class JeeflowFacade {
         vo.put("processInstanceId", t.getProcessInstanceId());
         vo.put("taskName", t.getTaskName());
         vo.put("displayName", t.getDisplayName());
-        vo.put("taskType", t.getTaskType());
-        vo.put("performType", t.getPerformType());
+        // issues/78：出口数字 code（对齐 Go/Python/Node/PHP），不吐枚举 name 字符串
+        vo.put("taskType", t.getTaskType() != null ? t.getTaskType().getCode() : null);
+        vo.put("performType", t.getPerformType() != null ? t.getPerformType().getCode() : null);
         vo.put("taskState", t.getTaskState());
         vo.put("operator", t.getActorId());
         vo.put("formKey", t.getFormKey());
