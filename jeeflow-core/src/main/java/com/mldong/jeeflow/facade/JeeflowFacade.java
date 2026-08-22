@@ -621,12 +621,21 @@ public class JeeflowFacade {
         Map<String, Object> vo = taskVo(task);
         vo.put("taskActorIdList", repository.findTaskActors(taskId));
         vo.put("executable", task.isAllowed(operator));
+        // issues/82-5：任务级 ext.isFirstTaskNode（前端 detail.vue 双兜底 record.ext?.isFirstTaskNode）
+        // 首个任务节点且进行中 → 前端可"重新提交"，与 instance detail 的 activeTaskList 行语义一致
+        boolean doing = ProcessTaskStateEnum.DOING.getCode().equals(task.getTaskState());
+        Map<String, Object> tExt = task.getVariables() != null
+                ? new LinkedHashMap<>(task.getVariables()) : new LinkedHashMap<>();
+        tExt.put("isFirstTaskNode", false);
+        vo.put("ext", tExt);
         // taskModel：流程定义中对应节点（显示名/表单）
         ProcessInstance inst = repository.findInstanceById(task.getProcessInstanceId());
         if (inst != null) {
             ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
-            vo.put("jsonObject", def != null ? parseGraph(def.getContent()) : null); // issues/05
+            Map<String, Object> jsonObject = def != null ? parseGraph(def.getContent()) : null; // issues/05
+            vo.put("jsonObject", jsonObject);
             if (def != null) {
+                tExt.put("isFirstTaskNode", doing && task.getTaskName().equals(firstTaskNodeId(jsonObject)));
                 try {
                     ProcessModel model = ModelParser.parse(def.getContent());
                     for (com.mldong.jeeflow.model.NodeModel node : model.getNodes()) {

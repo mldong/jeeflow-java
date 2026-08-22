@@ -580,6 +580,67 @@ public class JeeflowFacadeTest {
         return null;
     }
 
+    // ═══ issues/82-5：task detail 任务级 ext.isFirstTaskNode（前端 detail.vue 双兜底）═══
+
+    @Test
+    public void testTaskDetailExtIsFirstTaskNode() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        // startAndExecute 自动完成 apply → 剩 task1（DOING，非首节点）
+        Map<String, Object> s1 = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(s1);
+        Long instanceId = toLong(((Map<String, Object>) s1.get("data")).get("processInstanceId"));
+        Long task1Id = doingTaskId(instanceId, "task1");
+        Map<String, Object> d = call("processTask/detail", args("id", task1Id, "operator", "leader"));
+        assertOk(d);
+        Map<String, Object> vo = (Map<String, Object>) d.get("data");
+        Map<String, Object> ext = (Map<String, Object>) vo.get("ext");
+        assertNotNull("task detail 应含 ext 容器: " + vo.keySet(), ext);
+        assertEquals("task1 非首任务节点，ext.isFirstTaskNode 应为 false",
+                Boolean.FALSE, ext.get("isFirstTaskNode"));
+    }
+
+    @Test
+    public void testTaskDetailExtIsFirstTaskNodeTrue() throws Exception {
+        // 直接启动（不自动完成 apply）→ apply 为首任务节点且 DOING → ext.isFirstTaskNode=true
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        com.mldong.jeeflow.domain.ProcessInstance inst =
+                engine.startProcessInstanceById(def.getId(), "zhangsan", com.mldong.jeeflow.domain.FlowData.create());
+        Long applyId = doingTaskId(inst.getInstanceId(), "apply");
+        assertNotNull("apply 应为进行中任务", applyId);
+        Map<String, Object> d = call("processTask/detail", args("id", applyId, "operator", "zhangsan"));
+        assertOk(d);
+        Map<String, Object> ext = (Map<String, Object>) ((Map<String, Object>) d.get("data")).get("ext");
+        assertNotNull("task detail 应含 ext 容器", ext);
+        assertEquals("apply 为首任务节点且 DOING，ext.isFirstTaskNode 应为 true",
+                Boolean.TRUE, ext.get("isFirstTaskNode"));
+    }
+
+    // ═══ 按 id 查"记录不存在"负向（对齐 PHP 模板，detail 页最直接报错路径）═══
+
+    @Test
+    public void testDetailByIdNotFound() throws Exception {
+        // processDefine/detail：流程定义不存在
+        Map<String, Object> r = call("processDefine/detail", args("id", 99999L));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertTrue(String.valueOf(r.get("msg")).contains("流程定义不存在"));
+
+        // processInstance/detail：流程实例不存在
+        r = call("processInstance/detail", args("id", 99999L));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertTrue(String.valueOf(r.get("msg")).contains("流程实例不存在"));
+
+        // processDesign/detail：流程设计不存在
+        r = call("processDesign/detail", args("id", 99999L));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertTrue(String.valueOf(r.get("msg")).contains("流程设计不存在"));
+
+        // processTask/detail：任务不存在
+        r = call("processTask/detail", args("id", 99999L));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertTrue(String.valueOf(r.get("msg")).contains("任务不存在"));
+    }
+
     // ═══ execute submitType 3/4/5/6/20 门面行为（issues/79，前端按钮全量暴露路径）═══
 
     /** 02-multi-task：发起（apply 自动完成）→ 推进到名为 name 的任务节点 */
@@ -753,6 +814,12 @@ public class JeeflowFacadeTest {
         assertNotNull(row.get("ext"));       // 实例变量对象
         assertNotNull(row.get("displayName")); // 定义显示名
         assertNotNull(row.get("version"));     // 定义版本
+        // issues/82-2：分页五键整体（pageNum/pageSize/rows/recordCount/totalPage）
+        Map<String, Object> pageData = (Map<String, Object>) r.get("data");
+        for (String k : new String[]{"pageNum", "pageSize", "rows", "recordCount", "totalPage"}) {
+            assertTrue("分页五键应含 " + k + ": " + pageData.keySet(), pageData.containsKey(k));
+        }
+        assertTrue("totalPage 应为正整数", ((Number) pageData.get("totalPage")).intValue() >= 1);
     }
 
     // ═══ issues/05-5：m_ 前缀查询参数（前端 m_LIKE_name / m_pd_LIKE_* / m_t_LIKE_*）═══
@@ -791,6 +858,17 @@ public class JeeflowFacadeTest {
         assertOk(r);
         rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
         assertEquals("m_pd_LIKE_displayName 不应命中: " + r, 0, rows.size());
+
+        // issues/82-6：实例列表按编码搜 m_pd_LIKE_name（pd.name 白名单列）
+        r = call("processInstance/page", args("operator", "zhangsan", "m_pd_LIKE_name", "simple"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_pd_LIKE_name 应命中 01-simple 实例: " + r, 1, rows.size());
+
+        r = call("processInstance/page", args("operator", "zhangsan", "m_pd_LIKE_name", "zzz"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertEquals("m_pd_LIKE_name 不应命中: " + r, 0, rows.size());
 
         // 任务列表：m_t_LIKE_displayName（别名 t → t.display_name）
         r = call("processTask/todoList", args("operator", "leader", "m_t_LIKE_displayName", "审批"));
