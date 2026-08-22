@@ -1130,6 +1130,46 @@ public class JeeflowFacadeTest {
         assertNotNull(groups.get("approval").get(0).get("jsonObject"));
     }
 
+    /** issues/81：listByType items 必含 processDefineState（前端发起按钮硬依赖），取值随定义 state 联动 */
+    @Test
+    public void testDesignListByTypeProcessDefineState() throws Exception {
+        saveDesign(501L, "leave81", "请假81", "approval");
+        call("processDesign/updateDefine", args(
+                "processDesignId", 501L, "operator", "user1",
+                "name", "leave81", "displayName", "请假81", "type", "approval",
+                "nodes", new ArrayList<>(), "edges", new ArrayList<>()));
+        // 场景 A：deploy → 定义 state=1 → 可发起
+        Map<String, Object> dr = call("processDesign/deploy", args("id", 501L, "operator", "user1"));
+        assertOk(dr);
+        Long defineId = toLong(((Map<String, Object>) dr.get("data")).get("processDefineId"));
+
+        Map<String, Object> r = call("processDesign/listByType", args());
+        assertOk(r);
+        @SuppressWarnings("unchecked")
+        Map<String, List<Map<String, Object>>> groups =
+                (Map<String, List<Map<String, Object>>>) r.get("data");
+        Map<String, Object> itemA = groups.get("approval").stream()
+                .filter(m -> "leave81".equals(m.get("name")))
+                .findFirst().orElseThrow(() -> new AssertionError("缺 leave81 item: " + groups));
+        assertEquals("processDefineId 应回显", defineId, itemA.get("processDefineId"));
+        assertEquals("启用定义 processDefineState 应为 1（前端可发起）",
+                Integer.valueOf(1), itemA.get("processDefineState"));
+
+        // 场景 B：upAndDown 禁用 → 定义 state=0 → 前端置灰
+        Map<String, Object> ur = call("processDefine/upAndDown", args("id", defineId, "opType", 0));
+        assertOk(ur);
+        r = call("processDesign/listByType", args());
+        assertOk(r);
+        @SuppressWarnings("unchecked")
+        Map<String, List<Map<String, Object>>> groups2 =
+                (Map<String, List<Map<String, Object>>>) r.get("data");
+        Map<String, Object> itemB = groups2.get("approval").stream()
+                .filter(m -> "leave81".equals(m.get("name")))
+                .findFirst().orElseThrow(() -> new AssertionError("缺 leave81 item: " + groups2));
+        assertEquals("禁用定义 processDefineState 应为 0（前端置灰）",
+                Integer.valueOf(0), itemB.get("processDefineState"));
+    }
+
     /** bizData：未注册 MetaTableReader → 清晰报错 */
     @Test
     public void testBizDataUnregistered() throws Exception {
