@@ -214,6 +214,8 @@ public class MemoryProcessRepository implements IProcessRepository {
         r.setPerformType(t.getPerformType() != null ? t.getPerformType().getCode() : null);
         r.setTaskState(t.getTaskState());
         r.setOperator(t.getActorId());
+        r.setFinishTime(t.getFinishTime());   // 82-8：已办 finishTime 此前漏映射（doneList 行恒 null）
+        r.setExpireTime(t.getExpireTime());
         r.setFormKey(t.getFormKey());
         r.setTaskParentId(t.getParentTaskId());
         r.setCreateTime(t.getCreateTime());

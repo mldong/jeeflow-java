@@ -1061,6 +1061,11 @@ public class JeeflowFacadeTest {
         assertNotNull("任务行 taskFormData 应返回（issues/15）: " + r, taskFormData);
         assertEquals("同意", taskFormData.get("tf_approvalComment"));
         assertEquals("同意", taskFormData.get("approvalComment"));
+        // 82-8：doneList 行 finishTime 已格式化（yyyy-MM-dd HH:mm:ss 无 T）
+        Object ft = ((Map<String, Object>) rows.get(0)).get("finishTime");
+        assertNotNull("doneList 行 finishTime 应非空（已办任务）: " + r, ft);
+        assertTrue("doneList finishTime 应格式化 yyyy-MM-dd HH:mm:ss（无 T）: " + ft,
+                ft.toString().matches("[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"));
 
         r = call("processInstance/approvalRecord", args("id", instanceId));
         assertOk(r);
