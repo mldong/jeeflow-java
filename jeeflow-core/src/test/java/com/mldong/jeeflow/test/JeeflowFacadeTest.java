@@ -283,6 +283,60 @@ public class JeeflowFacadeTest {
         assertEquals(Integer.valueOf(99999999), r.get("code"));
     }
 
+    /** issues/82-7：委托分页 m_IN_processName / m_EQ_enabled 查询形态（对齐 mldong 前端委托页搜索） */
+    @Test
+    public void testSurrogatePageInAndEqConditions() {
+        // 3 条委托：leave(启用) / overtime(启用) / sick(停用)
+        Map<String, Object> r = call("processSurrogate/save", args(
+                "operator", "zhangsan", "surrogate", "lisi", "processName", "leave", "enabled", 1));
+        assertOk(r);
+        r = call("processSurrogate/save", args(
+                "operator", "zhangsan", "surrogate", "wangwu", "processName", "overtime", "enabled", 1));
+        assertOk(r);
+        r = call("processSurrogate/save", args(
+                "operator", "zhangsan", "surrogate", "zhaoliu", "processName", "sick", "enabled", 0));
+        assertOk(r);
+
+        // 无过滤：3 条
+        r = call("processSurrogate/page", args("operator", "zhangsan"));
+        assertOk(r);
+        assertEquals(Integer.valueOf(3), ((Map<String, Object>) r.get("data")).get("recordCount"));
+
+        // m_IN_processName：IN 列表命中 2 条
+        r = call("processSurrogate/page", args("operator", "zhangsan",
+                "m_IN_processName", Arrays.asList("leave", "overtime")));
+        assertOk(r);
+        Map<String, Object> inData = (Map<String, Object>) r.get("data");
+        assertEquals(Integer.valueOf(2), inData.get("recordCount"));
+        List<String> names = new ArrayList<>();
+        for (Object row : (List<?>) inData.get("rows")) {
+            names.add((String) ((Map<String, Object>) row).get("processName"));
+        }
+        assertTrue("IN 应命中 leave+overtime: " + names, names.contains("leave") && names.contains("overtime"));
+
+        // m_EQ_enabled：启用过滤命中 2 条
+        r = call("processSurrogate/page", args("operator", "zhangsan", "m_EQ_enabled", 1));
+        assertOk(r);
+        assertEquals(Integer.valueOf(2), ((Map<String, Object>) r.get("data")).get("recordCount"));
+
+        // m_IN + m_EQ 组合：leave/overtime 中仅启用 → 仍 2 条；换成 sick/overtime → 1 条
+        r = call("processSurrogate/page", args("operator", "zhangsan",
+                "m_IN_processName", Arrays.asList("sick", "overtime"), "m_EQ_enabled", 1));
+        assertOk(r);
+        Map<String, Object> comboData = (Map<String, Object>) r.get("data");
+        assertEquals(Integer.valueOf(1), comboData.get("recordCount"));
+        assertEquals("overtime", ((Map<String, Object>) ((List<?>) comboData.get("rows")).get(0)).get("processName"));
+
+        // 负向：IN 全不命中 / EQ 无匹配 → 0 条
+        r = call("processSurrogate/page", args("operator", "zhangsan",
+                "m_IN_processName", Arrays.asList("none1", "none2")));
+        assertOk(r);
+        assertEquals(Integer.valueOf(0), ((Map<String, Object>) r.get("data")).get("recordCount"));
+        r = call("processSurrogate/page", args("operator", "zhangsan", "m_EQ_enabled", 2));
+        assertOk(r);
+        assertEquals(Integer.valueOf(0), ((Map<String, Object>) r.get("data")).get("recordCount"));
+    }
+
     // ═══ 视图端点（v1.2.0） ═══
 
     @Test

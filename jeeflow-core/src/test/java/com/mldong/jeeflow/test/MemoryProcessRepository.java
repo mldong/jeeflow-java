@@ -301,8 +301,9 @@ public class MemoryProcessRepository implements IProcessRepository {
         return m;
     }
 
-    /** 条件全匹配（列不在行字段中则跳过；操作符对齐 JDBC buildWhere） */
-    private static boolean matches(List<PageQuery.Condition> conditions, Map<String, Object> fields) {
+    /** 条件全匹配（列不在行字段中则跳过；操作符对齐 JDBC buildWhere）。
+     *  包级可见：MemoryProcessExtRepository 复用（issues/82-7 委托分页 m_ 条件） */
+    static boolean matches(List<PageQuery.Condition> conditions, Map<String, Object> fields) {
         for (PageQuery.Condition c : conditions) {
             Object v = fields.get(c.getColumn());
             Object expect = c.getValue();

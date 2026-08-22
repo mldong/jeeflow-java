@@ -9,6 +9,7 @@ import com.mldong.jeeflow.spi.PageResult;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -101,8 +102,28 @@ public class MemoryProcessExtRepository implements IProcessExtRepository {
 
     @Override
     public PageResult<ProcessSurrogate> pageSurrogates(PageQuery query) {
-        List<ProcessSurrogate> rows = new ArrayList<>(surrogates.values());
+        // m_ 条件过滤（issues/82-7）：对齐 JDBC buildWhere（白名单 + EQ/LIKE/IN…）+ buildOrder 默认 t.id DESC。
+        // 内存约定同核心仓储 pageDefines：过滤后返回全部行（不切片），recordCount=过滤后总数。
+        List<ProcessSurrogate> rows = surrogates.values().stream()
+                .filter(s -> MemoryProcessRepository.matches(query.getConditions(), surrogateFields(s)))
+                .sorted((a, b) -> Long.compare(b.getId(), a.getId()))
+                .collect(Collectors.toList());
         return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
+    }
+
+    /** 委托行字段（t.* 键，对齐 JDBC SURROGATE_WHITELIST 列名） */
+    private static Map<String, Object> surrogateFields(ProcessSurrogate s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t.id", s.getId());
+        m.put("t.process_name", s.getProcessName());
+        m.put("t.operator", s.getOperator());
+        m.put("t.surrogate", s.getSurrogate());
+        m.put("t.enabled", s.getEnabled());
+        m.put("t.start_time", s.getStartTime());
+        m.put("t.end_time", s.getEndTime());
+        m.put("t.create_time", s.getCreateTime());
+        m.put("t.update_time", s.getUpdateTime());
+        return m;
     }
 
     @Override
