@@ -189,9 +189,10 @@ public class JeeflowFacadeTest {
         String content = new String(Files.readAllBytes(
                 Paths.get("src/test/resources/flows/01-simple.json")), StandardCharsets.UTF_8);
 
-        // 保存设计（含内容快照）
+        // 保存设计（含内容快照 + remark/icon，82-9 回显断言用）
         Map<String, Object> r = call("processDesign/save", args(
-                "name", "leave", "displayName", "请假流程", "content", content, "operator", "zhangsan"));
+                "name", "leave", "displayName", "请假流程", "content", content, "operator", "zhangsan",
+                "icon", "icon-leave", "remark", "请假流程 v1（含附件上传）"));
         assertOk(r);
         Long designId = toLong(((Map<String, Object>) r.get("data")).get("id"));
         assertNotNull(designId);
@@ -204,6 +205,15 @@ public class JeeflowFacadeTest {
         Object ct = ((Map<String, Object>) dRows.get(0)).get("createTime");
         assertTrue("designPage 时间应格式化为 yyyy-MM-dd HH:mm:ss: " + ct,
                 ct != null && ct.toString().matches("[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"));
+        // 82-9：designPage 行回显 remark/icon（设计页回显字段）
+        Map<String, Object> dRow = null;
+        for (Object o : dRows) {
+            Map<String, Object> m = (Map<String, Object>) o;
+            if ("leave".equals(m.get("name"))) { dRow = m; break; }
+        }
+        assertNotNull("designPage 应含 leave 设计行: " + dRows, dRow);
+        assertEquals("designPage remark 应回显保存值", "请假流程 v1（含附件上传）", dRow.get("remark"));
+        assertEquals("designPage icon 应回显保存值", "icon-leave", dRow.get("icon"));
 
         // detail：含历史
         r = call("processDesign/detail", args("id", designId));
