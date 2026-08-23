@@ -739,6 +739,22 @@ public class JeeflowFacadeTest {
         assertTrue(String.valueOf(r.get("msg")).contains("任务不存在"));
     }
 
+    /** issues/82 负向：抄送空 actors 报错（对齐 PHP 基准 testCreateCCInstanceEmptyActors）。
+     *  createCCInstance 空/缺失 actorIds → 99999999 + "actorIds 缺失"。 */
+    @Test
+    public void testCreateCCInstanceEmptyActors() {
+        Map<String, Object> r = call("processInstance/createCCInstance",
+                args("processInstanceId", 123L, "operator", "user1", "actorIds", Arrays.asList()));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertTrue(String.valueOf(r.get("msg")).contains("actorIds 缺失"));
+
+        // 负向边界：actorIds 键完全缺失（非空 list）同样报错
+        r = call("processInstance/createCCInstance",
+                args("processInstanceId", 123L, "operator", "user1"));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertTrue(String.valueOf(r.get("msg")).contains("actorIds 缺失"));
+    }
+
     // ═══ execute submitType 3/4/5/6/20 门面行为（issues/79，前端按钮全量暴露路径）═══
 
     /** 02-multi-task：发起（apply 自动完成）→ 推进到名为 name 的任务节点 */
