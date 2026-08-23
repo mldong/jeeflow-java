@@ -739,6 +739,25 @@ public class JeeflowFacadeTest {
         assertTrue(String.valueOf(r.get("msg")).contains("任务不存在"));
     }
 
+    /** issues/82 负向（对齐 Go TestSnowflakeIDPrecision / Node toId / issues/38 E9）：雪花 id 精度守卫。
+     *  浮点型 id 超 2^53（JSON 解析 / 调用方 Number() 已丢精度）→ 显性报错，不 longValue() 静默截断；
+     *  字符串雪花 id → 精确解析（无该定义 → 报"没有流程定义"，非崩溃）。
+     *  注：Java 走 Jackson，整数 JSON 本为 Long 精确，故此路径仅在显式传 Double 时触发（防御性对齐五语言）。 */
+    @Test
+    public void testSnowflakeIDPrecision() {
+        // ① 浮点雪花 id（> 2^53，精度已丢）→ 显性报错
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", 2084320543834124288.0, "operator", "user1"));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertTrue(String.valueOf(r.get("msg")).contains("超出 float64 精确范围"));
+
+        // ② 字符串雪花 id → 精确解析（无该定义 → 没有流程定义，且不崩溃）
+        r = call("processInstance/startAndExecute",
+                args("processDefineId", "2084320543834124290", "operator", "user1"));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertTrue(String.valueOf(r.get("msg")).contains("没有流程定义"));
+    }
+
     /** issues/82 负向：抄送空 actors 报错（对齐 PHP 基准 testCreateCCInstanceEmptyActors）。
      *  createCCInstance 空/缺失 actorIds → 99999999 + "actorIds 缺失"。 */
     @Test

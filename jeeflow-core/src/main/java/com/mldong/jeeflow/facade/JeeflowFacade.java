@@ -1458,7 +1458,13 @@ public class JeeflowFacade {
 
     private static Long toLong(Object val) {
         if (val == null) return null;
-        if (val instanceof Number) return ((Number) val).longValue();
+        if (val instanceof Number) {
+            Number n = (Number) val;
+            if ((n instanceof Double || n instanceof Float) && Math.abs(n.doubleValue()) > 9.007199254740992E15) {
+                throw new IllegalArgumentException("id " + n + " 超出 float64 精确范围（2^53），请以字符串传递");
+            }
+            return n.longValue();
+        }
         try { return Long.parseLong(val.toString()); } catch (NumberFormatException e) { return null; }
     }
 
