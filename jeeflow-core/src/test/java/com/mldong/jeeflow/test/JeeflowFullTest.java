@@ -255,19 +255,24 @@ public class JeeflowFullTest {
 
         ProcessInstance inst = startFlow(def, FlowData.create());
 
-        // 串行会签，每次只完成一个
+        // 串行会签逐个创建（issues/93）：发起后仅第一位成员 userA 的 DOING 任务，
+        // userB 尚未创建（不做全员预创建）
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
-        assertEquals(2, doing.size());
+        assertEquals("串行会签发起后应只有 1 个 DOING 任务（userA）", 1, doing.size());
+        assertEquals("首个会签成员应为 userA", "userA", doing.get(0).getActorIds().get(0));
 
-        // 完成第一个
+        // 完成第一个（userA）→ 推进创建第二位（userB），仍只有 1 个 DOING
         ProcessTask task1 = doing.get(0);
         repo.addTaskActor(task1.getTaskId(), Arrays.asList("userA"));
         task1.getActorIds().add("userA");
         engine.executeProcessTask(task1.getTaskId(), "userA",
                 FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+        List<ProcessTask> doingAfter = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals("userA 完成后应推进为 1 个 DOING 任务（userB）", 1, doingAfter.size());
+        assertEquals("推进后的会签成员应为 userB", "userB", doingAfter.get(0).getActorIds().get(0));
 
-        // 完成第二个
-        ProcessTask task2 = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
+        // 完成第二个（userB，最后一位）→ 流转结束
+        ProcessTask task2 = doingAfter.get(0);
         repo.addTaskActor(task2.getTaskId(), Arrays.asList("userB"));
         task2.getActorIds().add("userB");
         engine.executeProcessTask(task2.getTaskId(), "userB",
@@ -286,15 +291,17 @@ public class JeeflowFullTest {
         ProcessInstance.ProcessDefine def = registerFlow("08-countersign-sequential-approve.json");
         ProcessInstance inst = startFlow(def, FlowData.create());
 
-        // 发起后：apply + 会签任务（userA/userB 各一，全部 DOING）
+        // 发起后：串行会签逐个创建（issues/93）——仅第一位 userA 的 DOING 会签任务，
+        // apply 已由 startFlow 自动完成，userB 尚未创建
         List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
-        assertEquals(2, doing.size());
+        assertEquals("串行会签发起后应只有 1 个 DOING 任务（userA）", 1, doing.size());
+        assertEquals("task1", doing.get(0).getTaskName());
         // 尚未流转到 approve
         assertTrue("会签未完成前不应有审批任务",
                 repo.findDoingTasks(inst.getInstanceId(), null).stream()
                         .noneMatch(t -> "approve".equals(t.getTaskName())));
 
-        // 完成第一个会签成员 → 仍不应流转 approve（非全部完成）
+        // 完成第一个会签成员（userA）→ 推进为 userB，仍不应流转 approve（非全部完成，E16 守卫）
         ProcessTask task1 = doing.stream().filter(t -> "task1".equals(t.getTaskName())).findFirst().get();
         repo.addTaskActor(task1.getTaskId(), Arrays.asList("userA"));
         task1.getActorIds().add("userA");
@@ -303,8 +310,10 @@ public class JeeflowFullTest {
         assertTrue("完成一个成员后不应创建审批任务（E16 守卫）",
                 repo.findDoingTasks(inst.getInstanceId(), null).stream()
                         .noneMatch(t -> "approve".equals(t.getTaskName())));
+        assertEquals("userA 完成后应推进为 1 个 DOING 任务（userB）", 1,
+                repo.findDoingTasks(inst.getInstanceId(), null).size());
 
-        // 完成第二个会签成员 → 流转一次：approve 仅 1 个任务
+        // 完成第二个会签成员（userB，最后一位）→ 流转一次：approve 仅 1 个任务
         List<ProcessTask> doing2 = repo.findDoingTasks(inst.getInstanceId(), null);
         ProcessTask task2 = doing2.stream().filter(t -> "task1".equals(t.getTaskName())).findFirst().get();
         repo.addTaskActor(task2.getTaskId(), Arrays.asList("userB"));

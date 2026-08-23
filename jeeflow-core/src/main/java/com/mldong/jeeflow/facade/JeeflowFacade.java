@@ -428,8 +428,9 @@ public class JeeflowFacade {
     /** 节点成员进度（issue 41，对齐 Node/Go/Python）：按任务状态组装 nodeProgress——
      *  会签节点带 type（PARALLEL/SEQUENTIAL），成员 done 按完成状态逐人标记、active 为进行中
      *  当前位；动态参与人（无静态 actorIds）不返回；name 走 IUserProvider SPI 解析
-     *  （未注册/查不到缺省空串，前端降级显示 id）。成员取任务 actorIds 并集
-     *  （Java 引擎会签任务表驱动，无 operatorList 变量——与三语言同构） */
+     *  （未注册/查不到缺省空串，前端降级显示 id）。完整成员列表优先取会签任务变量
+     *  operatorList_{node}（串行会签逐个创建时仅存已建任务，需从变量还原全量办理人——对齐
+     *  Go/Python/Node buildNodeProgress），否则回退任务 actorIds 并集 */
     private Map<String, Object> buildNodeProgress(ProcessModel model, List<ProcessTask> history) {
         Map<String, Object> progress = new LinkedHashMap<>();
         List<String> names = new ArrayList<>();
@@ -442,9 +443,17 @@ public class JeeflowFacade {
             List<ProcessTask> ts = history.stream()
                     .filter(t -> name.equals(t.getTaskName())).collect(Collectors.toList());
             if (ts.isEmpty()) continue;
-            Set<String> memberSet = new LinkedHashSet<>();
-            for (ProcessTask t : ts) memberSet.addAll(t.getActorIds());
-            List<String> members = new ArrayList<>(memberSet);
+            // 完整成员列表：会签串行任务变量 operatorList_{node} 优先（逐个创建时仅 1 个任务，
+            // 全量办理人存于其变量），否则任务 actorIds 并集（对齐 Go/Python/Node）
+            List<String> csMembers = readCountersignOperatorList(ts, name);
+            List<String> members;
+            if (!csMembers.isEmpty()) {
+                members = csMembers;
+            } else {
+                Set<String> memberSet = new LinkedHashSet<>();
+                for (ProcessTask t : ts) memberSet.addAll(t.getActorIds());
+                members = new ArrayList<>(memberSet);
+            }
             if (members.isEmpty()) continue; // 动态参与人：无静态成员，不返回
             Set<String> doneSet = new HashSet<>();
             for (ProcessTask t : ts) {
@@ -486,6 +495,29 @@ public class JeeflowFacade {
             progress.put(name, item);
         }
         return progress;
+    }
+
+    /** 会签全量办理人：从任务变量 operatorList_{node} 还原（issues/93 串行逐个创建时仅 1 个任务，
+     *  全量办理人存于该任务变量）。遍历节点全部任务，返回第一个非空列表（首位任务必带）；
+     *  兼容 JSON 反序列化后的 Collection 形态 */
+    private List<String> readCountersignOperatorList(List<ProcessTask> ts, String name) {
+        String key = FlowConst.COUNTERSIGN_OPERATOR_LIST + "_" + name;
+        for (ProcessTask t : ts) {
+            if (t.getVariables() == null) continue;
+            Object value = t.getVariables().get(key);
+            if (value instanceof java.util.Collection) {
+                List<String> list = new ArrayList<>();
+                for (Object o : (java.util.Collection<?>) value) {
+                    String s = o == null ? null : o.toString().trim();
+                    if (s != null && !s.isEmpty()) list.add(s);
+                }
+                if (!list.isEmpty()) return list;
+            } else if (value != null) {
+                String s = value.toString().trim();
+                if (!s.isEmpty()) return Collections.singletonList(s);
+            }
+        }
+        return Collections.emptyList();
     }
 
     /** 成员姓名解析（issue 43/E15）：IUserProvider SPI 解析 realName，查不到缺省空串 */

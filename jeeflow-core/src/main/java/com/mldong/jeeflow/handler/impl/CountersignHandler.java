@@ -14,6 +14,7 @@ import com.mldong.jeeflow.model.TaskModel;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.util.StringUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -60,10 +61,28 @@ public class CountersignHandler implements IHandler {
 
         boolean merged;
         if (CountersignTypeEnum.SEQUENTIAL.equals(countersignType)) {
-            // 串行会签：全部成员完成才流转（issues/44 E16——此前无条件 merged 导致
-            // 每次成员完成都重复流转后续节点）。对齐内置版"最后一人完成才 merged"
-            // 与 Node/Go/Python"doing 空才流转"语义：流转时机 = 全部完成
-            merged = finishedCount >= allTasks.size();
+            // 串行会签逐个创建（issues/93，对齐内置版 createCountersignTask + Go/Python/Node）：
+            // 每次仅 1 个 DOING 成员任务。本位（最后一位）完成 → 流转；否则创建下一位成员任务并停留。
+            // 会签计数状态在首位任务变量（createCountersignTasks 写入），prepareExecution 已把
+            // 刚完成任务变量同步到 execution.getProcessTask()，由此读取 loopCounter/operatorList。
+            merged = false;
+            ProcessTask completed = execution.getProcessTask();
+            List<String> operatorList = null;
+            int loopCounter = 0;
+            if (completed != null && completed.getVariables() != null) {
+                Object ol = completed.getVariables().get(
+                        FlowConst.COUNTERSIGN_OPERATOR_LIST + "_" + taskModel.getName());
+                operatorList = toStringList(ol);
+                loopCounter = completed.getVariables().getInt(
+                        FlowConst.LOOP_COUNTER + "_" + taskModel.getName(), 0);
+            }
+            if (operatorList != null && !operatorList.isEmpty() && loopCounter + 1 < operatorList.size()) {
+                createNextCountersignTask(instance, taskModel, operatorList.get(loopCounter + 1),
+                        loopCounter + 1, operatorList.size(), execution);
+            } else {
+                // 最后一位完成 → 流转（全部成员完成才推进，issues/44 E16）
+                merged = true;
+            }
         } else {
             // 并行会签：检查条件
             String cond = taskModel.getCountersignCompletionCondition();
@@ -108,6 +127,59 @@ public class CountersignHandler implements IHandler {
                 task.abandon(operator);
             }
         }
+    }
+
+    /** 串行会签推进：创建下一位成员任务（issues/93）。
+     *  新任务同时加入聚合根（instance.tasks，供 updateInstance 级联/后续查询）与 execution
+     *  （供 persistTasks 经 saveTask 落库并分配任务 id——saveTask 对 null id 自动分配）。
+     *  会签计数状态随任务变量持久化（loopCounter+1 / operatorList 全量 / nrOfInstances），
+     *  下一位完成时由本处理器再次读取推进，直至最后一位完成才 merged。 */
+    private void createNextCountersignTask(ProcessInstance instance, TaskModel taskModel,
+                                           String nextActor, int nextLoopCounter, int total,
+                                           Execution execution) {
+        String node = taskModel.getName();
+        ProcessTask next = ProcessTask.create(
+                instance.getInstanceId(),
+                node,
+                taskModel.getDisplayName(),
+                taskModel.getTaskType(),
+                taskModel.getPerformType(),
+                taskModel.getForm(),
+                new ArrayList<>(java.util.Collections.singletonList(nextActor)),
+                execution.getOperator()
+        );
+        next.getVariables().put(FlowConst.COUNTERSIGN_OPERATOR_LIST + "_" + node,
+                readOperatorList(execution, node));
+        next.getVariables().put(FlowConst.LOOP_COUNTER + "_" + node, nextLoopCounter);
+        next.getVariables().put(FlowConst.NR_OF_INSTANCES + "_" + node, total);
+        instance.getTasks().add(next);
+        execution.addTask(next);
+    }
+
+    /** 从当前 execution 的已完成任务变量读取会签全量办理人（operatorList_{node}） */
+    private List<String> readOperatorList(Execution execution, String node) {
+        ProcessTask completed = execution.getProcessTask();
+        if (completed != null && completed.getVariables() != null) {
+            return toStringList(completed.getVariables().get(
+                    FlowConst.COUNTERSIGN_OPERATOR_LIST + "_" + node));
+        }
+        return new ArrayList<>();
+    }
+
+    /** 会签办理人列表取值兼容（JSON 反序列化后可能是 List / 其他可迭代） */
+    private List<String> toStringList(Object value) {
+        List<String> result = new ArrayList<>();
+        if (value == null) return result;
+        if (value instanceof java.util.Collection) {
+            for (Object o : (java.util.Collection<?>) value) {
+                String s = o == null ? null : o.toString().trim();
+                if (s != null && !s.isEmpty()) result.add(s);
+            }
+        } else {
+            String s = value.toString().trim();
+            if (!s.isEmpty()) result.add(s);
+        }
+        return result;
     }
 
     private FlowData buildCountersignVars(ProcessInstance instance, TaskModel taskModel,

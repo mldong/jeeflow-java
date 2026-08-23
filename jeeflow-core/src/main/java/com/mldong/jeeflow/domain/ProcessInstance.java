@@ -2,6 +2,7 @@ package com.mldong.jeeflow.domain;
 
 import com.mldong.jeeflow.enums.ProcessInstanceStateEnum;
 import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
+import com.mldong.jeeflow.enums.CountersignTypeEnum;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.model.TaskModel;
@@ -225,6 +226,30 @@ public class ProcessInstance {
     public List<ProcessTask> createCountersignTasks(TaskModel taskModel, List<String> actorIds,
                                                      String operator) {
         List<ProcessTask> list = new ArrayList<>();
+        // 串行会签（issues/93）：仅创建第一位成员任务，并把会签计数状态写入该任务变量
+        // （operatorList_{node} 全量办理人 / loopCounter_{node} 当前序号 / nrOfInstances_{node} 总数），
+        // 由 CountersignHandler 在每位成员完成时推进创建下一位——任意时刻仅 1 个 DOING 会签任务，
+        // 对齐 mldong 内置引擎 createCountersignTask 与 Go/Python/Node 的串行逐个创建。
+        // PARALLEL / 未配置类型保持全员预创建。
+        if (CountersignTypeEnum.SEQUENTIAL.equals(taskModel.getCountersignType())) {
+            String node = taskModel.getName();
+            ProcessTask first = ProcessTask.create(
+                    this.instanceId,
+                    node,
+                    taskModel.getDisplayName(),
+                    taskModel.getTaskType(),
+                    taskModel.getPerformType(),
+                    taskModel.getForm(),
+                    new ArrayList<>(java.util.Collections.singletonList(actorIds.get(0))),
+                    operator
+            );
+            first.getVariables().put(FlowConst.COUNTERSIGN_OPERATOR_LIST + "_" + node, new ArrayList<>(actorIds));
+            first.getVariables().put(FlowConst.LOOP_COUNTER + "_" + node, 0);
+            first.getVariables().put(FlowConst.NR_OF_INSTANCES + "_" + node, actorIds.size());
+            list.add(first);
+            this.tasks.add(first);
+            return list;
+        }
         for (int i = 0; i < actorIds.size(); i++) {
             String actorId = actorIds.get(i);
             ProcessTask task = ProcessTask.create(

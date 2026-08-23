@@ -922,12 +922,11 @@ public class JeeflowFacadeTest {
                 args("processDefineId", def.getId(), "operator", "user1"));
         assertOk(r);
         Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
-        // 串行会签全员预创建：userA/userB 两个 DOING 任务
+        // 串行会签逐个创建（issues/93）：发起后仅 userA 的 DOING 任务，userB 尚未创建
         Long taskA = doingTaskIdByActor(instanceId, "task1", "userA");
-        Long taskB = doingTaskIdByActor(instanceId, "task1", "userB");
         assertNotNull("会签节点应有 userA 的 DOING 任务", taskA);
-        assertNotNull("会签节点应有 userB 的 DOING 任务", taskB);
-        // userA 会签不同意（未配 ONE_VOTE_VETO → 软拒绝）
+        assertNull("串行逐个创建：发起后 userB 不应已有任务", doingTaskIdByActor(instanceId, "task1", "userB"));
+        // userA 会签不同意（未配 ONE_VOTE_VETO → 软拒绝，非否决）
         assertOk(call("processTask/execute", args("processTaskId", taskA, "operator", "userA", "submitType", 20)));
         com.mldong.jeeflow.domain.ProcessInstance inst = rawRepo.findInstanceById(instanceId);
         assertEquals("软拒绝后实例应保持 DOING(10)，继续等 userB",
@@ -940,6 +939,9 @@ public class JeeflowFacadeTest {
         assertEquals("countersignDisagreeFlag=1 应落任务变量", Integer.valueOf(1),
                 doneA.getVariables().get("countersignDisagreeFlag"));
         assertEquals("否决人应记录为实际操作人", "userA", doneA.getActorId());
+        // 软拒绝按常规串行推进：userA 完成后应创建下一位 userB 的 DOING 任务（不阻断、不废弃）
+        Long taskB = doingTaskIdByActor(instanceId, "task1", "userB");
+        assertNotNull("软拒绝后应推进创建 userB 的 DOING 任务", taskB);
         com.mldong.jeeflow.domain.ProcessTask stillB = rawRepo.findTaskById(taskB);
         assertEquals("软拒绝不应废弃其余成员任务，userB 应保持 DOING",
                 com.mldong.jeeflow.enums.ProcessTaskStateEnum.DOING.getCode(), stillB.getTaskState());
