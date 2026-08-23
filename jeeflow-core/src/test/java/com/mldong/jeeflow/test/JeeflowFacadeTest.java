@@ -678,6 +678,28 @@ public class JeeflowFacadeTest {
         return null;
     }
 
+    /** 找指定实例下名为 name、参与者含 actor 的进行中任务 id（会签每成员一任务，同 taskName 需按人定位） */
+    private Long doingTaskIdByActor(Long instanceId, String name, String actor) {
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findDoingTasks(instanceId, null)) {
+            if (name.equals(t.getTaskName()) && t.getActorIds() != null
+                    && t.getActorIds().contains(actor)) {
+                return t.getTaskId();
+            }
+        }
+        return null;
+    }
+
+    /** 找指定实例下名为 name、参与者含 actor 的任务（任意状态，含已废弃） */
+    private com.mldong.jeeflow.domain.ProcessTask taskByActor(Long instanceId, String name, String actor) {
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findHistoryTasks(instanceId)) {
+            if (name.equals(t.getTaskName()) && t.getActorIds() != null
+                    && t.getActorIds().contains(actor)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
     // ═══ issues/82-5：task detail 任务级 ext.isFirstTaskNode（前端 detail.vue 双兜底）═══
 
     @Test
@@ -892,31 +914,103 @@ public class JeeflowFacadeTest {
     }
 
     @Test
-    public void testExecuteCountersignDisagree() throws Exception {
-        // 06-countersign-sequential：apply 自动完成 → task1 串行会签 userA（userB 未开始）
+    public void testExecuteCountersignDisagreeSoft() throws Exception {
+        // issues/91：06-countersign-sequential 未配置 ONE_VOTE_VETO → submitType=20 为软拒绝
+        // （否决者任务正常完成、flag 记录、流程不阻断，继续等其余成员）
         ProcessInstance.ProcessDefine def = registerFlow("06-countersign-sequential.json");
         Map<String, Object> r = call("processInstance/startAndExecute",
                 args("processDefineId", def.getId(), "operator", "user1"));
         assertOk(r);
         Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
-        Long taskA = doingTaskId(instanceId, "task1");
+        // 串行会签全员预创建：userA/userB 两个 DOING 任务
+        Long taskA = doingTaskIdByActor(instanceId, "task1", "userA");
+        Long taskB = doingTaskIdByActor(instanceId, "task1", "userB");
         assertNotNull("会签节点应有 userA 的 DOING 任务", taskA);
-        rawRepo.addTaskActor(taskA, Arrays.asList("userA"));
-        // submitType=20：门面自动注入 countersignDisagreeFlag=1 → CountersignHandler 一票否决
-        // （merged=true → 会签节点提前流转 end），flag 落任务/实例变量
+        assertNotNull("会签节点应有 userB 的 DOING 任务", taskB);
+        // userA 会签不同意（未配 ONE_VOTE_VETO → 软拒绝）
         assertOk(call("processTask/execute", args("processTaskId", taskA, "operator", "userA", "submitType", 20)));
         com.mldong.jeeflow.domain.ProcessInstance inst = rawRepo.findInstanceById(instanceId);
-        // 一票否决效果：会签节点被提前流转 end（若否决未生效，串行会签将停在 DOING 等 userB）
-        assertEquals("会签否决后实例应完成（end 节点 submitType≠2 → FINISHED 20）",
+        assertEquals("软拒绝后实例应保持 DOING(10)，继续等 userB",
+                Integer.valueOf(10), inst.getState());
+        assertEquals("countersignDisagreeFlag=1 应落实例变量", Integer.valueOf(1),
+                inst.getVariables().get("countersignDisagreeFlag"));
+        com.mldong.jeeflow.domain.ProcessTask doneA = rawRepo.findTaskById(taskA);
+        assertEquals("软拒绝任务应正常完成", com.mldong.jeeflow.enums.ProcessTaskStateEnum.FINISHED.getCode(),
+                doneA.getTaskState());
+        assertEquals("countersignDisagreeFlag=1 应落任务变量", Integer.valueOf(1),
+                doneA.getVariables().get("countersignDisagreeFlag"));
+        assertEquals("否决人应记录为实际操作人", "userA", doneA.getActorId());
+        com.mldong.jeeflow.domain.ProcessTask stillB = rawRepo.findTaskById(taskB);
+        assertEquals("软拒绝不应废弃其余成员任务，userB 应保持 DOING",
+                com.mldong.jeeflow.enums.ProcessTaskStateEnum.DOING.getCode(), stillB.getTaskState());
+    }
+
+    @Test
+    public void testExecuteCountersignOneVoteVeto() throws Exception {
+        // issues/91：13-countersign-one-vote-veto（并行 + ONE_VOTE_VETO）→ 任一成员
+        // submitType=20 一票否决 → 会签节点立即推进 end，其余 DOING 会签任务废弃(99)
+        ProcessInstance.ProcessDefine def = registerFlow("13-countersign-one-vote-veto.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        // 并行会签全员预创建：userA/userB/userC 三个 DOING 任务
+        Long taskA = doingTaskIdByActor(instanceId, "task1", "userA");
+        com.mldong.jeeflow.domain.ProcessTask taskB = taskByActor(instanceId, "task1", "userB");
+        com.mldong.jeeflow.domain.ProcessTask taskC = taskByActor(instanceId, "task1", "userC");
+        assertNotNull("会签节点应有 userA 的 DOING 任务", taskA);
+        assertNotNull("会签节点应有 userB 的 DOING 任务", taskB);
+        assertNotNull("会签节点应有 userC 的 DOING 任务", taskC);
+        // userA 会签不同意（已配 ONE_VOTE_VETO → 一票否决）
+        assertOk(call("processTask/execute", args("processTaskId", taskA, "operator", "userA", "submitType", 20)));
+        com.mldong.jeeflow.domain.ProcessInstance inst = rawRepo.findInstanceById(instanceId);
+        assertEquals("一票否决后会签节点应立即推进 end（实例 FINISHED 20）",
                 Integer.valueOf(20), inst.getState());
         assertEquals("countersignDisagreeFlag=1 应落实例变量", Integer.valueOf(1),
                 inst.getVariables().get("countersignDisagreeFlag"));
         com.mldong.jeeflow.domain.ProcessTask doneA = rawRepo.findTaskById(taskA);
         assertEquals("否决任务应已完成", com.mldong.jeeflow.enums.ProcessTaskStateEnum.FINISHED.getCode(),
                 doneA.getTaskState());
-        assertEquals("countersignDisagreeFlag=1 应落任务变量", Integer.valueOf(1),
-                doneA.getVariables().get("countersignDisagreeFlag"));
         assertEquals("否决人应记录为实际操作人", "userA", doneA.getActorId());
+        assertEquals("否决应废弃其余成员 userB（ABANDON 99）",
+                com.mldong.jeeflow.enums.ProcessTaskStateEnum.ABANDON.getCode(),
+                rawRepo.findTaskById(taskB.getTaskId()).getTaskState());
+        assertEquals("否决应废弃其余成员 userC（ABANDON 99）",
+                com.mldong.jeeflow.enums.ProcessTaskStateEnum.ABANDON.getCode(),
+                rawRepo.findTaskById(taskC.getTaskId()).getTaskState());
+        assertTrue("否决后应无 DOING 任务", rawRepo.findDoingTasks(instanceId, null).isEmpty());
+    }
+
+    @Test
+    public void testExecuteCountersignDisagreeParallelSoft() throws Exception {
+        // issues/91：05-countersign-parallel 未配置 ONE_VOTE_VETO → 并行会签 submitType=20 软拒绝
+        // （否决者任务完成、flag 记录、流程不阻断，其余成员仍 DOING 等待）
+        ProcessInstance.ProcessDefine def = registerFlow("05-countersign-parallel.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        Long taskA = doingTaskIdByActor(instanceId, "task1", "userA");
+        com.mldong.jeeflow.domain.ProcessTask taskB = taskByActor(instanceId, "task1", "userB");
+        com.mldong.jeeflow.domain.ProcessTask taskC = taskByActor(instanceId, "task1", "userC");
+        assertNotNull("会签节点应有 userA 的 DOING 任务", taskA);
+        assertNotNull("会签节点应有 userB 的 DOING 任务", taskB);
+        assertNotNull("会签节点应有 userC 的 DOING 任务", taskC);
+        // userA 会签不同意（未配 ONE_VOTE_VETO → 软拒绝）
+        assertOk(call("processTask/execute", args("processTaskId", taskA, "operator", "userA", "submitType", 20)));
+        com.mldong.jeeflow.domain.ProcessInstance inst = rawRepo.findInstanceById(instanceId);
+        assertEquals("并行软拒绝后实例应保持 DOING(10)，等 userB/userC",
+                Integer.valueOf(10), inst.getState());
+        assertEquals("countersignDisagreeFlag=1 应落实例变量", Integer.valueOf(1),
+                inst.getVariables().get("countersignDisagreeFlag"));
+        assertEquals("软拒绝任务应正常完成", com.mldong.jeeflow.enums.ProcessTaskStateEnum.FINISHED.getCode(),
+                rawRepo.findTaskById(taskA).getTaskState());
+        assertEquals("软拒绝不应废弃 userB",
+                com.mldong.jeeflow.enums.ProcessTaskStateEnum.DOING.getCode(),
+                rawRepo.findTaskById(taskB.getTaskId()).getTaskState());
+        assertEquals("软拒绝不应废弃 userC",
+                com.mldong.jeeflow.enums.ProcessTaskStateEnum.DOING.getCode(),
+                rawRepo.findTaskById(taskC.getTaskId()).getTaskState());
     }
 
     // ═══ 列表字段契约 + 时间格式（issues/05-2 / 05-3）═══

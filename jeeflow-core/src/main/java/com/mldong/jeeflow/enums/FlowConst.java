@@ -86,6 +86,8 @@ public final class FlowConst {
     public static final String COUNTERSIGN_TYPE = "countersignType";
     /** 会签不同意标识 */
     public static final String COUNTERSIGN_DISAGREE_FLAG = "countersignDisagreeFlag";
+    /** 会签完成条件特殊值：一票否决（issues/91，对齐 mldong 内置引擎 ONE_VOTE_VETO） */
+    public static final String ONE_VOTE_VETO = "ONE_VOTE_VETO";
 
     /** 参与者 ID 列表 key */
     public static final String ACTOR_IDS_KEY = "actorIds";
