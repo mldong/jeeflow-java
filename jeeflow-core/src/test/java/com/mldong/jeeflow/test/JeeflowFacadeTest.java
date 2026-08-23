@@ -293,6 +293,40 @@ public class JeeflowFacadeTest {
         assertEquals(Integer.valueOf(99999999), r.get("code"));
     }
 
+    /** issues/82-12：委托生效判断——时间窗 startTime/endTime + enabled 过滤（五语言基准）。
+     *  5 条委托各对应一个时间态：在窗 / 未到 / 已过 / 无窗(enabled=0) / 无窗(enabled=1)。
+     *  每条查询只命中其中一条（processName 精确区分），断言结果与命中集唯一 → 不依赖仓储返回顺序。 */
+    @Test
+    public void testSurrogateEffectiveWindowAndEnabled() throws Exception {
+        String op = "winop";
+        // A 在窗（2026-08-01 ~ 08-31）
+        assertOk(call("processSurrogate/save", args("operator", op, "surrogate", "sA", "processName", "winA",
+                "startTime", "2026-08-01 00:00:00", "endTime", "2026-08-31 23:59:59", "enabled", 1)));
+        // B 未到（2026-09-01 起）
+        assertOk(call("processSurrogate/save", args("operator", op, "surrogate", "sB", "processName", "winB",
+                "startTime", "2026-09-01 00:00:00", "enabled", 1)));
+        // C 已过（07-31 止）
+        assertOk(call("processSurrogate/save", args("operator", op, "surrogate", "sC", "processName", "winC",
+                "endTime", "2026-07-31 23:59:59", "enabled", 1)));
+        // D 无窗但停用（enabled=0）
+        assertOk(call("processSurrogate/save", args("operator", op, "surrogate", "sD", "processName", "winD", "enabled", 0)));
+        // E 无窗且启用（enabled=1）
+        assertOk(call("processSurrogate/save", args("operator", op, "surrogate", "sE", "processName", "winE", "enabled", 1)));
+
+        java.time.LocalDateTime at = java.time.LocalDateTime.of(2026, 8, 15, 12, 0, 0);
+        assertEquals("在窗委托应生效", "sA", extRepo.getSurrogate(op, "winA", at).getSurrogate());
+        assertEquals("未到窗委托不应生效", null, extRepo.getSurrogate(op, "winB", at));
+        assertEquals("已过窗委托不应生效", null, extRepo.getSurrogate(op, "winC", at));
+        assertEquals("enabled=0 不应生效", null, extRepo.getSurrogate(op, "winD", at));
+        assertEquals("无窗启用委托应生效（NULL=不限）", "sE", extRepo.getSurrogate(op, "winE", at).getSurrogate());
+        // 负向：查不存在的流程 → null
+        assertEquals("无匹配流程应返回 null", null, extRepo.getSurrogate(op, "winZ", at));
+        // 换时间验证窗口边界随时间变化：B 在 9 月生效、A 在 9 月失效
+        java.time.LocalDateTime atSep = java.time.LocalDateTime.of(2026, 9, 15, 12, 0, 0);
+        assertEquals("9 月：B 进入窗口应生效", "sB", extRepo.getSurrogate(op, "winB", atSep).getSurrogate());
+        assertEquals("9 月：A 已出窗口不应生效", null, extRepo.getSurrogate(op, "winA", atSep));
+    }
+
     /** issues/82-7：委托分页 m_IN_processName / m_EQ_enabled 查询形态（对齐 mldong 前端委托页搜索） */
     @Test
     public void testSurrogatePageInAndEqConditions() {
