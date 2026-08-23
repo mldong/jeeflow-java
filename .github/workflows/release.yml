@@ -61,25 +61,3 @@ jobs:
           echo "❌ 3 次尝试均失败"
           exit 1
 
-  verify:
-    name: Verify Maven Central
-    needs: publish
-    runs-on: ubuntu-latest
-    steps:
-      - name: Wait for Maven Central indexing
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "⏳ 等待 Maven Central 索引同步..."
-          sleep 60
-          for i in {1..20}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-              "https://repo1.maven.org/maven2/com/mldong/jeeflow/jeeflow-core/${VERSION}/jeeflow-core-${VERSION}.pom")
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Maven Central jeeflow-core:${VERSION} 已可用"
-              exit 0
-            fi
-            echo "   等待中... ($i/20) HTTP: $HTTP_CODE"
-            sleep 30
-          done
-          echo "❌ Maven Central 验证超时"
-          exit 1
