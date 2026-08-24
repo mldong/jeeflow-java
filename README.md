@@ -2,15 +2,14 @@
 
 轻量 Java 工作流引擎——零框架依赖、DDD 充血模型、JDK 8 兼容。
 
-> **v1.1.0**：新增管理扩展（流程设计/历史/委托三表 + `IProcessExtRepository` + `SurrogateInterceptor`）
-> 与统一门面 `JeeflowFacade.flow(action, map)`（27 个 action，集成方 controller 一行接入）；
-> assignee 变量解析与 `flow.auto`/`flow.admin` 系统代执行对齐 boot2/boot3（v1.0.1）。
+统一门面 `JeeflowFacade.flow(action, map)` 一行接入；支持管理扩展（流程设计/历史/委托）、
+assignee 变量解析与 `flow.auto`/`flow.admin` 系统代执行。完整契约见 [文档站](https://jeeflow-doc.mldong.com)。
 
 ## 特性
 
 - **零框架依赖**：不依赖 Spring、MyBatis、JPA、Servlet，仅 `slf4j-api`（provided）
 - **DDD 充血模型**：`ProcessInstance` 聚合根封装所有状态变更行为
-- **SPI 可扩展**：5 个 SPI 接口，替换任意环节
+- **SPI 可扩展**：仓储 / JSON / 用户 / 事务 / 表达式 / ID 等可替换
 - **JDK 8+**：在 8~25 上均可运行
 - **Spring Boot Starter**：支持 Boot 2.x / 3.x / 4.x
 - **内置流程模式**：开始、结束、任务、决策、分支、合并、子流程、自定义节点、会签
@@ -58,4 +57,7 @@ ProcessInstance pi = engine.startProcessInstanceById(defineId, "张三", FlowDat
 
 ## License
 
-Apache-2.0
+Copyright © 2025-2026 mldong
+
+Licensed under the Apache License, Version 2.0.
+See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
