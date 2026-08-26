@@ -88,8 +88,8 @@
 | `taskType` | 0=主办 1=协办 2=记录 |
 | `performType` | 0=普通参与（任一人完成即推进） 1=会签参与 |
 | `candidateUsers` | 候选人列表，逗号分隔 |
-| `counterType` | `PARALLEL` 并行会签 / `SEQUENTIAL` 串行会签 |
-| `countersignCompletionCondition` | 会签完成条件表达式 |
+| `countersignType` | `PARALLEL` 并行会签 / `SEQUENTIAL` 串行会签 / `RATIO` 按比例会签 |
+| `countersignCompletionCondition` | 会签完成条件表达式；特殊值 `ONE_VOTE_VETO` = 开启一票否决 |
 
 ### 会签完成条件
 
@@ -98,7 +98,7 @@
 | 全部完成 | 为空或 `#nrOfCompletedInstances==#nrOfInstances` |
 | 按数量通过 | `#nrOfCompletedInstances==N` |
 | 一票通过 | `#nrOfCompletedInstances==1` |
-| 一票否决 | 设置 submitType=20 |
+| 一票否决 | 节点条件填 `ONE_VOTE_VETO` 后，任一成员 submitType=20 即推进整单；**未配置时 submitType=20 为软拒绝**（flag 记录、不阻断） |
 
 ### 决策节点 `snaker:decision`
 
