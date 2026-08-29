@@ -213,29 +213,19 @@ public class JeeflowFacade {
     }
 
     private Map<String, Object> defineRemove(Map<String, Object> args) {
-        // issues/28：兼容 {ids} 批量与单 {id}
-        Object ids = args.get("ids");
-        if (ids instanceof Collection) {
-            for (Object id : (Collection<?>) ids) {
-                repository.removeDefine(toLong(id));
-            }
-        } else {
-            repository.removeDefine(toLong(args.get("id")));
+        // issues/28：兼容 {ids} 批量与单 {id}（空值报错见 idListArgs）
+        for (Long id : idListArgs(args)) {
+            repository.removeDefine(id);
         }
         return ok();
     }
 
     private Map<String, Object> defineUpAndDown(Map<String, Object> args) {
         // issues/28：兼容 {ids, opType} 批量（boot3 前端 IdsParam 惯例）与单 {id, state}
-        Object ids = args.get("ids");
         Object stateObj = args.get("opType") != null ? args.get("opType") : args.get("state");
         int state = Integer.parseInt(stateObj.toString());
-        if (ids instanceof Collection) {
-            for (Object id : (Collection<?>) ids) {
-                repository.updateDefineState(toLong(id), state);
-            }
-        } else {
-            repository.updateDefineState(toLong(args.get("id")), state);
+        for (Long id : idListArgs(args)) {
+            repository.updateDefineState(id, state);
         }
         return ok();
     }
@@ -908,13 +898,8 @@ public class JeeflowFacade {
 
     private Map<String, Object> designRemove(Map<String, Object> args) {
         // issues/28：兼容 {ids} 批量（boot3 前端 IdsParam 惯例）与单 {id}
-        Object ids = args.get("ids");
-        if (ids instanceof Collection) {
-            for (Object id : (Collection<?>) ids) {
-                ext().removeDesign(toLong(id));
-            }
-        } else {
-            ext().removeDesign(toLong(args.get("id")));
+        for (Long id : idListArgs(args)) {
+            ext().removeDesign(id);
         }
         return ok();
     }
@@ -1181,8 +1166,10 @@ public class JeeflowFacade {
     }
 
     private Map<String, Object> surrogateRemove(Map<String, Object> args) {
-        Long id = toLong(args.get("id"));
-        ext().removeSurrogate(id);
+        // issues/95：前端「我的委托」行内/批量删除统一发 {ids}，与 define/design remove 同惯例
+        for (Long id : idListArgs(args)) {
+            ext().removeSurrogate(id);
+        }
         return ok();
     }
 
@@ -1498,6 +1485,27 @@ public class JeeflowFacade {
             return n.longValue();
         }
         try { return Long.parseLong(val.toString()); } catch (NumberFormatException e) { return null; }
+    }
+
+    /**
+     * 删除/启停类 action 的批量主键：mldong IdsParam 惯例下 {@code {ids}} 数组优先，
+     * 兼容单 {@code {id}}；两者皆缺失、空数组或含非法值一律报错（issues/95）。
+     */
+    private static List<Long> idListArgs(Map<String, Object> args) {
+        Object ids = args.get("ids");
+        List<Long> out = new ArrayList<>();
+        if (ids instanceof Collection) {
+            for (Object id : (Collection<?>) ids) {
+                Long v = toLong(id);
+                if (v == null) throw new IllegalArgumentException("id 缺失或非法");
+                out.add(v);
+            }
+        } else {
+            Long v = toLong(args.get("id"));
+            if (v != null) out.add(v);
+        }
+        if (out.isEmpty()) throw new IllegalArgumentException("id 缺失或非法");
+        return out;
     }
 
     private static Integer toInt(Object val, int def) {

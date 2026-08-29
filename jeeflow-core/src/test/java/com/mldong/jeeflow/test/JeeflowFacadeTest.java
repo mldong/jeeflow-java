@@ -293,6 +293,55 @@ public class JeeflowFacadeTest {
         assertEquals(Integer.valueOf(99999999), r.get("code"));
     }
 
+    /** issues/95：前端「我的委托」行内与批量删除统一发 {ids}（行内 = 长度 1 的数组），
+     *  此前六语言门面只读单数 {id} → 该页删除整体不可用；单 {id} 形态保留兼容（移动端发这个）。 */
+    @Test
+    public void testSurrogateRemoveBatchIds() {
+        Long a = toLong(((Map<String, Object>) call("processSurrogate/save",
+                args("operator", "zhangsan", "surrogate", "lisiA", "processName", "leaveA")).get("data")).get("id"));
+        Long b = toLong(((Map<String, Object>) call("processSurrogate/save",
+                args("operator", "zhangsan", "surrogate", "lisiB", "processName", "leaveB")).get("data")).get("id"));
+        Long c = toLong(((Map<String, Object>) call("processSurrogate/save",
+                args("operator", "lisiC", "surrogate", "lisiD", "processName", "leaveC")).get("data")).get("id"));
+        assertNotNull(a);
+        assertNotNull(b);
+
+        // 批量删除 {ids}
+        assertOk(call("processSurrogate/remove", args("ids", Arrays.asList(a, b))));
+        assertNull(extRepo.findSurrogateById(a));
+        assertNull(extRepo.findSurrogateById(b));
+
+        // 行内删除：前端同样走 {ids}，长度 1
+        assertOk(call("processSurrogate/remove", args("ids", Arrays.asList(c))));
+        assertNull(extRepo.findSurrogateById(c));
+
+        // 单 {id} 兼容形态回归
+        Long d = toLong(((Map<String, Object>) call("processSurrogate/save",
+                args("operator", "zhangsan", "surrogate", "lisiE", "processName", "leaveD")).get("data")).get("id"));
+        assertOk(call("processSurrogate/remove", args("id", d)));
+        assertNull(extRepo.findSurrogateById(d));
+    }
+
+    /** issues/95 §5②：{ids}/​{id} 缺失或空数组一律报错，禁止静默成功（六语言统一口径）。 */
+    @Test
+    public void testRemoveEmptyIdsRejected() {
+        Map<String, Object> r = call("processSurrogate/remove", args("ids", new ArrayList<Long>()));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertEquals("id 缺失或非法", r.get("msg"));
+        // 两者皆缺：此前 Java 走 toLong(null) → setLong 拆箱 NPE
+        r = call("processSurrogate/remove", args("surrogate", "lisi"));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        r = call("processSurrogate/remove", args("ids", Arrays.asList(123L, null)));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+
+        r = call("processDefine/remove", args("ids", new ArrayList<Long>()));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        r = call("processDesign/remove", args("ids", new ArrayList<Long>()));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        r = call("processDefine/upAndDown", args("ids", new ArrayList<Long>(), "opType", 0));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+    }
+
     /** issues/82-12：委托生效判断——时间窗 startTime/endTime + enabled 过滤（五语言基准）。
      *  5 条委托各对应一个时间态：在窗 / 未到 / 已过 / 无窗(enabled=0) / 无窗(enabled=1)。
      *  每条查询只命中其中一条（processName 精确区分），断言结果与命中集唯一 → 不依赖仓储返回顺序。 */
