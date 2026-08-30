@@ -342,6 +342,207 @@ public class JeeflowFacadeTest {
         assertEquals(Integer.valueOf(99999999), r.get("code"));
     }
 
+    // ═══ issues/96 §4B：入口批量参数形态矩阵（4 action × 4 态）═══
+    //
+    // mldong 前端批量删除一律发 {ids:[...]}（IdsParam 惯例），引擎历史上只认单数 {id}；
+    // issues/95 已把 processSurrogate/remove · processDesign/remove · processDefine/remove ·
+    // processDefine/upAndDown 四个 action 收敛到 JeeflowFacade#idListArgs(Map)。
+    //
+    // 本矩阵钉的是「前端实际发送的载荷形状」，不是「实现恰好接受的形状」（issues/96 §3 根因 1）——
+    // 既有套件全发单数 {id}，引擎完全不认 {ids} 也照样全绿，所以才放过了 issues/95。
+    //
+    // 四态口径（每个 action 各测一遍）：
+    //   态 1 {ids:[a,b]}          批量正向：两个真实 id → 成功，且事后回查两条都取不到（不能只断 code）
+    //   态 2 {id:c}               旧单值形态回归：仍成功（防修坏）
+    //   态 3 {ids:[]}             空数组必须报错，禁止静默成功
+    //   态 4 {ids:[""]} / {ids:[d,null]}  空串/含 null 必须报错，且 d 不被部分删除（校验先于写入）
+    //
+    // msg 一律用 contains 断言：各语言实现可能在「id 缺失或非法」后追加诊断后缀。
+    // 启停 action 的「事后回查」不是取不到，而是 state 真的按序变了。
+
+    /** issues/96 §4B：{@code processSurrogate/remove} 入口形态四态（本批 issues/95 才接入 idListArgs 的 action）。 */
+    @Test
+    public void testSurrogateRemoveParamShapeMatrix() {
+        Long a = newSurrogate("shapeA");
+        Long b = newSurrogate("shapeB");
+
+        // 态 1：{ids:[a,b]} —— 前端「我的委托」勾选批量删除的真实载荷
+        assertOk(call("processSurrogate/remove", args("ids", Arrays.asList(a, b))));
+        assertNull("批量删除后 a 应取不到", extRepo.findSurrogateById(a));
+        assertNull("批量删除后 b 应取不到", extRepo.findSurrogateById(b));
+        assertGoneViaFacade("processSurrogate/detail", a);
+        assertGoneViaFacade("processSurrogate/detail", b);
+
+        // 态 2：{id:c} —— 旧单值形态（移动端仍发这个），必须继续可用
+        Long c = newSurrogate("shapeC");
+        assertOk(call("processSurrogate/remove", args("id", c)));
+        assertNull("单 id 删除后 c 应取不到", extRepo.findSurrogateById(c));
+        assertGoneViaFacade("processSurrogate/detail", c);
+
+        // 态 3：{ids:[]} —— 空数组禁止静默成功
+        assertIdsRejected("processSurrogate/remove", args("ids", new ArrayList<Long>()));
+
+        // 态 4：{ids:[""]} 与 {ids:[d,null]} —— 非法值报错，且合法元素不被部分删除
+        Long d = newSurrogate("shapeD");
+        assertIdsRejected("processSurrogate/remove", args("ids", Arrays.asList("")));
+        assertIdsRejected("processSurrogate/remove", args("ids", Arrays.asList(d, null)));
+        assertNotNull("校验应先于写入，d 不应被部分删除", extRepo.findSurrogateById(d));
+        assertOk(call("processSurrogate/remove", args("ids", Arrays.asList(d))));
+    }
+
+    /** issues/96 §4B：{@code processDesign/remove} 入口形态四态。 */
+    @Test
+    public void testDesignRemoveParamShapeMatrix() {
+        Long a = newDesign("shapeDesignA");
+        Long b = newDesign("shapeDesignB");
+
+        // 态 1
+        assertOk(call("processDesign/remove", args("ids", Arrays.asList(a, b))));
+        assertNull("批量删除后设计 a 应取不到", extRepo.findDesignById(a));
+        assertNull("批量删除后设计 b 应取不到", extRepo.findDesignById(b));
+        assertGoneViaFacade("processDesign/detail", a);
+        assertGoneViaFacade("processDesign/detail", b);
+
+        // 态 2
+        Long c = newDesign("shapeDesignC");
+        assertOk(call("processDesign/remove", args("id", c)));
+        assertNull("单 id 删除后设计 c 应取不到", extRepo.findDesignById(c));
+        assertGoneViaFacade("processDesign/detail", c);
+
+        // 态 3
+        assertIdsRejected("processDesign/remove", args("ids", new ArrayList<Long>()));
+
+        // 态 4
+        Long d = newDesign("shapeDesignD");
+        assertIdsRejected("processDesign/remove", args("ids", Arrays.asList("")));
+        assertIdsRejected("processDesign/remove", args("ids", Arrays.asList(d, null)));
+        assertNotNull("校验应先于写入，设计 d 不应被部分删除", extRepo.findDesignById(d));
+        assertOk(call("processDesign/remove", args("ids", Arrays.asList(d))));
+    }
+
+    /** issues/96 §4B：{@code processDefine/remove} 入口形态四态（此前连 Java 自己都没有 {ids} 用例）。 */
+    @Test
+    public void testDefineRemoveParamShapeMatrix() {
+        Long a = deployDefine("shapeDefineA");
+        Long b = deployDefine("shapeDefineB");
+
+        // 态 1
+        assertOk(call("processDefine/remove", args("ids", Arrays.asList(a, b))));
+        assertNull("批量删除后定义 a 应取不到", rawRepo.findDefineById(a));
+        assertNull("批量删除后定义 b 应取不到", rawRepo.findDefineById(b));
+        assertGoneViaFacade("processDefine/detail", a);
+        assertGoneViaFacade("processDefine/detail", b);
+        assertEquals("按名也应取不到定义 a", Integer.valueOf(99999999),
+                call("processDefine/getLastByName", args("processDefineName", "shapeDefineA")).get("code"));
+        assertEquals("按名也应取不到定义 b", Integer.valueOf(99999999),
+                call("processDefine/getLastByName", args("processDefineName", "shapeDefineB")).get("code"));
+
+        // 态 2
+        Long c = deployDefine("shapeDefineC");
+        assertOk(call("processDefine/remove", args("id", c)));
+        assertNull("单 id 删除后定义 c 应取不到", rawRepo.findDefineById(c));
+        assertGoneViaFacade("processDefine/detail", c);
+
+        // 态 3
+        assertIdsRejected("processDefine/remove", args("ids", new ArrayList<Long>()));
+
+        // 态 4
+        Long d = deployDefine("shapeDefineD");
+        assertIdsRejected("processDefine/remove", args("ids", Arrays.asList("")));
+        assertIdsRejected("processDefine/remove", args("ids", Arrays.asList(d, null)));
+        assertNotNull("校验应先于写入，定义 d 不应被部分删除", rawRepo.findDefineById(d));
+        assertOk(call("processDefine/remove", args("ids", Arrays.asList(d))));
+    }
+
+    /** issues/96 §4B：{@code processDefine/upAndDown} 入口形态四态。
+     *  ⚠️ Java 现实现里 state 校验排在 ids 之前（defineUpAndDown 先 {@code Integer.parseInt(stateObj.toString())}），
+     *  不带 state 时态 3/4 会被 state 的 NPE 抢先满足（返回「Cannot invoke "Object.toString()" because "stateObj" is null」），
+     *  测的就不是 ids 校验了 —— 所以本用例每一态都带合法 state。
+     *  该顺序属于已挂号未改的遗留偏差（issues/95/96），本轮不动它、只绕开它。 */
+    @Test
+    public void testDefineUpAndDownParamShapeMatrix() {
+        Long a = deployDefine("shapeUpDownA");
+        Long b = deployDefine("shapeUpDownB");
+
+        // 态 1：{ids:[a,b], opType:0} —— boot3 前端批量停用的真实载荷
+        assertOk(call("processDefine/upAndDown", args("ids", Arrays.asList(a, b), "opType", 0)));
+        assertEquals("批量停用后 a 的 state 应为 0", Integer.valueOf(0), rawRepo.findDefineById(a).getState());
+        assertEquals("批量停用后 b 的 state 应为 0", Integer.valueOf(0), rawRepo.findDefineById(b).getState());
+
+        // 态 2：{id:c, state:0/1} —— 旧单值形态（state 键是 issues/28 前的写法），必须继续可用且真的生效
+        Long c = deployDefine("shapeUpDownC");
+        assertEquals("新发布定义初始 state 应为 1", Integer.valueOf(1), rawRepo.findDefineById(c).getState());
+        assertOk(call("processDefine/upAndDown", args("id", c, "state", 0)));
+        assertEquals("单 id 停用后 c 的 state 应为 0", Integer.valueOf(0), rawRepo.findDefineById(c).getState());
+        assertOk(call("processDefine/upAndDown", args("id", c, "state", 1)));
+        assertEquals("单 id 启用后 c 的 state 应为 1", Integer.valueOf(1), rawRepo.findDefineById(c).getState());
+
+        // 态 3：{ids:[], opType:0} —— 带合法 state，报错只能来自 ids 校验
+        assertIdsRejected("processDefine/upAndDown", args("ids", new ArrayList<Long>(), "opType", 0));
+
+        // 态 4：{ids:[""], opType:0} 与 {ids:[d,null], opType:0}
+        Long d = deployDefine("shapeUpDownD");
+        assertIdsRejected("processDefine/upAndDown", args("ids", Arrays.asList(""), "opType", 0));
+        assertIdsRejected("processDefine/upAndDown", args("ids", Arrays.asList(d, null), "opType", 0));
+        assertEquals("校验应先于写入，d 的 state 不应被部分改写", Integer.valueOf(1), rawRepo.findDefineById(d).getState());
+        assertOk(call("processDefine/upAndDown", args("ids", Arrays.asList(d), "opType", 0)));
+        assertEquals("清理后 d 的 state 应为 0", Integer.valueOf(0), rawRepo.findDefineById(d).getState());
+    }
+
+    /** 造数（issues/96 §4B）：一条带时间窗的委托，返回 surrogateId */
+    private Long newSurrogate(String processName) {
+        Map<String, Object> r = call("processSurrogate/save", args(
+                "operator", "shapeop", "surrogate", "shapelisi", "processName", processName,
+                "startTime", "2026-08-01 00:00:00", "endTime", "2026-08-31 23:59:59", "enabled", 1));
+        assertOk(r);
+        Long id = toLong(((Map<String, Object>) r.get("data")).get("id"));
+        assertNotNull("造数应返回委托 id: " + r, id);
+        return id;
+    }
+
+    /** 造数（issues/96 §4B）：一条流程设计，返回 designId */
+    private Long newDesign(String name) {
+        Map<String, Object> r = call("processDesign/save", args(
+                "name", name, "displayName", "形态" + name, "type", "approval", "operator", "user1"));
+        assertOk(r);
+        Long id = toLong(((Map<String, Object>) r.get("data")).get("id"));
+        assertNotNull("造数应返回设计 id: " + r, id);
+        return id;
+    }
+
+    /** 造数（issues/96 §4B）：save 设计 → updateDefine → deploy，返回 defineId，并用 getLastByName 复核可按名取到。 */
+    private Long deployDefine(String name) {
+        Long designId = newDesign(name);
+        assertOk(call("processDesign/updateDefine", args(
+                "processDesignId", designId, "operator", "user1",
+                "name", name, "displayName", "形态" + name, "type", "approval",
+                "nodes", new ArrayList<>(), "edges", new ArrayList<>())));
+        Map<String, Object> dr = call("processDesign/deploy", args("id", designId, "operator", "user1"));
+        assertOk(dr);
+        Long defineId = toLong(((Map<String, Object>) dr.get("data")).get("processDefineId"));
+        assertNotNull("发布应返回 processDefineId: " + dr, defineId);
+        Map<String, Object> last = call("processDefine/getLastByName", args("processDefineName", name));
+        assertOk(last);
+        assertEquals("getLastByName 应与发布返回的 defineId 一致", defineId,
+                toLong(((Map<String, Object>) last.get("data")).get("id")));
+        return defineId;
+    }
+
+    /** 断言（issues/96 §4B）：批量/启停 action 的负向态 —— code=99999999 且 msg 含「id 缺失或非法」。 */
+    private void assertIdsRejected(String action, Map<String, Object> payload) {
+        Map<String, Object> r = call(action, payload);
+        assertEquals(action + " 负向入参应报错（禁止静默成功）: " + r, Integer.valueOf(99999999), r.get("code"));
+        assertTrue(action + " msg 应含「id 缺失或非法」: " + r,
+                String.valueOf(r.get("msg")).contains("id 缺失或非法"));
+    }
+
+    /** 断言（issues/96 §4B）：删除后从门面这一侧回查也取不到（矩阵要求「不能只断 remove 自己的 code」）。 */
+    private void assertGoneViaFacade(String detailAction, Long id) {
+        Map<String, Object> r = call(detailAction, args("id", id));
+        assertEquals(detailAction + " 删除后应取不到 id=" + id + ": " + r,
+                Integer.valueOf(99999999), r.get("code"));
+    }
+
     /** issues/82-12：委托生效判断——时间窗 startTime/endTime + enabled 过滤（五语言基准）。
      *  5 条委托各对应一个时间态：在窗 / 未到 / 已过 / 无窗(enabled=0) / 无窗(enabled=1)。
      *  每条查询只命中其中一条（processName 精确区分），断言结果与命中集唯一 → 不依赖仓储返回顺序。 */
