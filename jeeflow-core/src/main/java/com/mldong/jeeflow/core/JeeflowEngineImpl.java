@@ -6,6 +6,8 @@ import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.*;
+import com.mldong.jeeflow.event.ProcessEvent;
+import com.mldong.jeeflow.event.ProcessPublisher;
 import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.model.*;
 import com.mldong.jeeflow.parser.ModelParser;
@@ -91,8 +93,13 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             Execution exec = buildExecution(model, instance, args, operator);
             model.getStart().execute(exec);
             // 9. 持久化产生的任务，并更新实例
+            //    TASK_START 事件须在 saveTask 落库（分配 taskId）之后 fire——对齐 spec §4.4
+            //    「任务落库后逐任务 fire，监听器可按 taskId 反查」与 Go 参考实现。
+            //    CreateTaskHandler 在 handler 阶段（taskId 尚未生成）不再 fire，避免 sourceId=null
+            //    导致监听器（onEvent 的 sourceId==null 守卫）漏发「新待办」TODO 消息。
             for (ProcessTask task : exec.getProcessTaskList()) {
                 repository.saveTask(task);
+                notifyTaskStart(task);
             }
             repository.updateInstance(instance);
             return instance;
@@ -267,11 +274,31 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     private void persistTasks(Execution exec) {
         for (ProcessTask task : exec.getProcessTaskList()) {
             repository.saveTask(task);
+            // TASK_START 在落库（分配 taskId）后 fire，见 start 内注释与 spec §4.4
+            notifyTaskStart(task);
         }
         if (exec.getProcessTask() != null && exec.getProcessTask().getTaskId() != null) {
             repository.updateTask(exec.getProcessTask());
         }
         repository.updateInstance(exec.getProcessInstance());
+    }
+
+    /**
+     * fire「任务开始」事件（TASK_START / 新待办）。
+     *
+     * <p>引擎契约（spec §4.4 / Go 参考实现）：事件在任务行**落库之后**触发，事件
+     * {@code sourceId = taskId} 必须可被监听器 {@code findTaskById} 反查。故本方法只在
+     * {@code saveTask}（分配 taskId）之后调用——{@link CreateTaskHandler} 在 handler 阶段
+     * 不再自行 fire（那时 taskId 尚为 null，监听器 sourceId==null 守卫会漏发）。</p>
+     */
+    private void notifyTaskStart(ProcessTask task) {
+        if (task == null || task.getTaskId() == null) {
+            return;
+        }
+        ProcessPublisher.notify(ProcessEvent.builder()
+                .eventType(ProcessEventTypeEnum.PROCESS_TASK_START)
+                .sourceId(task.getTaskId())
+                .build());
     }
 
     private <T> T runInTx(ITransactionTemplate.Supplier<T> action) {

@@ -63,13 +63,11 @@ public class CreateTaskHandler implements IHandler {
             }
         }
 
-        // 发布事件
-        for (ProcessTask task : tasks) {
-            ProcessPublisher.notify(ProcessEvent.builder()
-                    .eventType(ProcessEventTypeEnum.PROCESS_TASK_START)
-                    .sourceId(task.getTaskId())
-                    .build());
-        }
+        // 「任务开始」(TASK_START) 事件改由引擎在任务落库之后 fire（见 JeeflowEngineImpl
+        // .notifyTaskStart）。此处 handler 阶段 taskId 尚未生成（saveTask 才 nextId()），
+        // 若在此 fire 则 sourceId=null，监听器 sourceId==null 守卫会漏发「新待办」TODO
+        // （issues/13 messagePage 恒空的引擎侧根因）。对齐 spec §4.4「任务落库后逐任务 fire」
+        // 与 Go 参考实现，故此处不再 fire。
     }
 
     private List<String> resolveActors(TaskModel taskModel, ProcessModel model, Execution execution) {
