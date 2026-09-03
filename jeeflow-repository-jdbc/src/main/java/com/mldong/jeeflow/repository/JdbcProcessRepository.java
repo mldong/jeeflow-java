@@ -890,23 +890,26 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     @Override
     public List<Map<String, Object>> statsDefineGroup(LocalDateTime start, LocalDateTime end, int limit) {
+        // D：对齐内置线 mapper——count 全实例不过滤 state、avg 仅对 state=20 实例聚合、
+        // inner join define、子查询取每实例 MAX(finish_time)
         StringBuilder sql = new StringBuilder(
                 "SELECT pd.name AS `key`, pd.display_name AS label, COUNT(*) AS `count`, " +
-                "AVG(TIMESTAMPDIFF(SECOND, i.create_time, " +
-                "(SELECT MAX(t2.finish_time) FROM wf_process_task t2 WHERE t2.process_instance_id = i.id))) AS avgDurationSeconds " +
+                "ROUND(AVG(CASE WHEN i.state = 20 AND sub.maxft IS NOT NULL " +
+                "THEN TIMESTAMPDIFF(SECOND, i.create_time, sub.maxft) END)) AS avgDurationSeconds " +
                 "FROM wf_process_instance i " +
-                "LEFT JOIN wf_process_define pd ON i.process_define_id = pd.id " +
-                "WHERE i.state IN (10, 20)");
+                "JOIN wf_process_define pd ON i.process_define_id = pd.id " +
+                "LEFT JOIN (SELECT process_instance_id, MAX(finish_time) AS maxft " +
+                "FROM wf_process_task GROUP BY process_instance_id) sub ON sub.process_instance_id = i.id");
         List<Object> params = new ArrayList<>();
         if (start != null) {
-            sql.append(" AND i.create_time >= ?");
+            sql.append(" WHERE i.create_time >= ?");
             params.add(toTimestamp(start));
         }
         if (end != null) {
-            sql.append(" AND i.create_time < DATE_ADD(?, INTERVAL 1 SECOND)");
+            sql.append((start != null ? " AND " : " WHERE ") + "i.create_time < DATE_ADD(?, INTERVAL 1 SECOND)");
             params.add(toTimestamp(end));
         }
-        sql.append(" GROUP BY pd.id ORDER BY `count` DESC LIMIT ?");
+        sql.append(" GROUP BY pd.id, pd.name, pd.display_name ORDER BY `count` DESC LIMIT ?");
         params.add(limit);
 
         List<Map<String, Object>> result = new ArrayList<>();

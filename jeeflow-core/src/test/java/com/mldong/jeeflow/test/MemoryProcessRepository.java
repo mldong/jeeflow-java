@@ -622,14 +622,18 @@ public class MemoryProcessRepository implements IProcessRepository {
             defineNames.put(d.getId(), d.getName() != null ? d.getName() : String.valueOf(d.getId()));
             defineLabels.put(d.getId(), d.getDisplayName());
         }
-        Map<String, long[]> grouped = new HashMap<>(); // key -> [count, totalDurationSeconds]
+        // D 对齐内置线 mapper：count 全实例（无 state 过滤）、inner join define、avg 仅对 state=20 且有 finish 的实例聚合
+        Map<String, long[]> grouped = new HashMap<>(); // key -> [count, totalDurationSeconds, completedCount]
+        LocalDateTime endExclusive = end != null ? end.plusSeconds(1) : null;
         for (ProcessInstance inst : instances.values()) {
             Integer st = inst.getState();
-            if (st == null || (st != 10 && st != 20)) continue;
-            if (start != null && inst.getCreateTime() != null && inst.getCreateTime().isBefore(start)) continue;
-            if (end != null && inst.getCreateTime() != null && inst.getCreateTime().isAfter(end)) continue;
+            if (inst.getDefineId() == null || !defines.containsKey(inst.getDefineId())) continue;
+            if (inst.getCreateTime() != null && start != null && inst.getCreateTime().isBefore(start)) continue;
+            if (inst.getCreateTime() != null && endExclusive != null && !inst.getCreateTime().isBefore(endExclusive)) continue;
             String key = defineNames.getOrDefault(inst.getDefineId(), String.valueOf(inst.getDefineId()));
             long durSec = 0;
+            long[] arr = grouped.computeIfAbsent(key, k -> new long[3]);
+            arr[0]++;
             if (Integer.valueOf(20).equals(st) && inst.getCreateTime() != null) {
                 LocalDateTime maxFinish = tasks.values().stream()
                         .filter(t -> inst.getInstanceId().equals(t.getProcessInstanceId()))
@@ -639,11 +643,10 @@ public class MemoryProcessRepository implements IProcessRepository {
                         .orElse(null);
                 if (maxFinish != null) {
                     durSec = java.time.Duration.between(inst.getCreateTime(), maxFinish).getSeconds();
+                    arr[1] += durSec;
+                    arr[2]++;
                 }
             }
-            long[] arr = grouped.computeIfAbsent(key, k -> new long[2]);
-            arr[0]++;
-            arr[1] += durSec;
         }
         return grouped.entrySet().stream()
                 .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
@@ -661,7 +664,7 @@ public class MemoryProcessRepository implements IProcessRepository {
                     }
                     m.put("label", label);
                     m.put("count", e.getValue()[0]);
-                    m.put("avgDurationSeconds", e.getValue()[0] > 0 ? (int) Math.round((double) e.getValue()[1] / e.getValue()[0]) : null);
+                    m.put("avgDurationSeconds", e.getValue()[2] > 0 ? (int) Math.round((double) e.getValue()[1] / e.getValue()[2]) : null);
                     return m;
                 })
                 .collect(Collectors.toList());

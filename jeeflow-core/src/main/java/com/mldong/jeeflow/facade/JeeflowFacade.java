@@ -1560,10 +1560,13 @@ public class JeeflowFacade {
     private Map<String, Object> statsOverview(Map<String, Object> args) {
         LocalDateTime start = parseTime(args.get("start"));
         LocalDateTime end = parseTime(args.get("end"));
+        // B：stateIn 入参（int[]，缺省 DEFAULT_STATE_IN），作用于六个状态计数
+        List<Integer> stateIn = parseIntList(args.get("stateIn"));
+        if (stateIn == null) stateIn = DEFAULT_STATE_IN;
 
         // 1. 实例各状态计数
         List<IProcessRepository.InstanceStatsRow> allInst =
-                repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+                repository.queryInstancesForStats(stateIn, "create_time", start, end);
         Map<Integer, Long> instByState = allInst.stream()
                 .collect(Collectors.groupingBy(IProcessRepository.InstanceStatsRow::getState, Collectors.counting()));
         long total      = allInst.size();
@@ -1573,12 +1576,12 @@ public class JeeflowFacade {
         long rejected   = instByState.getOrDefault(45, 0L);
         long suspended  = instByState.getOrDefault(50, 0L);
 
-        // 2. todayNew：当日创建的实例数（恒按当天，不受 start/end 影响）
+        // 2. todayNew：服务器当日创建的实例数（恒按当天，不受 start/end/stateIn 影响，对齐内置线 countTodayNew）
         LocalDate today = LocalDate.now();
         LocalDateTime todayStart = today.atStartOfDay();
         LocalDateTime todayEnd = today.plusDays(1).atStartOfDay();
         List<IProcessRepository.InstanceStatsRow> todayInst =
-                repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", todayStart, todayEnd);
+                repository.queryInstancesForStats(null, "create_time", todayStart, todayEnd);
         long todayNew = todayInst.size();
 
         // 3. 待办 / 逾期（全量，不受时间范围约束——反映"当前"积压）
@@ -1620,19 +1623,23 @@ public class JeeflowFacade {
 
     /**
      * statsTrend：趋势统计
-     * 入参：start?, end?, granularity?(hour|day|week|month)
+     * 入参：start, end, granularity（均必填）；返回 data 本体为裸数组（契约 spec 06 §4.2）
      */
     private Map<String, Object> statsTrend(Map<String, Object> args) {
+        String granularity  = toStr(args.get("granularity"), "");
         LocalDateTime start = parseTime(args.get("start"));
         LocalDateTime end   = parseTime(args.get("end"));
-        String granularity  = toStr(args.get("granularity"), "day");
+        // C：start/end/granularity 均必填（对齐内置线 20010012 缺参语义）
+        if (start == null || end == null || granularity.isEmpty()) {
+            return error("trend 缺少必填参数：start/end/granularity");
+        }
         if (!VALID_GRANULARITY.contains(granularity)) {
             return error("granularity 参数非法，允许值：hour/day/week/month");
         }
 
-        // 查询时间范围内的实例（started）
+        // 查询时间范围内的实例（started，实例侧无 state 过滤，对齐内置线）
         List<IProcessRepository.InstanceStatsRow> insts =
-                repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+                repository.queryInstancesForStats(null, "create_time", start, end);
 
         // 查询时间范围内的已完成任务（finished）
         List<IProcessRepository.TaskStatsRow> finishedTasks =
@@ -1657,7 +1664,7 @@ public class JeeflowFacade {
             bucketMap.get(bk)[1]++;
         }
 
-        // 组装返回
+        // 组装返回：data 本体为裸数组（A：去掉 {granularity, series} 包装，对齐契约/前端/内置线）
         List<Map<String, Object>> series = new ArrayList<>();
         for (String b : buckets) {
             long[] counts = bucketMap.get(b);
@@ -1667,11 +1674,7 @@ public class JeeflowFacade {
             point.put("finished", counts[1]);
             series.add(point);
         }
-
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("granularity", granularity);
-        data.put("series", series);
-        return ok(data);
+        return ok(series);
     }
 
     /**
@@ -1694,7 +1697,7 @@ public class JeeflowFacade {
                 break;
             case "state": {
                 List<IProcessRepository.InstanceStatsRow> insts =
-                        repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+                        repository.queryInstancesForStats(null, "create_time", start, end);
                 Map<Integer, long[]> grouped = new LinkedHashMap<>();
                 for (IProcessRepository.InstanceStatsRow r : insts) {
                     grouped.computeIfAbsent(r.getState(), k -> new long[1])[0]++;
@@ -1708,7 +1711,7 @@ public class JeeflowFacade {
             }
             case "category": {
                 List<IProcessRepository.InstanceStatsRow> insts =
-                        repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+                        repository.queryInstancesForStats(null, "create_time", start, end);
                 // Look up define.type via processDefineId
                 Map<Long, String> instDefineTypes = new HashMap<>();
                 for (IProcessRepository.InstanceStatsRow r : insts) {
@@ -1748,7 +1751,7 @@ public class JeeflowFacade {
             }
             case "applicant": {
                 List<IProcessRepository.InstanceStatsRow> insts =
-                        repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+                        repository.queryInstancesForStats(null, "create_time", start, end);
                 Map<String, long[]> grouped = new LinkedHashMap<>();
                 for (IProcessRepository.InstanceStatsRow r : insts) {
                     String op = r.getOperator();
@@ -1820,7 +1823,7 @@ public class JeeflowFacade {
                 }
                 rows = new ArrayList<>();
                 String[] keys = {"sameDay", "1to3d", "3to7d", "over7d"};
-                int[] counts = {sameDay, d1to3, d3to7, over7d};
+                long[] counts = {sameDay, d1to3, d3to7, over7d};
                 for (int i = 0; i < keys.length; i++) {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("key", keys[i]);
@@ -1835,10 +1838,8 @@ public class JeeflowFacade {
                 rows = new ArrayList<>();
         }
 
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("dimension", dimension);
-        data.put("rows", rows);
-        return ok(data);
+        // A：data 本体为裸数组（去掉 {dimension, rows} 包装，对齐契约/前端/内置线）
+        return ok(rows);
     }
 
     /** Helper：将 Map.Entry 列表转为 statsGroup 标准行格式 [{key, label, count}] */
