@@ -9,6 +9,7 @@ import com.mldong.jeeflow.spi.PageResult;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Comparator;
 import java.util.List;
@@ -156,6 +157,12 @@ public class MemoryProcessRepository implements IProcessRepository {
     @Override
     public void updateCcStatus(Long instanceId, String actorId) {
         // no-op for memory
+    }
+
+    /** 测试访问器：读回某实例已落库的抄送人（issues/102 CC_CREATE 单测断言 cc 实例持久化）。 */
+    public List<String> ccActorsForTest(Long instanceId) {
+        List<String> l = ccInstances.get(instanceId);
+        return l == null ? Collections.emptyList() : l;
     }
 
     @Override

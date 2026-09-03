@@ -137,6 +137,28 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         }
         if (ccArr != null && ccArr.length > 0) {
             repository.createCcInstance(instanceId, operator, ccArr);
+            // CC_CREATE（issues/102 新增，六语言统一）：逐抄送人 fire，与 createCcInstance 逐行
+            // INSERT 的粒度一一对应（对齐 PHP 参考实现 v1.3.8）。sourceId=instanceId，
+            // ccActorId=抄送人 id（直传事件体，监听器免反查 cc 表）。fire 在 runInTx 事务内
+            // （与 PHP/Java 同事务一致）；监听器侧用 afterCommit 延迟反查（见集成层监听器注释）。
+            notifyCcCreate(instanceId, ccArr);
+        }
+    }
+
+    /**
+     * 抄送知会事件（CC_CREATE / issues/102）：逐抄送人 fire，{@code ccActorId} 直传事件体。
+     * 接收人过滤（trim / 非空 / 纯数字 / 去重）由集成层监听器负责，引擎只按 cc 行粒度 fire。
+     */
+    private void notifyCcCreate(Long instanceId, String[] ccArr) {
+        if (instanceId == null) {
+            return;
+        }
+        for (String ccActorId : ccArr) {
+            ProcessPublisher.notify(ProcessEvent.builder()
+                    .eventType(ProcessEventTypeEnum.CC_CREATE)
+                    .sourceId(instanceId)
+                    .ccActorId(ccActorId)
+                    .build());
         }
     }
 
