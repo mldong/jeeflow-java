@@ -3,7 +3,9 @@ package com.mldong.jeeflow.spi;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessTask;
 
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 聚合仓储 SPI——集成方实现此接口以对接持久层
@@ -69,6 +71,37 @@ public interface IProcessRepository {
 
     /** 我的待办计数 */
     int countTodoTasks(Long userId);
+
+    // ═══════════════════════════════════════
+    // 统计查询方法（issues/103）
+    // ═══════════════════════════════════════
+
+    /** 查询实例列表（stats 用，轻量级 —— 不加载关联任务）。stateIn/timeField+start/end 均可空 */
+    List<InstanceStatsRow> queryInstancesForStats(List<Integer> stateIn, String timeField, LocalDateTime start, LocalDateTime end);
+
+    /** 查询任务列表（stats 用）。state/start/end 均可空 */
+    List<TaskStatsRow> queryTasksForStats(Integer state, LocalDateTime start, LocalDateTime end);
+
+    /** 已完成实例平均时长（秒）：MAX(task.finish_time) - instance.create_time，state=20 */
+    int statsAvgCompletedDurationSeconds(LocalDateTime start, LocalDateTime end);
+
+    /** 进行中任务数 + 逾期未办任务数 → [pending, overdue] */
+    int[] statsPendingAndOverdueCount();
+
+    /** 已完成任务聚合：[total, countersign(perform_type=1), onTime(finish<=expire且expire非空), onTimeDenom(expire非空)] */
+    int[] statsCompletedTaskAggregate();
+
+    /** 当前积压节点（task_state=10 按 display_name 分组）→ [{key, count}] 降序 limit N */
+    List<Map<String, Object>> statsStuckNodeGroup(int limit);
+
+    /** 当前积压人（task_state=10 经 actor 表展开）→ [{key, count}] 降序 limit N */
+    List<Map<String, Object>> statsStuckApproverGroup(int limit);
+
+    /** 按流程定义分组统计实例数量（时间范围内创建且状态为 10/20 的实例）→ [{key, label, count, avgDurationSeconds}] 降序 limit N */
+    List<Map<String, Object>> statsDefineGroup(LocalDateTime start, LocalDateTime end, int limit);
+
+    /** 已完成实例的耗时列表（秒），用于 Facade 层分桶。state=20，create_time 在 [start,end] 内 */
+    List<Integer> statsCompletedInstanceDurations(LocalDateTime start, LocalDateTime end);
 
     // ═══════════════════════════════════════
     // 行数据传输对象
@@ -185,5 +218,43 @@ public interface IProcessRepository {
         public String getCreateUser() { return createUser; } public void setCreateUser(String v) { this.createUser = v; }
         public java.time.LocalDateTime getUpdateTime() { return updateTime; } public void setUpdateTime(java.time.LocalDateTime v) { this.updateTime = v; }
         public String getUpdateUser() { return updateUser; } public void setUpdateUser(String v) { this.updateUser = v; }
+    }
+
+    /** 实例统计行（轻量级，不加载关联任务） */
+    class InstanceStatsRow {
+        private Long id;
+        private Integer state;
+        private LocalDateTime createTime;
+        private Long processDefineId;
+        private String operator;
+
+        public Long getId() { return id; } public void setId(Long v) { this.id = v; }
+        public Integer getState() { return state; } public void setState(Integer v) { this.state = v; }
+        public LocalDateTime getCreateTime() { return createTime; } public void setCreateTime(LocalDateTime v) { this.createTime = v; }
+        public Long getProcessDefineId() { return processDefineId; } public void setProcessDefineId(Long v) { this.processDefineId = v; }
+        public String getOperator() { return operator; } public void setOperator(String v) { this.operator = v; }
+    }
+
+    /** 任务统计行 */
+    class TaskStatsRow {
+        private Long id;
+        private Long processInstanceId;
+        private Integer taskState;
+        private Integer performType;
+        private String operator;
+        private String displayName;
+        private LocalDateTime createTime;
+        private LocalDateTime finishTime;
+        private LocalDateTime expireTime;
+
+        public Long getId() { return id; } public void setId(Long v) { this.id = v; }
+        public Long getProcessInstanceId() { return processInstanceId; } public void setProcessInstanceId(Long v) { this.processInstanceId = v; }
+        public Integer getTaskState() { return taskState; } public void setTaskState(Integer v) { this.taskState = v; }
+        public Integer getPerformType() { return performType; } public void setPerformType(Integer v) { this.performType = v; }
+        public String getOperator() { return operator; } public void setOperator(String v) { this.operator = v; }
+        public String getDisplayName() { return displayName; } public void setDisplayName(String v) { this.displayName = v; }
+        public LocalDateTime getCreateTime() { return createTime; } public void setCreateTime(LocalDateTime v) { this.createTime = v; }
+        public LocalDateTime getFinishTime() { return finishTime; } public void setFinishTime(LocalDateTime v) { this.finishTime = v; }
+        public LocalDateTime getExpireTime() { return expireTime; } public void setExpireTime(LocalDateTime v) { this.expireTime = v; }
     }
 }

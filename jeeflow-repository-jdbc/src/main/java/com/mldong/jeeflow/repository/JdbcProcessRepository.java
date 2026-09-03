@@ -19,6 +19,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -680,6 +681,288 @@ public class JdbcProcessRepository implements IProcessRepository {
         } catch (SQLException e) {
             return 0;
         }
+    }
+
+    // ═══════════════════════════════════════
+    // 统计查询方法（issues/103）
+    // ═══════════════════════════════════════
+
+    private static final java.util.Set<String> INSTANCE_TIME_FIELD_WHITELIST =
+            new java.util.HashSet<>(java.util.Arrays.asList("create_time"));
+
+    @Override
+    public List<InstanceStatsRow> queryInstancesForStats(List<Integer> stateIn, String timeField, LocalDateTime start, LocalDateTime end) {
+        StringBuilder sql = new StringBuilder("SELECT id, state, create_time, process_define_id, operator FROM wf_process_instance WHERE 1=1");
+        List<Object> params = new ArrayList<>();
+
+        if (stateIn != null && !stateIn.isEmpty()) {
+            sql.append(" AND state IN (");
+            for (int i = 0; i < stateIn.size(); i++) sql.append(i == 0 ? "?" : ",?");
+            sql.append(")");
+            for (Integer s : stateIn) params.add(s);
+        }
+
+        String tf = (timeField != null && INSTANCE_TIME_FIELD_WHITELIST.contains(timeField)) ? timeField : "create_time";
+        if (start != null) {
+            sql.append(" AND ").append(tf).append(" >= ?");
+            params.add(toTimestamp(start));
+        }
+        if (end != null) {
+            sql.append(" AND ").append(tf).append(" < ?");
+            params.add(toTimestamp(end.plusSeconds(1)));
+        }
+
+        return queryList(sql.toString(), params, rs -> {
+            InstanceStatsRow r = new InstanceStatsRow();
+            r.setId(rs.getLong("id"));
+            r.setState(rs.getInt("state"));
+            r.setCreateTime(toLocalDateTime(rs.getTimestamp("create_time")));
+            r.setProcessDefineId(rs.getLong("process_define_id"));
+            r.setOperator(rs.getString("operator"));
+            return r;
+        });
+    }
+
+    @Override
+    public List<TaskStatsRow> queryTasksForStats(Integer state, LocalDateTime start, LocalDateTime end) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT id, process_instance_id, task_state, perform_type, operator, display_name, " +
+                "create_time, finish_time, expire_time FROM wf_process_task WHERE 1=1");
+        List<Object> params = new ArrayList<>();
+
+        if (state != null) {
+            sql.append(" AND task_state = ?");
+            params.add(state);
+        }
+
+        String timeCol = (state != null && state == 20) ? "finish_time" : "create_time";
+        if (start != null) {
+            sql.append(" AND ").append(timeCol).append(" >= ?");
+            params.add(toTimestamp(start));
+        }
+        if (end != null) {
+            sql.append(" AND ").append(timeCol).append(" < ?");
+            params.add(toTimestamp(end.plusSeconds(1)));
+        }
+
+        return queryList(sql.toString(), params, rs -> {
+            TaskStatsRow r = new TaskStatsRow();
+            r.setId(rs.getLong("id"));
+            r.setProcessInstanceId(rs.getLong("process_instance_id"));
+            r.setTaskState(rs.getInt("task_state"));
+            r.setPerformType(rs.getInt("perform_type"));
+            r.setOperator(rs.getString("operator"));
+            r.setDisplayName(rs.getString("display_name"));
+            r.setCreateTime(toLocalDateTime(rs.getTimestamp("create_time")));
+            r.setFinishTime(toLocalDateTime(rs.getTimestamp("finish_time")));
+            r.setExpireTime(toLocalDateTime(rs.getTimestamp("expire_time")));
+            return r;
+        });
+    }
+
+    @Override
+    public int statsAvgCompletedDurationSeconds(LocalDateTime start, LocalDateTime end) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT ROUND(AVG(dur)) FROM (" +
+                " SELECT TIMESTAMPDIFF(SECOND, i.create_time, MAX(t.finish_time)) AS dur" +
+                " FROM wf_process_instance i" +
+                " JOIN wf_process_task t ON t.process_instance_id = i.id" +
+                " WHERE i.state = 20");
+        List<Object> params = new ArrayList<>();
+        if (start != null) {
+            sql.append(" AND i.create_time >= ?");
+            params.add(toTimestamp(start));
+        }
+        if (end != null) {
+            sql.append(" AND i.create_time < DATE_ADD(?, INTERVAL 1 SECOND)");
+            params.add(toTimestamp(end));
+        }
+        sql.append(" GROUP BY i.id) x WHERE dur IS NOT NULL");
+
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    int v = rs.getInt(1);
+                    return rs.wasNull() ? 0 : v;
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("统计平均完成时长失败", e);
+        }
+        return 0;
+    }
+
+    @Override
+    public int[] statsPendingAndOverdueCount() {
+        String sql = "SELECT COUNT(*) AS pending, " +
+                "SUM(CASE WHEN expire_time IS NOT NULL AND expire_time < NOW() THEN 1 ELSE 0 END) AS overdue " +
+                "FROM wf_process_task WHERE task_state = 10";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            if (rs.next()) {
+                int pending = rs.getInt("pending");
+                int overdue = rs.getInt("overdue");
+                if (rs.wasNull()) overdue = 0;
+                return new int[]{pending, overdue};
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("统计待办/逾期数失败", e);
+        }
+        return new int[]{0, 0};
+    }
+
+    @Override
+    public int[] statsCompletedTaskAggregate() {
+        String sql = "SELECT COUNT(*) AS total, " +
+                "SUM(CASE WHEN perform_type = 1 THEN 1 ELSE 0 END) AS countersign, " +
+                "SUM(CASE WHEN expire_time IS NOT NULL AND finish_time <= expire_time THEN 1 ELSE 0 END) AS ontime, " +
+                "SUM(CASE WHEN expire_time IS NOT NULL THEN 1 ELSE 0 END) AS ontimedenom " +
+                "FROM wf_process_task WHERE task_state = 20";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            if (rs.next()) {
+                int total = rs.getInt("total");
+                int countersign = rs.getInt("countersign");
+                if (rs.wasNull()) countersign = 0;
+                int ontime = rs.getInt("ontime");
+                if (rs.wasNull()) ontime = 0;
+                int ontimedenom = rs.getInt("ontimedenom");
+                if (rs.wasNull()) ontimedenom = 0;
+                return new int[]{total, countersign, ontime, ontimedenom};
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("统计已完成任务聚合失败", e);
+        }
+        return new int[]{0, 0, 0, 0};
+    }
+
+    @Override
+    public List<Map<String, Object>> statsStuckNodeGroup(int limit) {
+        String sql = "SELECT display_name AS `key`, COUNT(*) AS `count` " +
+                "FROM wf_process_task WHERE task_state = 10 " +
+                "GROUP BY display_name ORDER BY `count` DESC LIMIT ?";
+        List<Map<String, Object>> result = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("key", rs.getString("key"));
+                    m.put("count", rs.getInt("count"));
+                    result.add(m);
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("统计积压节点失败", e);
+        }
+        return result;
+    }
+
+    @Override
+    public List<Map<String, Object>> statsStuckApproverGroup(int limit) {
+        String sql = "SELECT a.actor_id AS `key`, COUNT(*) AS `count` " +
+                "FROM wf_process_task_actor a " +
+                "JOIN wf_process_task t ON t.id = a.process_task_id " +
+                "WHERE t.task_state = 10 " +
+                "GROUP BY a.actor_id ORDER BY `count` DESC LIMIT ?";
+        List<Map<String, Object>> result = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("key", rs.getString("key"));
+                    m.put("count", rs.getInt("count"));
+                    result.add(m);
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("统计积压审批人失败", e);
+        }
+        return result;
+    }
+
+    @Override
+    public List<Map<String, Object>> statsDefineGroup(LocalDateTime start, LocalDateTime end, int limit) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT pd.name AS `key`, pd.display_name AS label, COUNT(*) AS `count`, " +
+                "AVG(TIMESTAMPDIFF(SECOND, i.create_time, " +
+                "(SELECT MAX(t2.finish_time) FROM wf_process_task t2 WHERE t2.process_instance_id = i.id))) AS avgDurationSeconds " +
+                "FROM wf_process_instance i " +
+                "LEFT JOIN wf_process_define pd ON i.process_define_id = pd.id " +
+                "WHERE i.state IN (10, 20)");
+        List<Object> params = new ArrayList<>();
+        if (start != null) {
+            sql.append(" AND i.create_time >= ?");
+            params.add(toTimestamp(start));
+        }
+        if (end != null) {
+            sql.append(" AND i.create_time < DATE_ADD(?, INTERVAL 1 SECOND)");
+            params.add(toTimestamp(end));
+        }
+        sql.append(" GROUP BY pd.id ORDER BY `count` DESC LIMIT ?");
+        params.add(limit);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("key", rs.getString("key"));
+                    m.put("label", rs.getString("label"));
+                    m.put("count", rs.getInt("count"));
+                    long avg = rs.getLong("avgDurationSeconds");
+                    m.put("avgDurationSeconds", rs.wasNull() ? null : avg);
+                    result.add(m);
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("按流程定义分组统计失败", e);
+        }
+        return result;
+    }
+
+    @Override
+    public List<Integer> statsCompletedInstanceDurations(LocalDateTime start, LocalDateTime end) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT TIMESTAMPDIFF(SECOND, i.create_time, " +
+                "(SELECT MAX(t2.finish_time) FROM wf_process_task t2 WHERE t2.process_instance_id = i.id)) AS dur " +
+                "FROM wf_process_instance i " +
+                "WHERE i.state = 20");
+        List<Object> params = new ArrayList<>();
+        if (start != null) {
+            sql.append(" AND i.create_time >= ?");
+            params.add(toTimestamp(start));
+        }
+        if (end != null) {
+            sql.append(" AND i.create_time < DATE_ADD(?, INTERVAL 1 SECOND)");
+            params.add(toTimestamp(end));
+        }
+
+        List<Integer> durations = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long dur = rs.getLong("dur");
+                    if (!rs.wasNull()) {
+                        durations.add((int) dur);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("已完成实例耗时查询失败", e);
+        }
+        return durations;
     }
 
     private PageResult<TaskRow> pageTasks(PageQuery query, boolean done, java.util.Set<String> whitelist) {

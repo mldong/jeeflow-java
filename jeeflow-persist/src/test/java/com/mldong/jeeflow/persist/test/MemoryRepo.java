@@ -6,6 +6,10 @@ import com.mldong.jeeflow.spi.IProcessRepository;
 import com.mldong.jeeflow.spi.PageQuery;
 import com.mldong.jeeflow.spi.PageResult;
 
+import com.mldong.jeeflow.spi.IProcessRepository.InstanceStatsRow;
+import com.mldong.jeeflow.spi.IProcessRepository.TaskStatsRow;
+
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -91,4 +95,18 @@ public class MemoryRepo implements IProcessRepository {
     @Override public PageResult<InstanceRow> pageCcInstances(PageQuery query) { return unsupported(); }
     @Override public PageResult<DefineRow> pageDefines(PageQuery query) { return unsupported(); }
     @Override public int countTodoTasks(Long userId) { return 0; }
+
+    // ═══════════════════════════════════════
+    // 统计查询方法（issues/103）—— persist 测试不涉及，抛不支持
+    // ═══════════════════════════════════════
+
+    @Override public List<InstanceStatsRow> queryInstancesForStats(List<Integer> a, String b, LocalDateTime c, LocalDateTime d) { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
+    @Override public List<TaskStatsRow> queryTasksForStats(Integer a, LocalDateTime b, LocalDateTime c) { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
+    @Override public int statsAvgCompletedDurationSeconds(LocalDateTime a, LocalDateTime b) { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
+    @Override public int[] statsPendingAndOverdueCount() { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
+    @Override public int[] statsCompletedTaskAggregate() { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
+    @Override public List<Map<String, Object>> statsStuckNodeGroup(int limit) { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
+    @Override public List<Map<String, Object>> statsStuckApproverGroup(int limit) { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
+    @Override public List<Map<String, Object>> statsDefineGroup(LocalDateTime a, LocalDateTime b, int c) { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
+    @Override public List<Integer> statsCompletedInstanceDurations(LocalDateTime a, LocalDateTime b) { throw new UnsupportedOperationException("persist 测试不涉及统计查询"); }
 }

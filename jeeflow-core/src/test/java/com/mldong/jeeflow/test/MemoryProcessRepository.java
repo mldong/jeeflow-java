@@ -7,6 +7,7 @@ import com.mldong.jeeflow.spi.IProcessRepository;
 import com.mldong.jeeflow.spi.PageQuery;
 import com.mldong.jeeflow.spi.PageResult;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -444,4 +445,246 @@ public class MemoryProcessRepository implements IProcessRepository {
     }
 
     @Override public int countTodoTasks(Long userId) { return 0; }
+
+    // ═══════════════════════════════════════
+    // 统计查询方法（issues/103）
+    // ═══════════════════════════════════════
+
+    @Override
+    public List<InstanceStatsRow> queryInstancesForStats(List<Integer> stateIn, String timeField, LocalDateTime start, LocalDateTime end) {
+        LocalDateTime endExclusive = end != null ? end.plusSeconds(1) : null;
+        return instances.values().stream()
+                .filter(inst -> stateIn == null || stateIn.isEmpty() || stateIn.contains(inst.getState()))
+                .filter(inst -> {
+                    if (start == null && endExclusive == null) return true;
+                    LocalDateTime t = "create_time".equals(timeField) ? inst.getCreateTime() : inst.getCreateTime();
+                    if (t == null) return false;
+                    if (start != null && t.isBefore(start)) return false;
+                    if (endExclusive != null && !t.isBefore(endExclusive)) return false;
+                    return true;
+                })
+                .map(inst -> {
+                    InstanceStatsRow r = new InstanceStatsRow();
+                    r.setId(inst.getInstanceId());
+                    r.setState(inst.getState());
+                    r.setCreateTime(inst.getCreateTime());
+                    r.setProcessDefineId(inst.getDefineId());
+                    r.setOperator(inst.getOperator());
+                    return r;
+                })
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<TaskStatsRow> queryTasksForStats(Integer state, LocalDateTime start, LocalDateTime end) {
+        LocalDateTime endExclusive = end != null ? end.plusSeconds(1) : null;
+        return tasks.values().stream()
+                .filter(t -> state == null || state.equals(t.getTaskState()))
+                .filter(t -> {
+                    if (start == null && endExclusive == null) return true;
+                    LocalDateTime ref = Integer.valueOf(20).equals(t.getTaskState()) ? t.getFinishTime() : t.getCreateTime();
+                    if (ref == null) return false;
+                    if (start != null && ref.isBefore(start)) return false;
+                    if (endExclusive != null && !ref.isBefore(endExclusive)) return false;
+                    return true;
+                })
+                .map(t -> {
+                    TaskStatsRow r = new TaskStatsRow();
+                    r.setId(t.getTaskId());
+                    r.setProcessInstanceId(t.getProcessInstanceId());
+                    r.setTaskState(t.getTaskState());
+                    r.setPerformType(t.getPerformType() != null ? t.getPerformType().getCode() : null);
+                    r.setOperator(t.getActorId());
+                    r.setDisplayName(t.getDisplayName());
+                    r.setCreateTime(t.getCreateTime());
+                    r.setFinishTime(t.getFinishTime());
+                    r.setExpireTime(t.getExpireTime());
+                    return r;
+                })
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public int statsAvgCompletedDurationSeconds(LocalDateTime start, LocalDateTime end) {
+        LocalDateTime endExclusive = end != null ? end.plusSeconds(1) : null;
+        List<ProcessInstance> completed = instances.values().stream()
+                .filter(inst -> Integer.valueOf(20).equals(inst.getState()))
+                .filter(inst -> {
+                    if (start == null && endExclusive == null) return true;
+                    LocalDateTime t = inst.getCreateTime();
+                    if (t == null) return false;
+                    if (start != null && t.isBefore(start)) return false;
+                    if (endExclusive != null && !t.isBefore(endExclusive)) return false;
+                    return true;
+                })
+                .collect(Collectors.toList());
+        if (completed.isEmpty()) return 0;
+        long totalSeconds = 0;
+        int count = 0;
+        for (ProcessInstance inst : completed) {
+            LocalDateTime maxFinish = tasks.values().stream()
+                    .filter(t -> inst.getInstanceId().equals(t.getProcessInstanceId()))
+                    .map(ProcessTask::getFinishTime)
+                    .filter(ft -> ft != null)
+                    .max(LocalDateTime::compareTo)
+                    .orElse(null);
+            if (maxFinish != null && inst.getCreateTime() != null) {
+                totalSeconds += java.time.Duration.between(inst.getCreateTime(), maxFinish).getSeconds();
+                count++;
+            }
+        }
+        if (count == 0) return 0;
+        return (int) Math.round((double) totalSeconds / count);
+    }
+
+    @Override
+    public int[] statsPendingAndOverdueCount() {
+        LocalDateTime now = LocalDateTime.now();
+        int pending = 0;
+        int overdue = 0;
+        for (ProcessTask t : tasks.values()) {
+            if (Integer.valueOf(10).equals(t.getTaskState())) {
+                pending++;
+                if (t.getExpireTime() != null && t.getExpireTime().isBefore(now)) {
+                    overdue++;
+                }
+            }
+        }
+        return new int[]{pending, overdue};
+    }
+
+    @Override
+    public int[] statsCompletedTaskAggregate() {
+        int total = 0, countersign = 0, onTime = 0, onTimeDenom = 0;
+        for (ProcessTask t : tasks.values()) {
+            if (Integer.valueOf(20).equals(t.getTaskState())) {
+                total++;
+                if (t.getPerformType() != null && Integer.valueOf(1).equals(t.getPerformType().getCode())) {
+                    countersign++;
+                }
+                if (t.getExpireTime() != null) {
+                    onTimeDenom++;
+                    if (t.getFinishTime() != null && !t.getFinishTime().isAfter(t.getExpireTime())) {
+                        onTime++;
+                    }
+                }
+            }
+        }
+        return new int[]{total, countersign, onTime, onTimeDenom};
+    }
+
+    @Override
+    public List<Map<String, Object>> statsStuckNodeGroup(int limit) {
+        Map<String, Long> grouped = tasks.values().stream()
+                .filter(t -> Integer.valueOf(10).equals(t.getTaskState()))
+                .filter(t -> t.getDisplayName() != null)
+                .collect(Collectors.groupingBy(ProcessTask::getDisplayName, Collectors.counting()));
+        return grouped.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(limit)
+                .map(e -> {
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("key", e.getKey());
+                    m.put("count", e.getValue());
+                    return m;
+                })
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Map<String, Object>> statsStuckApproverGroup(int limit) {
+        Map<String, Long> grouped = new HashMap<>();
+        for (ProcessTask t : tasks.values()) {
+            if (!Integer.valueOf(10).equals(t.getTaskState())) continue;
+            List<String> actors = taskActors.getOrDefault(t.getTaskId(), Collections.emptyList());
+            for (String actorId : actors) {
+                grouped.merge(actorId, 1L, Long::sum);
+            }
+        }
+        return grouped.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(limit)
+                .map(e -> {
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("key", e.getKey());
+                    m.put("count", e.getValue());
+                    return m;
+                })
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Map<String, Object>> statsDefineGroup(LocalDateTime start, LocalDateTime end, int limit) {
+        // build defineId -> (name, displayName) map
+        Map<Long, String> defineNames = new HashMap<>();
+        Map<Long, String> defineLabels = new HashMap<>();
+        for (ProcessInstance.ProcessDefine d : defines.values()) {
+            defineNames.put(d.getId(), d.getName() != null ? d.getName() : String.valueOf(d.getId()));
+            defineLabels.put(d.getId(), d.getDisplayName());
+        }
+        Map<String, long[]> grouped = new HashMap<>(); // key -> [count, totalDurationSeconds]
+        for (ProcessInstance inst : instances.values()) {
+            Integer st = inst.getState();
+            if (st == null || (st != 10 && st != 20)) continue;
+            if (start != null && inst.getCreateTime() != null && inst.getCreateTime().isBefore(start)) continue;
+            if (end != null && inst.getCreateTime() != null && inst.getCreateTime().isAfter(end)) continue;
+            String key = defineNames.getOrDefault(inst.getDefineId(), String.valueOf(inst.getDefineId()));
+            long durSec = 0;
+            if (Integer.valueOf(20).equals(st) && inst.getCreateTime() != null) {
+                LocalDateTime maxFinish = tasks.values().stream()
+                        .filter(t -> inst.getInstanceId().equals(t.getProcessInstanceId()))
+                        .map(ProcessTask::getFinishTime)
+                        .filter(ft -> ft != null)
+                        .max(LocalDateTime::compareTo)
+                        .orElse(null);
+                if (maxFinish != null) {
+                    durSec = java.time.Duration.between(inst.getCreateTime(), maxFinish).getSeconds();
+                }
+            }
+            long[] arr = grouped.computeIfAbsent(key, k -> new long[2]);
+            arr[0]++;
+            arr[1] += durSec;
+        }
+        return grouped.entrySet().stream()
+                .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
+                .limit(limit)
+                .map(e -> {
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("key", e.getKey());
+                    // Find label for this key
+                    String label = null;
+                    for (Map.Entry<Long, String> de : defineNames.entrySet()) {
+                        if (de.getValue().equals(e.getKey())) {
+                            label = defineLabels.get(de.getKey());
+                            break;
+                        }
+                    }
+                    m.put("label", label);
+                    m.put("count", e.getValue()[0]);
+                    m.put("avgDurationSeconds", e.getValue()[0] > 0 ? (int) Math.round((double) e.getValue()[1] / e.getValue()[0]) : null);
+                    return m;
+                })
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Integer> statsCompletedInstanceDurations(LocalDateTime start, LocalDateTime end) {
+        LocalDateTime endExclusive = end != null ? end.plusSeconds(1) : null;
+        List<Integer> durations = new ArrayList<>();
+        for (ProcessInstance inst : instances.values()) {
+            if (!Integer.valueOf(20).equals(inst.getState())) continue;
+            if (start != null && inst.getCreateTime() != null && inst.getCreateTime().isBefore(start)) continue;
+            if (endExclusive != null && inst.getCreateTime() != null && !inst.getCreateTime().isBefore(endExclusive)) continue;
+            LocalDateTime maxFinish = tasks.values().stream()
+                    .filter(t -> inst.getInstanceId().equals(t.getProcessInstanceId()))
+                    .map(ProcessTask::getFinishTime)
+                    .filter(ft -> ft != null)
+                    .max(LocalDateTime::compareTo)
+                    .orElse(null);
+            if (maxFinish != null && inst.getCreateTime() != null) {
+                durations.add((int) java.time.Duration.between(inst.getCreateTime(), maxFinish).getSeconds());
+            }
+        }
+        return durations;
+    }
 }

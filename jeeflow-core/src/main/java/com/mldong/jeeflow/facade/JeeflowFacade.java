@@ -35,6 +35,10 @@ import com.mldong.jeeflow.spi.PageResult;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.YearMonth;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.IsoFields;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -66,6 +70,14 @@ public class JeeflowFacade {
     private final IProcessExtRepository extRepository; // 可空：未接入扩展仓储时设计/委托 action 报错
     private IUserSearchProvider userSearchProvider;    // 可空：candidatePage 用户搜索依赖
     private final JeeflowQueryParser queryParser = new JeeflowQueryParser();
+
+    // ── 统计用常量 ──
+    private static final List<Integer> DEFAULT_STATE_IN = Arrays.asList(10, 20, 30, 40, 45, 50);
+    private static final int DEFAULT_STATS_LIMIT = 10;
+    private static final Set<String> VALID_GRANULARITY = new HashSet<>(Arrays.asList("hour", "day", "week", "month"));
+    private static final Set<String> VALID_DIMENSION = new HashSet<>(Arrays.asList(
+            "state", "define", "category", "approver", "applicant",
+            "node", "stuckNode", "stuckApprover", "durationBucket"));
 
     /** 注入用户搜索钩子（candidatePage 无模型候选时的用户分页搜索） */
     public JeeflowFacade setUserSearchProvider(IUserSearchProvider provider) {
@@ -134,6 +146,10 @@ public class JeeflowFacade {
                 case "processSurrogate/update": return surrogateUpdate(args);   // issues/77
                 case "processSurrogate/detail": return surrogateDetail(args);   // issues/77
                 case "processSurrogate/remove": return surrogateRemove(args);
+                // ── 统计 ──
+                case "processInstance/stats/overview": return statsOverview(args);
+                case "processInstance/stats/trend": return statsTrend(args);
+                case "processInstance/stats/group": return statsGroup(args);
                 default:
                     return error("未知 action: " + action);
             }
@@ -1530,6 +1546,404 @@ public class JeeflowFacade {
         if (s.isEmpty()) return null;
         try { return LocalDateTime.parse(s, TIME_FMT); } catch (Exception ignored) { }
         try { return LocalDateTime.parse(s); } catch (Exception ignored) { }
+        return null;
+    }
+
+    // ═══════════════════════════════════════
+    // 统计 3 动作（issues/103）
+    // ═══════════════════════════════════════
+
+    /**
+     * statsOverview：总览统计
+     * 入参：start?, end?
+     */
+    private Map<String, Object> statsOverview(Map<String, Object> args) {
+        LocalDateTime start = parseTime(args.get("start"));
+        LocalDateTime end = parseTime(args.get("end"));
+
+        // 1. 实例各状态计数
+        List<IProcessRepository.InstanceStatsRow> allInst =
+                repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+        Map<Integer, Long> instByState = allInst.stream()
+                .collect(Collectors.groupingBy(IProcessRepository.InstanceStatsRow::getState, Collectors.counting()));
+        long total      = allInst.size();
+        long inProgress = instByState.getOrDefault(10, 0L);
+        long completed  = instByState.getOrDefault(20, 0L);
+        long withdrawn  = instByState.getOrDefault(30, 0L);
+        long rejected   = instByState.getOrDefault(45, 0L);
+        long suspended  = instByState.getOrDefault(50, 0L);
+
+        // 2. todayNew：当日创建的实例数（恒按当天，不受 start/end 影响）
+        LocalDate today = LocalDate.now();
+        LocalDateTime todayStart = today.atStartOfDay();
+        LocalDateTime todayEnd = today.plusDays(1).atStartOfDay();
+        List<IProcessRepository.InstanceStatsRow> todayInst =
+                repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", todayStart, todayEnd);
+        long todayNew = todayInst.size();
+
+        // 3. 待办 / 逾期（全量，不受时间范围约束——反映"当前"积压）
+        int[] pendingOverdue = repository.statsPendingAndOverdueCount();
+        long pendingTaskCount = pendingOverdue[0];
+        long overdueTaskCount = pendingOverdue[1];
+
+        // 4. 已完成任务聚合
+        int[] taskAgg = repository.statsCompletedTaskAggregate();
+        long taskTotal      = taskAgg[0];
+        long countersign    = taskAgg[1];
+        long onTime         = taskAgg[2];
+        long onTimeDenom    = taskAgg[3];
+        double countersignRate = taskTotal > 0 ? statsRound4((double) countersign / taskTotal) : 0.0;
+        double onTimeRate   = onTimeDenom > 0 ? statsRound4((double) onTime / onTimeDenom) : 0.0;
+
+        // 5. 平均完成时长
+        int avgDurationSeconds = repository.statsAvgCompletedDurationSeconds(start, end);
+
+        // 6. rejectRate
+        double rejectRate = statsRound4((double) rejected / Math.max(1, completed + rejected));
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("total", total);
+        data.put("inProgress", inProgress);
+        data.put("completed", completed);
+        data.put("rejected", rejected);
+        data.put("withdrawn", withdrawn);
+        data.put("suspended", suspended);
+        data.put("todayNew", todayNew);
+        data.put("avgDurationSeconds", avgDurationSeconds);
+        data.put("rejectRate", rejectRate);
+        data.put("pendingTaskCount", pendingTaskCount);
+        data.put("overdueTaskCount", overdueTaskCount);
+        data.put("countersignRate", countersignRate);
+        data.put("onTimeRate", onTimeRate);
+        return ok(data);
+    }
+
+    /**
+     * statsTrend：趋势统计
+     * 入参：start?, end?, granularity?(hour|day|week|month)
+     */
+    private Map<String, Object> statsTrend(Map<String, Object> args) {
+        LocalDateTime start = parseTime(args.get("start"));
+        LocalDateTime end   = parseTime(args.get("end"));
+        String granularity  = toStr(args.get("granularity"), "day");
+        if (!VALID_GRANULARITY.contains(granularity)) {
+            return error("granularity 参数非法，允许值：hour/day/week/month");
+        }
+
+        // 查询时间范围内的实例（started）
+        List<IProcessRepository.InstanceStatsRow> insts =
+                repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+
+        // 查询时间范围内的已完成任务（finished）
+        List<IProcessRepository.TaskStatsRow> finishedTasks =
+                repository.queryTasksForStats(20, start, end);
+
+        // 枚举连续桶
+        List<String> buckets = statsEnumerateBuckets(start, end, granularity);
+        Map<String, long[]> bucketMap = new LinkedHashMap<>();
+        for (String b : buckets) {
+            bucketMap.put(b, new long[]{0, 0}); // [started, finished]
+        }
+        // 实例 → started
+        for (IProcessRepository.InstanceStatsRow row : insts) {
+            String bk = statsBucketKey(row.getCreateTime(), granularity);
+            if (bk == null || !bucketMap.containsKey(bk)) continue;
+            bucketMap.get(bk)[0]++;
+        }
+        // 已完成任务 → finished（按 finish_time 分桶）
+        for (IProcessRepository.TaskStatsRow row : finishedTasks) {
+            String bk = statsBucketKey(row.getFinishTime(), granularity);
+            if (bk == null || !bucketMap.containsKey(bk)) continue;
+            bucketMap.get(bk)[1]++;
+        }
+
+        // 组装返回
+        List<Map<String, Object>> series = new ArrayList<>();
+        for (String b : buckets) {
+            long[] counts = bucketMap.get(b);
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("bucket", b);
+            point.put("started", counts[0]);
+            point.put("finished", counts[1]);
+            series.add(point);
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("granularity", granularity);
+        data.put("series", series);
+        return ok(data);
+    }
+
+    /**
+     * statsGroup：分组统计
+     * 入参：start?, end?, dimension?, limit?
+     */
+    private Map<String, Object> statsGroup(Map<String, Object> args) {
+        LocalDateTime start = parseTime(args.get("start"));
+        LocalDateTime end   = parseTime(args.get("end"));
+        String dimension    = toStr(args.get("dimension"), "define");
+        int limit           = toInt(args.get("limit"), DEFAULT_STATS_LIMIT);
+        if (!VALID_DIMENSION.contains(dimension)) {
+            return error("dimension 参数非法，允许值：state/define/category/approver/applicant/node/stuckNode/stuckApprover/durationBucket");
+        }
+
+        List<Map<String, Object>> rows;
+        switch (dimension) {
+            case "define":
+                rows = repository.statsDefineGroup(start, end, limit);
+                break;
+            case "state": {
+                List<IProcessRepository.InstanceStatsRow> insts =
+                        repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+                Map<Integer, long[]> grouped = new LinkedHashMap<>();
+                for (IProcessRepository.InstanceStatsRow r : insts) {
+                    grouped.computeIfAbsent(r.getState(), k -> new long[1])[0]++;
+                }
+                rows = statsGroupFromMap(grouped.entrySet().stream()
+                        .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
+                        .limit(limit)
+                        .collect(Collectors.toList()),
+                        e -> String.valueOf(e.getKey()), e -> null);
+                break;
+            }
+            case "category": {
+                List<IProcessRepository.InstanceStatsRow> insts =
+                        repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+                // Look up define.type via processDefineId
+                Map<Long, String> instDefineTypes = new HashMap<>();
+                for (IProcessRepository.InstanceStatsRow r : insts) {
+                    Long defId = r.getProcessDefineId();
+                    if (defId != null && !instDefineTypes.containsKey(defId)) {
+                        ProcessInstance.ProcessDefine def = repository.findDefineById(defId);
+                        instDefineTypes.put(defId, def != null ? (def.getType() != null ? def.getType() : "") : "");
+                    }
+                }
+                Map<String, long[]> grouped = new LinkedHashMap<>();
+                for (IProcessRepository.InstanceStatsRow r : insts) {
+                    String type = instDefineTypes.getOrDefault(r.getProcessDefineId(), "");
+                    grouped.computeIfAbsent(type, k -> new long[1])[0]++;
+                }
+                rows = statsGroupFromMap(grouped.entrySet().stream()
+                        .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
+                        .limit(limit)
+                        .collect(Collectors.toList()),
+                        Map.Entry::getKey, e -> null);
+                break;
+            }
+            case "approver": {
+                List<IProcessRepository.TaskStatsRow> tasks =
+                        repository.queryTasksForStats(20, start, end);
+                Map<String, long[]> grouped = new LinkedHashMap<>();
+                for (IProcessRepository.TaskStatsRow r : tasks) {
+                    String op = r.getOperator();
+                    if (op == null || op.isEmpty()) continue;
+                    grouped.computeIfAbsent(op, k -> new long[1])[0]++;
+                }
+                rows = statsGroupFromMap(grouped.entrySet().stream()
+                        .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
+                        .limit(limit)
+                        .collect(Collectors.toList()),
+                        Map.Entry::getKey, e -> null);
+                break;
+            }
+            case "applicant": {
+                List<IProcessRepository.InstanceStatsRow> insts =
+                        repository.queryInstancesForStats(DEFAULT_STATE_IN, "create_time", start, end);
+                Map<String, long[]> grouped = new LinkedHashMap<>();
+                for (IProcessRepository.InstanceStatsRow r : insts) {
+                    String op = r.getOperator();
+                    if (op == null || op.isEmpty()) continue;
+                    grouped.computeIfAbsent(op, k -> new long[1])[0]++;
+                }
+                rows = statsGroupFromMap(grouped.entrySet().stream()
+                        .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
+                        .limit(limit)
+                        .collect(Collectors.toList()),
+                        Map.Entry::getKey, e -> null);
+                break;
+            }
+            case "node": {
+                List<IProcessRepository.TaskStatsRow> tasks =
+                        repository.queryTasksForStats(20, start, end);
+                Map<String, long[]> grouped = new LinkedHashMap<>(); // key -> [count, totalDurationSec]
+                for (IProcessRepository.TaskStatsRow r : tasks) {
+                    String dn = r.getDisplayName();
+                    if (dn == null || dn.isEmpty()) continue;
+                    long dur = 0;
+                    if (r.getFinishTime() != null && r.getCreateTime() != null) {
+                        dur = java.time.Duration.between(r.getCreateTime(), r.getFinishTime()).getSeconds();
+                    }
+                    long[] arr = grouped.computeIfAbsent(dn, k -> new long[2]);
+                    arr[0]++;
+                    arr[1] += dur;
+                }
+                rows = grouped.entrySet().stream()
+                        .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
+                        .limit(limit)
+                        .map(e -> {
+                            Map<String, Object> m = new LinkedHashMap<>();
+                            m.put("key", e.getKey());
+                            m.put("label", null);
+                            m.put("count", e.getValue()[0]);
+                            m.put("avgDurationSeconds", e.getValue()[0] > 0
+                                    ? (int) Math.round((double) e.getValue()[1] / e.getValue()[0]) : null);
+                            return m;
+                        })
+                        .collect(Collectors.toList());
+                break;
+            }
+            case "stuckNode": {
+                rows = repository.statsStuckNodeGroup(limit);
+                // Add label=null and avgDurationSeconds=null
+                for (Map<String, Object> m : rows) {
+                    m.putIfAbsent("label", null);
+                    m.putIfAbsent("avgDurationSeconds", null);
+                }
+                break;
+            }
+            case "stuckApprover": {
+                rows = repository.statsStuckApproverGroup(limit);
+                for (Map<String, Object> m : rows) {
+                    m.putIfAbsent("label", null);
+                    m.putIfAbsent("avgDurationSeconds", null);
+                }
+                break;
+            }
+            case "durationBucket": {
+                List<Integer> durations = repository.statsCompletedInstanceDurations(start, end);
+                int sameDay = 0, d1to3 = 0, d3to7 = 0, over7d = 0;
+                for (int dur : durations) {
+                    if (dur < 86400) sameDay++;
+                    else if (dur < 259200) d1to3++;
+                    else if (dur < 604800) d3to7++;
+                    else over7d++;
+                }
+                rows = new ArrayList<>();
+                String[] keys = {"sameDay", "1to3d", "3to7d", "over7d"};
+                int[] counts = {sameDay, d1to3, d3to7, over7d};
+                for (int i = 0; i < keys.length; i++) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("key", keys[i]);
+                    m.put("label", null);
+                    m.put("count", counts[i]);
+                    m.put("avgDurationSeconds", null);
+                    rows.add(m);
+                }
+                break;
+            }
+            default:
+                rows = new ArrayList<>();
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("dimension", dimension);
+        data.put("rows", rows);
+        return ok(data);
+    }
+
+    /** Helper：将 Map.Entry 列表转为 statsGroup 标准行格式 [{key, label, count}] */
+    private <K> List<Map<String, Object>> statsGroupFromMap(
+            List<Map.Entry<K, long[]>> entries,
+            java.util.function.Function<Map.Entry<K, long[]>, String> keyFn,
+            java.util.function.Function<Map.Entry<K, long[]>, String> labelFn) {
+        return entries.stream().map(e -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("key", keyFn.apply(e));
+            m.put("label", labelFn.apply(e));
+            m.put("count", e.getValue()[0]);
+            m.put("avgDurationSeconds", null);
+            return m;
+        }).collect(Collectors.toList());
+    }
+
+    // ── 统计 helper ──
+
+    /** 枚举时间桶标签列表 */
+    private List<String> statsEnumerateBuckets(LocalDateTime start, LocalDateTime end, String granularity) {
+        if (start == null) start = LocalDateTime.now().minusDays(30);
+        if (end == null) end = LocalDateTime.now();
+        List<String> buckets = new ArrayList<>();
+        LocalDate s = start.toLocalDate();
+        LocalDate e = end.toLocalDate();
+        switch (granularity) {
+            case "hour": {
+                // 按小时枚举（格式 yyyy-MM-dd HH:00）
+                LocalDateTime cursor = start;
+                // 对齐到整点
+                cursor = cursor.withMinute(0).withSecond(0).withNano(0);
+                while (!cursor.isAfter(end)) {
+                    buckets.add(String.format("%s %02d:00",
+                            cursor.toLocalDate().toString(), cursor.getHour()));
+                    cursor = cursor.plusHours(1);
+                }
+                break;
+            }
+            case "day":
+                while (!s.isAfter(e)) {
+                    buckets.add(s.toString());
+                    s = s.plusDays(1);
+                }
+                break;
+            case "week":
+                // 对齐到周一
+                s = s.minusDays((s.getDayOfWeek().getValue() - 1));
+                while (!s.isAfter(e)) {
+                    buckets.add(statsWeekKey(s.atStartOfDay()));
+                    s = s.plusWeeks(1);
+                }
+                break;
+            case "month":
+                s = s.withDayOfMonth(1);
+                YearMonth ymEnd = YearMonth.from(e);
+                YearMonth ym = YearMonth.from(s);
+                while (!ym.isAfter(ymEnd)) {
+                    buckets.add(ym.toString());
+                    ym = ym.plusMonths(1);
+                }
+                break;
+        }
+        return buckets;
+    }
+
+    /** 把 LocalDateTime 按 granularity 转成桶标签 */
+    private String statsBucketKey(LocalDateTime ldt, String granularity) {
+        if (ldt == null) return null;
+        switch (granularity) {
+            case "hour":
+                return String.format("%s %02d:00", ldt.toLocalDate().toString(), ldt.getHour());
+            case "day": return ldt.toLocalDate().toString();
+            case "week": return statsWeekKey(ldt);
+            case "month": return YearMonth.from(ldt).toString();
+            default: return null;
+        }
+    }
+
+    /** ISO 周标签：YYYY-Www */
+    private String statsWeekKey(LocalDateTime ldt) {
+        if (ldt == null) return null;
+        int year = ldt.get(IsoFields.WEEK_BASED_YEAR);
+        int week = ldt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        return String.format("%d-W%02d", year, week);
+    }
+
+    private static double statsRound4(double v) {
+        return Math.round(v * 10000.0) / 10000.0;
+    }
+
+    /** 解析整数列表入参 */
+    private List<Integer> parseIntList(Object val) {
+        if (val == null) return null;
+        if (val instanceof List) {
+            List<?> list = (List<?>) val;
+            List<Integer> result = new ArrayList<>();
+            for (Object o : list) {
+                if (o instanceof Number) result.add(((Number) o).intValue());
+                else {
+                    try { result.add(Integer.parseInt(o.toString())); } catch (Exception ignored) {}
+                }
+            }
+            return result.isEmpty() ? null : result;
+        }
         return null;
     }
 }
