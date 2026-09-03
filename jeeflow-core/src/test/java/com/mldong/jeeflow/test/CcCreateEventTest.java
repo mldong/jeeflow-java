@@ -164,4 +164,45 @@ public class CcCreateEventTest {
         assertTrue("干净上下文中不应有任何监听器（保证零副作用断言前提）",
                 listeners == null || listeners.isEmpty());
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void publisherListenerExceptionIsolated() throws Exception {
+        // issues/104 P2 兜底语义：单监听器异常只记 warn 不传播——
+        // 不得影响引擎主流程，也不得中断后续监听器（对齐 PHP per-listener catch）
+        SimpleContext ctx = new SimpleContext();
+        Configuration config = new Configuration(ctx);
+        ctx.put("repository", repo);
+        ctx.put("json", new TestJsonProvider());
+        ctx.put("expr", new TestExpressionEvaluator());
+        ctx.put("user", new IUserProvider() {
+            @Override
+            public UserInfo getUser(String userId) {
+                UserInfo u = new UserInfo();
+                u.setUserId(userId);
+                return u;
+            }
+        });
+        ctx.put("org", new IOrgUserProvider() {
+            @Override
+            public List<String> findDeptLeaders(String deptId) { return null; }
+            @Override
+            public List<String> findDeptMainLeaders(String deptId) { return null; }
+            @Override
+            public List<String> findByRole(String roleCode) { return null; }
+        });
+        java.util.List<String> seen = new CopyOnWriteArrayList<>();
+        ctx.put("badListener", (ProcessEventListener) event -> {
+            throw new RuntimeException("boom");
+        });
+        ctx.put("goodListener", (ProcessEventListener) event -> seen.add("second"));
+        JeeflowEngineImpl engine = new JeeflowEngineImpl();
+        engine.configure(config);
+
+        ProcessInstance.ProcessDefine def = addSimpleDefine();
+        FlowData args = FlowData.create().set(FlowConst.CC_ACTORS_START, "3001");
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "zhangsan", args);
+        assertNotNull("监听器异常不应影响发起主流程", inst.getInstanceId());
+        assertTrue("异常后后续监听器应仍被调用", !seen.isEmpty());
+    }
 }
