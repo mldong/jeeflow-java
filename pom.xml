@@ -143,6 +143,12 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
                         <version>3.6.3</version>
+                        <configuration>
+                            <!-- 历史 javadoc 注释债（缺 @param/@return 等）不应阻塞发布通道；
+                                 CI JDK 行为飘移曾致 v1.8.25 首次发布挂 javadoc（issues/103/104 发版批次） -->
+                            <doclint>none</doclint>
+                            <additionalJOption>-Xdoclint:none</additionalJOption>
+                        </configuration>
                         <executions>
                             <execution>
                                 <id>attach-javadocs</id>
