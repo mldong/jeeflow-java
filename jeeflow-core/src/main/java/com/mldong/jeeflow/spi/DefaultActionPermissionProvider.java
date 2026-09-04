@@ -34,7 +34,11 @@ public class DefaultActionPermissionProvider implements IActionPermissionProvide
         NO_PERM_ACTIONS.addAll(Arrays.asList(
                 "processInstance/detail", "processInstance/highLight", "processInstance/approvalRecord",
                 "processInstance/getAssigneeTextData", "processInstance/bizData",
-                "processTask/detail", "processTask/addCandidate", "processTask/latest"));
+                "processTask/detail", "processTask/addCandidate", "processTask/latest",
+                // 统计三 action：登录即可、不配权限码（spec 06 §2.6 放行清单 / 契约 12 §1，
+                // issues/103 收口后普通用户分析页被默认规则 wf:processInstance:stats:* 拦截的修复；
+                // 六语言同款：goframe 694d5b9 / fastapi 1aa5471 / salvo 58231b2 / nestjs 06e06c2 / laravel d39ebfc）
+                "processInstance/stats/overview", "processInstance/stats/trend", "processInstance/stats/group"));
     }
 
     @Override
