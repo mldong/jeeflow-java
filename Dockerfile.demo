@@ -17,6 +17,9 @@ RUN mvn -q dependency:go-offline -pl jeeflow-core,jeeflow-repository-jdbc,jeeflo
 
 # 2. 复制源码并构建
 COPY . .
+# 先装根 pom（-N 非递归）：下一步 -pl 构建 demo-boot4 时 starter 描述符要回解析 parent，
+# 不本地安装则依赖 Central 且受 autoPublish 传播延迟影响（v1.8.25 Demo Deploy 首跑即挂此）
+RUN mvn -q install -N -DskipTests
 RUN mvn -q install -DskipTests -pl jeeflow-core,jeeflow-repository-jdbc,jeeflow-persist,jeeflow-spring-boot-autoconfigure,jeeflow-spring-boot4-starter
 RUN mvn -q -pl jeeflow-demo-boot4 package -DskipTests
 
