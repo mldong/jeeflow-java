@@ -1569,12 +1569,14 @@ public class JeeflowFacade {
                 repository.queryInstancesForStats(stateIn, "create_time", start, end);
         Map<Integer, Long> instByState = allInst.stream()
                 .collect(Collectors.groupingBy(IProcessRepository.InstanceStatsRow::getState, Collectors.counting()));
-        long total      = allInst.size();
-        long inProgress = instByState.getOrDefault(10, 0L);
-        long completed  = instByState.getOrDefault(20, 0L);
-        long withdrawn  = instByState.getOrDefault(30, 0L);
-        long rejected   = instByState.getOrDefault(45, 0L);
-        long suspended  = instByState.getOrDefault(50, 0L);
+        // stats 计数字段一律 int 出参（issues/105）：集成层只对 Long 做 id 字符串化（2.3），
+        // Long 计数会被误字符串化，Integer 不受影响且契约（06 §4.2）本就是 int
+        int total      = allInst.size();
+        int inProgress = instByState.getOrDefault(10, 0L).intValue();
+        int completed  = instByState.getOrDefault(20, 0L).intValue();
+        int withdrawn  = instByState.getOrDefault(30, 0L).intValue();
+        int rejected   = instByState.getOrDefault(45, 0L).intValue();
+        int suspended  = instByState.getOrDefault(50, 0L).intValue();
 
         // 2. todayNew：服务器当日创建的实例数（恒按当天，不受 start/end/stateIn 影响，对齐内置线 countTodayNew）
         LocalDate today = LocalDate.now();
@@ -1582,12 +1584,12 @@ public class JeeflowFacade {
         LocalDateTime todayEnd = today.plusDays(1).atStartOfDay();
         List<IProcessRepository.InstanceStatsRow> todayInst =
                 repository.queryInstancesForStats(null, "create_time", todayStart, todayEnd);
-        long todayNew = todayInst.size();
+        int todayNew = todayInst.size();
 
         // 3. 待办 / 逾期（全量，不受时间范围约束——反映"当前"积压）
         int[] pendingOverdue = repository.statsPendingAndOverdueCount();
-        long pendingTaskCount = pendingOverdue[0];
-        long overdueTaskCount = pendingOverdue[1];
+        int pendingTaskCount = pendingOverdue[0];
+        int overdueTaskCount = pendingOverdue[1];
 
         // 4. 已完成任务聚合
         int[] taskAgg = repository.statsCompletedTaskAggregate();
@@ -1647,9 +1649,9 @@ public class JeeflowFacade {
 
         // 枚举连续桶
         List<String> buckets = statsEnumerateBuckets(start, end, granularity);
-        Map<String, long[]> bucketMap = new LinkedHashMap<>();
+        Map<String, int[]> bucketMap = new LinkedHashMap<>();
         for (String b : buckets) {
-            bucketMap.put(b, new long[]{0, 0}); // [started, finished]
+            bucketMap.put(b, new int[]{0, 0}); // [started, finished]
         }
         // 实例 → started
         for (IProcessRepository.InstanceStatsRow row : insts) {
@@ -1667,7 +1669,7 @@ public class JeeflowFacade {
         // 组装返回：data 本体为裸数组（A：去掉 {granularity, series} 包装，对齐契约/前端/内置线）
         List<Map<String, Object>> series = new ArrayList<>();
         for (String b : buckets) {
-            long[] counts = bucketMap.get(b);
+            int[] counts = bucketMap.get(b);
             Map<String, Object> point = new LinkedHashMap<>();
             point.put("bucket", b);
             point.put("started", counts[0]);
@@ -1698,9 +1700,9 @@ public class JeeflowFacade {
             case "state": {
                 List<IProcessRepository.InstanceStatsRow> insts =
                         repository.queryInstancesForStats(null, "create_time", start, end);
-                Map<Integer, long[]> grouped = new LinkedHashMap<>();
+                Map<Integer, int[]> grouped = new LinkedHashMap<>();
                 for (IProcessRepository.InstanceStatsRow r : insts) {
-                    grouped.computeIfAbsent(r.getState(), k -> new long[1])[0]++;
+                    grouped.computeIfAbsent(r.getState(), k -> new int[1])[0]++;
                 }
                 rows = statsGroupFromMap(grouped.entrySet().stream()
                         .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
@@ -1721,10 +1723,10 @@ public class JeeflowFacade {
                         instDefineTypes.put(defId, def != null ? (def.getType() != null ? def.getType() : "") : "");
                     }
                 }
-                Map<String, long[]> grouped = new LinkedHashMap<>();
+                Map<String, int[]> grouped = new LinkedHashMap<>();
                 for (IProcessRepository.InstanceStatsRow r : insts) {
                     String type = instDefineTypes.getOrDefault(r.getProcessDefineId(), "");
-                    grouped.computeIfAbsent(type, k -> new long[1])[0]++;
+                    grouped.computeIfAbsent(type, k -> new int[1])[0]++;
                 }
                 rows = statsGroupFromMap(grouped.entrySet().stream()
                         .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
@@ -1736,11 +1738,11 @@ public class JeeflowFacade {
             case "approver": {
                 List<IProcessRepository.TaskStatsRow> tasks =
                         repository.queryTasksForStats(20, start, end);
-                Map<String, long[]> grouped = new LinkedHashMap<>();
+                Map<String, int[]> grouped = new LinkedHashMap<>();
                 for (IProcessRepository.TaskStatsRow r : tasks) {
                     String op = r.getOperator();
                     if (op == null || op.isEmpty()) continue;
-                    grouped.computeIfAbsent(op, k -> new long[1])[0]++;
+                    grouped.computeIfAbsent(op, k -> new int[1])[0]++;
                 }
                 rows = statsGroupFromMap(grouped.entrySet().stream()
                         .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
@@ -1752,11 +1754,11 @@ public class JeeflowFacade {
             case "applicant": {
                 List<IProcessRepository.InstanceStatsRow> insts =
                         repository.queryInstancesForStats(null, "create_time", start, end);
-                Map<String, long[]> grouped = new LinkedHashMap<>();
+                Map<String, int[]> grouped = new LinkedHashMap<>();
                 for (IProcessRepository.InstanceStatsRow r : insts) {
                     String op = r.getOperator();
                     if (op == null || op.isEmpty()) continue;
-                    grouped.computeIfAbsent(op, k -> new long[1])[0]++;
+                    grouped.computeIfAbsent(op, k -> new int[1])[0]++;
                 }
                 rows = statsGroupFromMap(grouped.entrySet().stream()
                         .sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
@@ -1787,7 +1789,7 @@ public class JeeflowFacade {
                             Map<String, Object> m = new LinkedHashMap<>();
                             m.put("key", e.getKey());
                             m.put("label", null);
-                            m.put("count", e.getValue()[0]);
+                            m.put("count", (int) e.getValue()[0]);
                             m.put("avgDurationSeconds", e.getValue()[0] > 0
                                     ? (int) Math.round((double) e.getValue()[1] / e.getValue()[0]) : null);
                             return m;
@@ -1823,7 +1825,7 @@ public class JeeflowFacade {
                 }
                 rows = new ArrayList<>();
                 String[] keys = {"sameDay", "1to3d", "3to7d", "over7d"};
-                long[] counts = {sameDay, d1to3, d3to7, over7d};
+                int[] counts = {sameDay, d1to3, d3to7, over7d};
                 for (int i = 0; i < keys.length; i++) {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("key", keys[i]);
@@ -1844,9 +1846,9 @@ public class JeeflowFacade {
 
     /** Helper：将 Map.Entry 列表转为 statsGroup 标准行格式 [{key, label, count}] */
     private <K> List<Map<String, Object>> statsGroupFromMap(
-            List<Map.Entry<K, long[]>> entries,
-            java.util.function.Function<Map.Entry<K, long[]>, String> keyFn,
-            java.util.function.Function<Map.Entry<K, long[]>, String> labelFn) {
+            List<Map.Entry<K, int[]>> entries,
+            java.util.function.Function<Map.Entry<K, int[]>, String> keyFn,
+            java.util.function.Function<Map.Entry<K, int[]>, String> labelFn) {
         return entries.stream().map(e -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("key", keyFn.apply(e));

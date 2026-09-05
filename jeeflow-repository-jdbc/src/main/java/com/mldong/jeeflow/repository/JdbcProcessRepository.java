@@ -923,7 +923,8 @@ public class JdbcProcessRepository implements IProcessRepository {
                     m.put("label", rs.getString("label"));
                     m.put("count", rs.getInt("count"));
                     long avg = rs.getLong("avgDurationSeconds");
-                    m.put("avgDurationSeconds", rs.wasNull() ? null : avg);
+                    // issues/105：avg 出参 int（Long 会被集成层 id 字符串化规则误伤）
+                    m.put("avgDurationSeconds", rs.wasNull() ? null : (int) avg);
                     result.add(m);
                 }
             }

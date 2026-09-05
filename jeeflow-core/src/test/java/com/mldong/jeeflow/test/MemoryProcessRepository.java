@@ -585,7 +585,7 @@ public class MemoryProcessRepository implements IProcessRepository {
                 .map(e -> {
                     Map<String, Object> m = new HashMap<>();
                     m.put("key", e.getKey());
-                    m.put("count", e.getValue());
+                    m.put("count", e.getValue().intValue());
                     return m;
                 })
                 .collect(Collectors.toList());
@@ -607,7 +607,7 @@ public class MemoryProcessRepository implements IProcessRepository {
                 .map(e -> {
                     Map<String, Object> m = new HashMap<>();
                     m.put("key", e.getKey());
-                    m.put("count", e.getValue());
+                    m.put("count", e.getValue().intValue());
                     return m;
                 })
                 .collect(Collectors.toList());
@@ -663,7 +663,7 @@ public class MemoryProcessRepository implements IProcessRepository {
                         }
                     }
                     m.put("label", label);
-                    m.put("count", e.getValue()[0]);
+                    m.put("count", (int) e.getValue()[0]);
                     m.put("avgDurationSeconds", e.getValue()[2] > 0 ? (int) Math.round((double) e.getValue()[1] / e.getValue()[2]) : null);
                     return m;
                 })

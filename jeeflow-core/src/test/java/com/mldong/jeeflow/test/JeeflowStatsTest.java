@@ -34,6 +34,7 @@ import static org.junit.Assert.*;
  * C：trend 缺 start/end/granularity → code!=0（对齐内置线 20010012 语义）
  * D：define 维度不过滤 state（count 全实例，avg 仅 state=20）
  * E：todayNew 不过滤 state（服务器当日全部实例）
+ * F：stats 数值字段经 Long→String 集成层序列化后仍为 JSON number（issues/105）
  */
 public class JeeflowStatsTest {
 
@@ -160,17 +161,17 @@ public class JeeflowStatsTest {
         Map<String, Object> r = call("processInstance/stats/overview");
         assertEquals(0, r.get("code"));
         Map<String, Object> d = (Map<String, Object>) r.get("data");
-        assertEquals(5L, d.get("total"));            // 缺省 stateIn 剔除 99（I6）
-        assertEquals(1L, d.get("inProgress"));
-        assertEquals(2L, d.get("completed"));
-        assertEquals(1L, d.get("rejected"));
-        assertEquals(1L, d.get("withdrawn"));
-        assertEquals(0L, d.get("suspended"));
-        assertEquals(1L, d.get("todayNew"));          // E：只计当日 I6（state=99 也计）
+        assertEquals(5, d.get("total"));            // 缺省 stateIn 剔除 99（I6）
+        assertEquals(1, d.get("inProgress"));
+        assertEquals(2, d.get("completed"));
+        assertEquals(1, d.get("rejected"));
+        assertEquals(1, d.get("withdrawn"));
+        assertEquals(0, d.get("suspended"));
+        assertEquals(1, d.get("todayNew"));          // E：只计当日 I6（state=99 也计）
         assertEquals(27000, d.get("avgDurationSeconds")); // (21600+32400)/2
         assertEquals(0.3333, (double) d.get("rejectRate"), 1e-9);
-        assertEquals(2L, d.get("pendingTaskCount"));
-        assertEquals(0L, d.get("overdueTaskCount"));
+        assertEquals(2, d.get("pendingTaskCount"));
+        assertEquals(0, d.get("overdueTaskCount"));
         assertEquals(0.25, (double) d.get("countersignRate"), 1e-9); // 1/4 会签完成
         assertEquals(0.6667, (double) d.get("onTimeRate"), 1e-9);    // 2/3（T6 无 expire 不入分母）
     }
@@ -182,10 +183,10 @@ public class JeeflowStatsTest {
         Map<String, Object> r = call("processInstance/stats/overview",
                 "stateIn", Arrays.asList(10));
         Map<String, Object> d = (Map<String, Object>) r.get("data");
-        assertEquals(1L, d.get("total"));
-        assertEquals(1L, d.get("inProgress"));
-        assertEquals(0L, d.get("completed"));
-        assertEquals(1L, d.get("todayNew"));          // 仍计当日 I6
+        assertEquals(1, d.get("total"));
+        assertEquals(1, d.get("inProgress"));
+        assertEquals(0, d.get("completed"));
+        assertEquals(1, d.get("todayNew"));          // 仍计当日 I6
     }
 
     @Test
@@ -214,11 +215,11 @@ public class JeeflowStatsTest {
         List<Map<String, Object>> arr = list(r.get("data"));
         assertEquals(2, arr.size());
         assertEquals("2026-08-01", arr.get(0).get("bucket"));
-        assertEquals(2L, arr.get(0).get("started"));   // I100,I101（实例侧无 state 过滤）
-        assertEquals(1L, arr.get(0).get("finished"));  // T202
+        assertEquals(2, arr.get(0).get("started"));   // I100,I101（实例侧无 state 过滤）
+        assertEquals(1, arr.get(0).get("finished"));  // T202
         assertEquals("2026-08-02", arr.get(1).get("bucket"));
-        assertEquals(4L, arr.get(1).get("started"));   // I102,I103,I104,I105（无 state 过滤，含 99 的 I105）
-        assertEquals(2L, arr.get(1).get("finished"));  // T203,T204
+        assertEquals(4, arr.get(1).get("started"));   // I102,I103,I104,I105（无 state 过滤，含 99 的 I105）
+        assertEquals(2, arr.get(1).get("finished"));  // T203,T204
     }
 
     @Test
@@ -231,24 +232,24 @@ public class JeeflowStatsTest {
         assertEquals("2026-08-01 10:00", hb.get(0).get("bucket"));
         assertEquals("2026-08-01 11:00", hb.get(1).get("bucket"));
         assertEquals("2026-08-01 12:00", hb.get(2).get("bucket"));
-        assertEquals(1L, hb.get(0).get("started"));    // I100
-        assertEquals(1L, hb.get(2).get("started"));    // I101
+        assertEquals(1, hb.get(0).get("started"));    // I100
+        assertEquals(1, hb.get(2).get("started"));    // I101
 
         Map<String, Object> w = call("processInstance/stats/trend",
                 "start", "2026-08-01 00:00:00", "end", "2026-08-02 23:59:59", "granularity", "week");
         List<Map<String, Object>> wb = list(w.get("data"));
         assertEquals(1, wb.size());
         assertEquals("2026-W31", wb.get(0).get("bucket")); // ISO 周（08-01/08-02 同属 W31）
-        assertEquals(6L, wb.get(0).get("started"));        // I100–I105 全部落在 W31（含 99 的 I105；I106 在真实当月不入范围）
+        assertEquals(6, wb.get(0).get("started"));        // I100–I105 全部落在 W31（含 99 的 I105；I106 在真实当月不入范围）
 
         Map<String, Object> m = call("processInstance/stats/trend",
                 "start", "2026-07-31 00:00:00", "end", "2026-08-31 23:59:59", "granularity", "month");
         List<Map<String, Object>> mb = list(m.get("data"));
         assertEquals(2, mb.size());
         assertEquals("2026-07", mb.get(0).get("bucket"));
-        assertEquals(0L, mb.get(0).get("started"));    // 补 0 桶
+        assertEquals(0, mb.get(0).get("started"));    // 补 0 桶
         assertEquals("2026-08", mb.get(1).get("bucket"));
-        assertEquals(6L, mb.get(1).get("started"));    // I100–I105（含 99 的 I105）
+        assertEquals(6, mb.get(1).get("started"));    // I100–I105（含 99 的 I105）
     }
 
     @Test
@@ -272,8 +273,8 @@ public class JeeflowStatsTest {
         assertEquals(0, r.get("code"));
         List<Map<String, Object>> arr = list(r.get("data"));
         assertEquals(1, arr.size());
-        assertEquals(0L, arr.get(0).get("started"));
-        assertEquals(0L, arr.get(0).get("finished"));
+        assertEquals(0, arr.get(0).get("started"));
+        assertEquals(0, arr.get(0).get("finished"));
     }
 
     // ───────── group ─────────
@@ -301,10 +302,10 @@ public class JeeflowStatsTest {
         Map<String, Object> leave = rows.get(0);
         assertEquals("leave", leave.get("key"));
         assertEquals("请假流程", leave.get("label"));
-        assertEquals(5L, leave.get("count"));          // I100,I101,I104,I105,I106（无 state 过滤，含 45/99）
+        assertEquals(5, leave.get("count"));          // I100,I101,I104,I105,I106（无 state 过滤，含 45/99）
         assertEquals(21600, ((Number) leave.get("avgDurationSeconds")).intValue()); // avg 仅对 state=20（I101=6h）
         Map<String, Object> expense = rows.get(1);
-        assertEquals(2L, expense.get("count"));        // I3,I4
+        assertEquals(2, expense.get("count"));        // I3,I4
         assertEquals(32400, ((Number) expense.get("avgDurationSeconds")).intValue());
     }
 
@@ -314,24 +315,24 @@ public class JeeflowStatsTest {
         List<Map<String, Object>> st = list(call("processInstance/stats/group",
                 "dimension", "state").get("data"));
         // 无 state 过滤：99 也出现（I105,I106 两条 99）；5 个不同 state（10/20/30/45/99）
-        Map<String, Long> byKey = new HashMap<>();
-        for (Map<String, Object> m : st) byKey.put(String.valueOf(m.get("key")), (Long) m.get("count"));
-        assertEquals(Long.valueOf(2), byKey.get("20"));   // I101,I102
-        assertEquals(Long.valueOf(2), byKey.get("99"));   // I105,I106
-        assertEquals(Long.valueOf(1), byKey.get("10"));   // I100
-        assertEquals(Long.valueOf(1), byKey.get("30"));   // I103
-        assertEquals(Long.valueOf(1), byKey.get("45"));   // I104
+        Map<String, Integer> byKey = new HashMap<>();
+        for (Map<String, Object> m : st) byKey.put(String.valueOf(m.get("key")), (Integer) m.get("count"));
+        assertEquals(Integer.valueOf(2), byKey.get("20"));   // I101,I102
+        assertEquals(Integer.valueOf(2), byKey.get("99"));   // I105,I106
+        assertEquals(Integer.valueOf(1), byKey.get("10"));   // I100
+        assertEquals(Integer.valueOf(1), byKey.get("30"));   // I103
+        assertEquals(Integer.valueOf(1), byKey.get("45"));   // I104
         assertEquals(5, st.size());
 
         List<Map<String, Object>> cat = list(call("processInstance/stats/group",
                 "dimension", "category").get("data"));
-        assertEquals(5L, cat.get(0).get("count"));     // approval（无 state 过滤，含 99）
-        assertEquals(2L, cat.get(1).get("count"));     // finance
+        assertEquals(5, cat.get(0).get("count"));     // approval（无 state 过滤，含 99）
+        assertEquals(2, cat.get(1).get("count"));     // finance
 
         List<Map<String, Object>> ap = list(call("processInstance/stats/group",
                 "dimension", "applicant").get("data"));
         assertEquals("u1", ap.get(0).get("key"));
-        assertEquals(3L, ap.get(0).get("count"));      // I100,I101,I106（无 state 过滤）
+        assertEquals(3, ap.get(0).get("count"));      // I100,I101,I106（无 state 过滤）
     }
 
     @Test
@@ -343,7 +344,7 @@ public class JeeflowStatsTest {
         // 8 月范围只含 T202/T203/T204（T205 的 finish 是真实当日，不入范围）
         // 部门经理审批：T202=21000s、T204=3000s → avg=(21000+3000)/2=12000
         assertEquals("部门经理审批", rows.get(0).get("key"));
-        assertEquals(2L, rows.get(0).get("count"));
+        assertEquals(2, rows.get(0).get("count"));
         assertEquals(12000, ((Number) rows.get(0).get("avgDurationSeconds")).intValue());
         assertEquals("财务审批", rows.get(1).get("key"));
         assertEquals(31800, ((Number) rows.get(1).get("avgDurationSeconds")).intValue()); // T203=8h50m
@@ -351,7 +352,7 @@ public class JeeflowStatsTest {
         List<Map<String, Object>> ap = list(call("processInstance/stats/group", "dimension", "approver",
                 "start", "2026-08-01 00:00:00", "end", "2026-08-02 23:59:59").get("data"));
         assertEquals("u5", ap.get(0).get("key"));      // T202+T204 历史办结
-        assertEquals(2L, ap.get(0).get("count"));
+        assertEquals(2, ap.get(0).get("count"));
     }
 
     @Test
@@ -366,7 +367,7 @@ public class JeeflowStatsTest {
         Set<String> nodeKeys = new HashSet<>();
         for (Map<String, Object> m : rows) {
             nodeKeys.add((String) m.get("key"));
-            assertEquals(1L, m.get("count"));
+            assertEquals(1, m.get("count"));
             assertNull(m.get("avgDurationSeconds"));
         }
         assertTrue(nodeKeys.contains("部门经理审批"));
@@ -378,7 +379,7 @@ public class JeeflowStatsTest {
         List<Map<String, Object>> actors = list(r2.get("data"));
         assertEquals(2, actors.size());
         for (Map<String, Object> m : actors) {
-            assertEquals(1L, m.get("count"));          // u9、u10 各一行
+            assertEquals(1, m.get("count"));          // u9、u10 各一行
             assertNull(m.get("avgDurationSeconds"));
         }
     }
@@ -394,10 +395,10 @@ public class JeeflowStatsTest {
         assertEquals("3to7d", rows.get(2).get("key"));
         assertEquals("over7d", rows.get(3).get("key"));
         // durationBucket 仅对 state=20 实例：I101=6h、I102=9h（均 <24h）→ sameDay=2，其余 0
-        assertEquals(2L, rows.get(0).get("count"));
-        assertEquals(0L, rows.get(1).get("count"));
-        assertEquals(0L, rows.get(2).get("count"));
-        assertEquals(0L, rows.get(3).get("count"));
+        assertEquals(2, rows.get(0).get("count"));
+        assertEquals(0, rows.get(1).get("count"));
+        assertEquals(0, rows.get(2).get("count"));
+        assertEquals(0, rows.get(3).get("count"));
     }
 
     @Test
@@ -412,7 +413,8 @@ public class JeeflowStatsTest {
         Map<String, Object> r = call("processInstance/stats/group", "dimension", "state", "limit", 2);
         List<Map<String, Object>> rows = list(r.get("data"));
         assertEquals(2, rows.size());
-        assertTrue((Long) rows.get(0).get("count") >= (Long) rows.get(1).get("count"));
+        assertTrue(((Number) rows.get(0).get("count")).intValue()
+                >= ((Number) rows.get(1).get("count")).intValue());
     }
 
     @Test
@@ -427,7 +429,74 @@ public class JeeflowStatsTest {
                 LocalDateTime.now().minusHours(1), null, null));
         Map<String, Object> r = call("processInstance/stats/overview");
         Map<String, Object> d = (Map<String, Object>) r.get("data");
-        assertEquals(0L, d.get("overdueTaskCount"));
+        assertEquals(0, d.get("overdueTaskCount"));
         assertEquals(0.0, (double) d.get("onTimeRate"), 1e-9);
+    }
+
+    // ───────── issues/105：stats 数值字段类型（序列化后仍为 JSON number） ─────────
+
+    /**
+     * F 自证（issues/105）：集成层统一把 Long 序列化为字符串（id 字符串化规则 2.3），
+     * stats 计数/时长字段必须是 Integer 才能输出 JSON number。本测试用与
+     * JacksonJsonProvider/集成层 WebMvcConfig 相同的 Long→String mapper 模拟真实序列化链路，
+     * 断言 stats 三 action 全部数值字段为 number、id 类字段仍为 string。
+     */
+    @Test
+    public void stats_types_number_afterLongToString() throws Exception {
+        seed();
+        com.fasterxml.jackson.databind.ObjectMapper outMapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.module.SimpleModule longToStr =
+                new com.fasterxml.jackson.databind.module.SimpleModule();
+        longToStr.addSerializer(Long.class, com.fasterxml.jackson.databind.ser.std.ToStringSerializer.instance);
+        longToStr.addSerializer(Long.TYPE, com.fasterxml.jackson.databind.ser.std.ToStringSerializer.instance);
+        outMapper.registerModule(longToStr);
+
+        // overview：13 字段类型
+        com.fasterxml.jackson.databind.JsonNode ov = outMapper.readTree(
+                outMapper.writeValueAsString(call("processInstance/stats/overview").get("data")));
+        for (String k : Arrays.asList("total", "inProgress", "completed", "rejected",
+                "withdrawn", "suspended", "todayNew", "avgDurationSeconds",
+                "pendingTaskCount", "overdueTaskCount")) {
+            assertTrue("overview." + k + " 应为 int，实际 " + ov.get(k).getNodeType(),
+                    ov.get(k).isInt());
+        }
+        for (String k : Arrays.asList("rejectRate", "countersignRate", "onTimeRate")) {
+            assertTrue("overview." + k + " 应为 float，实际 " + ov.get(k).getNodeType(),
+                    ov.get(k).isNumber() && !ov.get(k).isTextual());
+        }
+
+        // trend：started/finished 为 int，bucket 为 string
+        com.fasterxml.jackson.databind.JsonNode tr = outMapper.readTree(outMapper.writeValueAsString(
+                list(call("processInstance/stats/trend", "start", "2026-08-01 00:00:00",
+                        "end", "2026-08-02 23:59:59", "granularity", "day").get("data"))));
+        for (com.fasterxml.jackson.databind.JsonNode row : tr) {
+            assertTrue("trend.started 应为 int", row.get("started").isInt());
+            assertTrue("trend.finished 应为 int", row.get("finished").isInt());
+            assertTrue("trend.bucket 应为 string", row.get("bucket").isTextual());
+        }
+
+        // group：9 维度全部 count 为 int、avgDurationSeconds 为 int 或 null
+        for (String dim : Arrays.asList("state", "define", "category", "approver",
+                "applicant", "node", "stuckNode", "stuckApprover", "durationBucket")) {
+            com.fasterxml.jackson.databind.JsonNode gr = outMapper.readTree(outMapper.writeValueAsString(
+                    list(call("processInstance/stats/group", "dimension", dim,
+                            "start", "2026-08-01 00:00:00", "end", "2026-08-02 23:59:59").get("data"))));
+            for (com.fasterxml.jackson.databind.JsonNode row : gr) {
+                assertTrue("group." + dim + ".count 应为 int", row.get("count").isInt());
+                com.fasterxml.jackson.databind.JsonNode avg = row.get("avgDurationSeconds");
+                assertTrue("group." + dim + ".avgDurationSeconds 应为 int/null，实际 "
+                                + (avg == null ? "缺失" : avg.getNodeType()),
+                        avg == null || avg.isNull() || avg.isInt());
+                assertTrue("group." + dim + ".key 应为 string", row.get("key").isTextual());
+            }
+        }
+
+        // id 字符串化规则不被破坏：page 行 id/processDefineId 仍为 string，recordCount 仍为 int
+        Map<String, Object> pg = call("processInstance/page", "operator", "u1");
+        com.fasterxml.jackson.databind.JsonNode pj = outMapper.readTree(
+                outMapper.writeValueAsString(pg.get("data")));
+        assertTrue("page 行 id 应为 string", pj.get("rows").get(0).get("id").isTextual());
+        assertTrue("page.recordCount 应为 int", pj.get("recordCount").isInt());
     }
 }
