@@ -62,7 +62,7 @@ public class DemoOpsController {
                 "wf_process_design_his", "wf_process_design", "wf_process_surrogate"}) {
             jdbc.update("DELETE FROM " + table);
         }
-        int seeded = seedRunner.seed();
+        int seeded = seedRunner.seedAll();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", 0);
         body.put("msg", "成功");

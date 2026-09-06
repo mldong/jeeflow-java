@@ -2,6 +2,7 @@ package com.mldong.jeeflow.demo;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mldong.jeeflow.domain.ProcessInstance;
+import com.mldong.jeeflow.facade.JeeflowFacade;
 import com.mldong.jeeflow.spi.IProcessRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,15 +39,24 @@ public class FlowSeedRunner implements CommandLineRunner {
     };
 
     private final IProcessRepository repository;
+    private final JeeflowFacade facade;
     private final ObjectMapper json = new ObjectMapper();
 
-    public FlowSeedRunner(IProcessRepository repository) {
+    public FlowSeedRunner(IProcessRepository repository, JeeflowFacade facade) {
         this.repository = repository;
+        this.facade = facade;
     }
 
     @Override
     public void run(String... args) {
-        seed();
+        seedAll();
+    }
+
+    /** T003：流程定义 + 业务数据（引擎真实启动），启动与 /api/reset 共用。 */
+    public int seedAll() {
+        int seeded = seed();
+        BusinessSeed.seed(facade);
+        return seeded;
     }
 
     /** 加载共享 flows 目录：文件名排序依次 saveDefine，id=1..N。返回加载条数 */
