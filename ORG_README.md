@@ -20,6 +20,7 @@
 | [jeeflow-moon](https://gitcode.com/mldong/jeeflow-moon) | MoonBit | mooncakes.io 四模块：`mldong/jeeflow-core` / `jeeflow-persist` / `jeeflow-repository-mysql` / `jeeflow-facade` |
 | [jeeflow-csharp](https://gitcode.com/mldong/jeeflow-csharp) | C#/.NET | NuGet 四包：`Mldong.Jeeflow.Core` / `Repository.MySql` / `Persist` / `Facade` |
 | [jeeflow-ui](https://gitcode.com/mldong/jeeflow-ui) | Vue 3 / TypeScript | 统一前端（工作台 + 流程设计器，演示站同款） |
+| [uni-jeeflow-app](https://gitcode.com/mldong/uni-jeeflow-app) | uni-app x（Android） | 移动审批端（待办 / 审批 / 发起 / 流程图，Gitee 同名镜像） |
 
 ## 特性
 
@@ -37,7 +38,7 @@
 
 ## 同步说明
 
-各仓开发主仓在 GitHub（`github.com/mldong/jeeflow-*`），发布打 tag 时 CI 自动将 master + 全部 tag 同步至本组织及 Gitee 同名仓库，内容与正式发布物一致。
+各仓开发主仓在 GitHub（`github.com/mldong/jeeflow-*`），发布打 tag 时 CI 自动将 master + 全部 tag 同步至本组织及 Gitee 同名仓库，内容与正式发布物一致。uni-jeeflow-app 无发版 tag，push master 即同步（不同步 tag）。
 
 ## 相关生态
 
