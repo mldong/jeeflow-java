@@ -13,6 +13,7 @@ import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessInstanceStateEnum;
 import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
+import com.mldong.jeeflow.facade.JeeflowFacade;
 import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.json.TypeReference;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
@@ -29,6 +30,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -309,6 +311,35 @@ public class JdbcRepositoryTest {
         for (ProcessTask task : after.getTasks()) {
             assertEquals("撤回后任务状态未级联落库", ProcessTaskStateEnum.WITHDRAW.getCode(), task.getTaskState());
         }
+    }
+
+    /**
+     * issues/113：门面 processInstance/withdraw 走真实派发路径时，任务须落库 30（WITHDRAW）。
+     * 上面那条手调聚合命令 + updateInstance，绕过了门面分支——而 go/python/node/rust 四栈恰恰
+     * 是在门面 withdraw 分支里写成 99 / 干脆不落库，故门面级 + SQL 回读的断言不能省。
+     */
+    @Test
+    public void testFacadeWithdrawPersistsTaskStateWithdraw() {
+        ProcessInstance.ProcessDefine def = registerSimpleFlow();
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1", FlowData.create());
+        assertFalse("撤回前应有进行中任务", repo.findDoingTasks(inst.getInstanceId(), null).isEmpty());
+
+        JeeflowFacade facade = new JeeflowFacade(engine, repo, null);
+        Map<String, Object> args = new HashMap<String, Object>();
+        args.put("id", inst.getInstanceId());
+        args.put("operator", "user1");
+        Map<String, Object> resp = facade.flow("processInstance/withdraw", args);
+        assertEquals("门面撤回应成功: " + resp, 0, ((Number) resp.get("code")).intValue());
+
+        List<ProcessTask> tasks = repo.findHistoryTasks(inst.getInstanceId());
+        assertFalse("撤回后库里应有任务行", tasks.isEmpty());
+        for (ProcessTask task : tasks) {
+            assertEquals("撤回后库内任务态应=30(WITHDRAW)，不能是 99(废弃码)",
+                    ProcessTaskStateEnum.WITHDRAW.getCode(), task.getTaskState());
+        }
+        assertEquals("撤回后不应再有进行中任务", 0, repo.findDoingTasks(inst.getInstanceId(), null).size());
+        assertEquals("实例态应=30(WITHDRAW)", ProcessInstanceStateEnum.WITHDRAW.getCode(),
+                repo.findInstanceById(inst.getInstanceId()).getState());
     }
 
     // ═══ 辅助方法 ═══
