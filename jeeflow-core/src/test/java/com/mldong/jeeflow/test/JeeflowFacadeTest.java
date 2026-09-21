@@ -1530,15 +1530,18 @@ public class JeeflowFacadeTest {
 
     @Test
     public void testExecuteSubmitTypeBehavior() throws Exception {
-        // ── submitType=3 ROLLBACK：task2 退回上一步 → task1 新待办（actor=退回操作人），实例保持 DOING(10)
+        // ── submitType=3 ROLLBACK（血缘版 issues/121 P2）：task2 退回 → 复活 task1 那条历史行，
+        //    参与者＝task1 的原办结人 leader（不再是执行回退的 manager），实例保持 DOING(10)
         Long rb = startMultiTaskAt("task2");
         Long t2 = doingTaskId(rb, "task2");
         rawRepo.addTaskActor(t2, Arrays.asList("manager"));
         assertOk(call("processTask/execute", args("processTaskId", t2, "operator", "manager", "submitType", 3)));
         Long rbTask1 = doingTaskId(rb, "task1");
         assertNotNull("ROLLBACK 应在 task1 产生新待办", rbTask1);
-        assertTrue("退回任务 actor 应为退回操作人 manager",
-                rawRepo.findTaskActors(rbTask1).contains("manager"));
+        assertTrue("血缘版：复活行的 actor 应为上一步的原办结人 leader，不是执行回退的 manager",
+                rawRepo.findTaskActors(rbTask1).contains("leader"));
+        assertTrue("执行回退的人不该被派到自己退回出来的那条待办上",
+                !rawRepo.findTaskActors(rbTask1).contains("manager"));
         assertEquals("ROLLBACK 后实例应保持 DOING(10)", Integer.valueOf(10),
                 rawRepo.findInstanceById(rb).getState());
 

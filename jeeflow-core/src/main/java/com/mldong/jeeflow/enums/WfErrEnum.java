@@ -17,7 +17,11 @@ public enum WfErrEnum {
     /** 存在正在未完成的流程实例，不允许删除 */
     EXIST_UN_FINISH_INSTANCE(20010005, "存在正在未完成的流程实例，不允许删除！"),
     /** SPI 未注册 */
-    SPI_NOT_REGISTERED(20010006, "必需的 SPI 未注册，请调用 ServiceContext.put() 注册实现");
+    SPI_NOT_REGISTERED(20010006, "必需的 SPI 未注册，请调用 ServiceContext.put() 注册实现"),
+    /** 退回上一步：当前行没有血缘（task_parent_id 为空或 0） */
+    ROLLBACK_PARENT_TASK_ID_EMPTY(20010007, "上一步任务ID为空，无法驳回至上一步处理"),
+    /** 退回上一步：血缘守卫不通过（上一步是 fork/join/subprocess/会签） */
+    ROLLBACK_PARENT_NOT_REJECTABLE(20010008, "无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务");
 
     private final Integer code;
     private final String message;

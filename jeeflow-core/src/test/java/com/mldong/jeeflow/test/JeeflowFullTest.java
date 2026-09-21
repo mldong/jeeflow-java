@@ -178,6 +178,102 @@ public class JeeflowFullTest {
     }
 
     // ═══════════════════════════════════════════
+    // 测试 16.6/16.7/16.8：退回上一步＝血缘版（issues/121 P2）
+    // ═══════════════════════════════════════════
+
+    /** 正向：复活血缘前驱那条行——落点、参与者、parent 随行拷贝、控制类残留剔除 */
+    @Test
+    public void test166RollbackRevivesParentRow() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("02-multi-task.json");
+        Long iid = startFlow(def, FlowData.create()).getInstanceId();
+        ProcessTask t1 = doingByName(iid, "task1");
+        approve(t1, "leader");
+        ProcessTask t2 = doingByName(iid, "task2");
+
+        engine.executeAndJumpTask(t2.getTaskId(), "manager", FlowData.create()
+                .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.ROLLBACK.getCode()), null);
+
+        ProcessTask revived = doingByName(iid, "task1");
+        assertFalse("复活应是一条新行，不是把原行改回 DOING",
+                t1.getTaskId().equals(revived.getTaskId()));
+        assertEquals("参与者＝上一步的原办结人，不再是执行回退的那个人",
+                java.util.Collections.singletonList("leader"), repo.findTaskActors(revived.getTaskId()));
+        assertEquals("parent 随行拷贝＝上一步的上一步", t1.getParentTaskId(), revived.getParentTaskId());
+        assertFalse("复活行不该带 submitType 残留",
+                revived.getVariables().containsKey(FlowConst.SUBMIT_TYPE));
+        assertFalse("复活行不该带 taskName 残留", revived.getVariables().containsKey("taskName"));
+        for (String k : revived.getVariables().keySet()) {
+            assertFalse("复活行不该带 tf_ 残留: " + k, k.startsWith(FlowConst.TASK_FORM_DATA_PREFIX));
+            assertFalse("复活行不该带会签簿记残留: " + k, k.startsWith(FlowConst.LOOP_COUNTER));
+        }
+        assertEquals("首节点标记随行留档（本例 task1 不是首节点）", Boolean.FALSE,
+                revived.getVariables().get(FlowConst.IS_FIRST_TASK_NODE));
+        assertEquals("回退后实例必须仍是 DOING", ProcessInstanceStateEnum.DOING.getCode(),
+                repo.findInstanceById(iid).getState());
+    }
+
+    /** 负向：无血缘（parent 为 0/NULL，含 P1 之前落的老行）⇒ 20010007，且不得静默不建单 */
+    @Test
+    public void test167RollbackWithoutLineageThrows() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("02-multi-task.json");
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        Long iid = inst.getInstanceId();
+        ProcessTask apply = doingByName(iid, "apply");
+        assertEquals("发起那条 parent 应为 0", Long.valueOf(0L), apply.getParentTaskId());
+        int rows = repo.findInstanceById(iid).getTasks().size();
+        try {
+            engine.executeAndJumpTask(apply.getTaskId(), "applicant", FlowData.create()
+                    .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.ROLLBACK.getCode()), null);
+            fail("无血缘必须报 20010007，不能静默不建单");
+        } catch (com.mldong.jeeflow.JeeflowException e) {
+            assertTrue("msg 应带 20010007 的文案: " + e.getMessage(),
+                    e.getMessage().contains("上一步任务ID为空"));
+        }
+        // 内存仓储没有事务：序言已把当前任务置 20，异常不会回滚那一步（真事务仓储/JDBC 下整笔回滚）。
+        // 这里能断的是「不建单」：总行数不变，没有凭空多出的复活行。
+        assertEquals("报错即不建单，任务行总数不变",
+                rows, repo.findInstanceById(iid).getTasks().size());
+
+        // 老行形状：parent 为 NULL（P1 之前落的数据）同样必须报 20010007，不得静默通过。
+        // 另起一条实例：上一段那次失败已把 apply 置为 FINISHED（内存仓储无事务），复用它会撞到"任务不在进行中"。
+        ProcessInstance legacy = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        ProcessTask legacyApply = doingByName(legacy.getInstanceId(), "apply");
+        legacyApply.setParentTaskId(null);
+        repo.updateTask(legacyApply);
+        try {
+            engine.executeAndJumpTask(legacyApply.getTaskId(), "applicant", FlowData.create()
+                    .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.ROLLBACK.getCode()), null);
+            fail("parent=NULL 必须报 20010007");
+        } catch (com.mldong.jeeflow.JeeflowException expected) {
+            assertTrue("msg: " + expected.getMessage(), expected.getMessage().contains("上一步任务ID为空"));
+        }
+    }
+
+    /** 负向：血缘守卫 canRejected——parent 是旁支（非祖先、且中间只穿 fork/join/start）⇒ 20010008 */
+    @Test
+    public void test168RollbackRejectsCrossBranchLineage() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("04-fork-join.json");
+        Long iid = startFlow(def, FlowData.create()).getInstanceId();
+        java.util.List<ProcessTask> doing = repo.findDoingTasks(iid, null);
+        assertTrue("fork 后应至少两条并行 DOING，实得 " + doing.size(), doing.size() >= 2);
+        ProcessTask a = doing.get(0);
+        ProcessTask b = doing.get(1);
+        // 伪造血缘：把 a 的 parent 指到旁支 b（b 不是 a 的祖先）⇒ 守卫必须拦住
+        a.setParentTaskId(b.getTaskId());
+        repo.updateTask(a);
+        repo.addTaskActor(a.getTaskId(), java.util.Arrays.asList("forker"));
+        a.getActorIds().add("forker");
+        try {
+            engine.executeAndJumpTask(a.getTaskId(), "forker", FlowData.create()
+                    .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.ROLLBACK.getCode()), null);
+            fail("血缘指向旁支（非祖先）必须报 20010008");
+        } catch (com.mldong.jeeflow.JeeflowException e) {
+            assertTrue("msg 应带 20010008 的文案: " + e.getMessage(),
+                    e.getMessage().contains("无法驳回至上一步处理"));
+        }
+    }
+
+    // ═══════════════════════════════════════════
     // 测试 2：多级审批 Start → T1 → T2 → T3 → End
     // ═══════════════════════════════════════════
     @Test

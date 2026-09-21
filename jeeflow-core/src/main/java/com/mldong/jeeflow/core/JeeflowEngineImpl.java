@@ -176,8 +176,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
             if (StringUtils.isEmpty(nodeName)) {
-                ProcessTask newTask = exec.getProcessInstance().rejectTask(model, exec.getProcessTask());
-                if (newTask != null) exec.addTask(newTask);
+                // 血缘版 rejectTask 要么建出复活行、要么抛 20010007/20010008，不再返回 null
+                exec.addTask(exec.getProcessInstance().rejectTask(model, exec.getProcessTask()));
             } else {
                 NodeModel targetNode = model.getNode(nodeName);
                 if (targetNode == null) {

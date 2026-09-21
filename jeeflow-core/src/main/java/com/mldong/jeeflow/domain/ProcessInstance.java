@@ -4,6 +4,9 @@ import com.mldong.jeeflow.enums.ProcessInstanceStateEnum;
 import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
 import com.mldong.jeeflow.enums.CountersignTypeEnum;
 import com.mldong.jeeflow.enums.FlowConst;
+import com.mldong.jeeflow.JeeflowException;
+import com.mldong.jeeflow.enums.WfErrEnum;
+import com.mldong.jeeflow.model.NodeModel;
 import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.model.TaskModel;
 import com.mldong.jeeflow.model.CustomModel;
@@ -278,30 +281,94 @@ public class ProcessInstance {
         return list;
     }
 
-    /** 驳回任务（退回上一步） */
+    /**
+     * 退回上一步（血缘版，规范 04 · 退回上一步）：上一步来源＝当前行的 task_parent_id，
+     * 复活那条历史行，**不按模型入边拓扑推**（拓扑版在分支/回环流会回到本实例没走过的节点，
+     * 且历史上还会在首任务节点上因 {@code (TaskModel) getNode("start")} 抛 ClassCastException）。
+     *
+     * @throws JeeflowException 20010007 无血缘（parent 为空或 0，含 P1 之前落的老行）；
+     *                          20010008 canRejected 守卫不过（上一步是 fork/join/subprocess/会签）
+     */
     public ProcessTask rejectTask(ProcessModel model, ProcessTask currentTask) {
-        // 找到上一个任务节点并创建新任务
-        String previousTaskName = getPreviousTaskName(model, currentTask.getTaskName());
-        if (previousTaskName != null) {
-            TaskModel prevModel = (TaskModel) model.getNode(previousTaskName);
-            ProcessTask newTask = ProcessTask.create(
-                    this.instanceId,
-                    prevModel.getName(),
-                    prevModel.getDisplayName(),
-                    prevModel.getTaskType(),
-                    prevModel.getPerformType(),
-                    prevModel.getForm(),
-                    Collections.singletonList(currentTask.getActorId()),
-                    currentTask.getCreateUser(),
-                    // 仍是拓扑版落点（P2 换血缘版）：parent 先记"谁造了它"＝当前被回退的任务，
-                    // 届时按契约第 8 条改为随复活行拷贝（＝上一步的上一步）。
-                    currentTask.getTaskId(),
-                    FlowUtil.isFirstTaskName(model, prevModel.getName())
-            );
-            this.tasks.add(newTask);
-            return newTask;
+        Long parentTaskId = currentTask.getParentTaskId();
+        ProcessTask history = null;
+        if (parentTaskId != null && parentTaskId != 0L) {
+            for (ProcessTask t : this.tasks) {
+                if (parentTaskId.equals(t.getTaskId())) {
+                    history = t;
+                    break;
+                }
+            }
         }
-        return null;
+        if (history == null) {
+            throw new JeeflowException(WfErrEnum.ROLLBACK_PARENT_TASK_ID_EMPTY);
+        }
+        NodeModel current = model.getNode(currentTask.getTaskName());
+        NodeModel parent = model.getNode(history.getTaskName());
+        if (current == null || parent == null || !NodeModel.canRejected(current, parent)) {
+            throw new JeeflowException(WfErrEnum.ROLLBACK_PARENT_NOT_REJECTABLE);
+        }
+
+        FlowData vars = lineageVariables(history.getVariables());
+        // 首任务节点那条不是"本人办的"（发起人提交），参与者取发起人快照。
+        // 老行没有该键 ⇒ 按 false 处理：宁可派给该行 actorId，也不用带"仅进行中"判定的现算值。
+        boolean isFirstRow = Boolean.TRUE.equals(vars.get(FlowConst.IS_FIRST_TASK_NODE));
+        vars.put(FlowConst.IS_FIRST_TASK_NODE, isFirstRow);
+        String operator = history.getActorId();
+        if (isFirstRow) {
+            Object uid = vars.get(FlowConst.USER_USER_ID);
+            operator = uid != null ? String.valueOf(uid) : getOperator();
+        }
+        ProcessTask newTask = ProcessTask.create(
+                this.instanceId,
+                history.getTaskName(),
+                history.getDisplayName(),
+                history.getTaskType(),
+                history.getPerformType(),
+                history.getFormKey(),
+                Collections.singletonList(operator),
+                history.getCreateUser(),
+                history.getParentTaskId(),   // 随行拷贝＝"上一步的上一步"，与 mldong-boot2 一致
+                isFirstRow
+        );
+        newTask.setVariables(vars);
+        // 到期时间按"被回退掉的那个"节点（＝当前节点）的表达式重算，同 mldong-boot2
+        if (current instanceof TaskModel) {
+            String expire = ((TaskModel) current).getExpireTime();
+            if (expire != null && !expire.isEmpty()) {
+                newTask.setExpireTime(FlowUtil.processTime(expire, vars));
+            }
+        }
+        this.tasks.add(newTask);
+        return newTask;
+    }
+
+    /**
+     * 复活行的变量：只带数据类键。剔控制类残留是刻意为之——非必填字段第一次填了、第二次不填时，
+     * 整包克隆会把上次提交值带进新待办，用户会看到"我没提交这个怎么显示了"；会签计数簿记
+     * （loopCounter/nrOfInstances/operatorList）同理，留着会让复活的会签节点从错位的序号继续推进。
+     * 保留 {@code f_*}、{@code u_*}、{@code autoGenTitle}、{@code isFirstTaskNode}。
+     */
+    private static FlowData lineageVariables(FlowData src) {
+        FlowData out = FlowData.create();
+        if (src == null) {
+            return out;
+        }
+        for (java.util.Map.Entry<String, Object> e : src.entrySet()) {
+            String k = e.getKey();
+            if (k == null
+                    || FlowConst.SUBMIT_TYPE.equals(k)
+                    || "taskName".equals(k)
+                    || k.startsWith(FlowConst.TASK_FORM_DATA_PREFIX)
+                    || k.startsWith(FlowConst.COUNTERSIGN_VARIABLE_PREFIX)
+                    || k.startsWith(FlowConst.LOOP_COUNTER)
+                    || k.startsWith(FlowConst.NR_OF_INSTANCES)
+                    || k.startsWith(FlowConst.COUNTERSIGN_OPERATOR_LIST)) {
+                continue;
+            }
+            out.put(k, e.getValue());
+        }
+        return out;
     }
 
     /** 创建历史任务记录（自定义节点用） */
@@ -372,15 +439,6 @@ public class ProcessInstance {
             }
         }
         throw new RuntimeException("未找到任务[" + taskId + "]或不在聚合根中");
-    }
-
-    private String getPreviousTaskName(ProcessModel model, String currentTaskName) {
-        // 简单实现：找输入边的 source 节点
-        com.mldong.jeeflow.model.NodeModel node = model.getNode(currentTaskName);
-        if (node != null && !node.getInputs().isEmpty()) {
-            return node.getInputs().get(0).getSource().getName();
-        }
-        return null;
     }
 
     // ═══ getters/setters ═══

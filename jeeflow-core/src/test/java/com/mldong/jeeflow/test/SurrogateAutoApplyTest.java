@@ -387,9 +387,9 @@ public class SurrogateAutoApplyTest {
     @Test
     public void surrogateAppliedOnRollbackPath() throws Exception {
         boot(true, true);
-        // 回退新建的"上一节点"任务参与者 = 执行回退的那个人（ProcessInstance#rejectTask 取
-        // currentTask.actorId），只有这一步会产出 apply 节点的 DOING 单
-        ledger("leader", "lisiRollback", "with-reject", null, null, 1);
+        // issues/121 P2 血缘版：回退复活的行参与者＝该行原办结人；apply 是首任务节点行 ⇒
+        // 参与者取该行 variable.u_userId（发起人）。委托照样要在这条路径上生效，台账挂发起人。
+        ledger(PRINCIPAL, "lisiRollback", "with-reject", null, null, 1);
         ProcessInstance inst = engine.startProcessInstanceById(
                 registerFlow("09-with-reject.json").getId(), PRINCIPAL, FlowData.create());
         engine.executeProcessTask(firstDoingTask(inst.getInstanceId()).getTaskId(), PRINCIPAL,
@@ -403,7 +403,7 @@ public class SurrogateAutoApplyTest {
         List<String> persisted = repo.findTaskActors(rolled.getTaskId());
         assertTrue("回退(ROLLBACK)出的新单也应并入代理人（实际=" + persisted + "）",
                 persisted.contains("lisiRollback"));
-        assertTrue("授权人保留、任一可办（实际=" + persisted + "）", persisted.contains("leader"));
+        assertTrue("授权人保留、任一可办（实际=" + persisted + "）", persisted.contains(PRINCIPAL));
     }
 
     // ═══ 契约 1.1：processName 取值口径 —— 模型 name 优先，模型未带才回落 define.name ═══
