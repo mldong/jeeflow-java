@@ -5,8 +5,10 @@ import java.time.LocalDateTime;
 /**
  * 流程委托代理（wf_process_surrogate）——授权人把待办委托给代理人
  *
- * <p>v1.1.0 管理扩展。生效规则：enabled=1 且时间窗内；processName 为空 = 全部流程。
- * 引擎侧由 SurrogateInterceptor（参考实现）在任务创建后把代理人加入参与者。</p>
+ * <p>v1.1.0 管理扩展。生效规则：enabled=1 且时间窗内（起止为空 = 该侧不限）；processName 为空 = 全部流程；
+ * 自委托（surrogate = operator）不生效。引擎侧由内置 {@code SurrogateInterceptor}（issues/116，
+ * 默认开启，{@code Configuration#surrogateAutoApply(false)} 可关）在建任务落库前把被委托人
+ * 并入任务参与者集合，授权人保留、任一可办。</p>
  *
  * @author mldong
  */

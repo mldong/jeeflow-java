@@ -89,6 +89,22 @@ public class JeeflowFacade {
         this.engine = engine;
         this.repository = repository;
         this.extRepository = extRepository;
+        publishExtRepository(extRepository);
+    }
+
+    /**
+     * 把扩展仓储暴露给引擎（issues/116）：委托代理自动生效由引擎内置实现，它只认
+     * {@link ServiceContext} 里的 {@code IProcessExtRepository}。而多数集成方（boot 系薄壳、demo）
+     * 是 {@code new JeeflowFacade(engine, repo, new JdbcProcessExtRepository(ds))} 直接构造、
+     * 并不注册 bean——不桥这一步，委托就永远查不到仓储（表现为"能力又消失了"）。
+     *
+     * <p>仅在引擎侧尚未有该 SPI 时注册，不覆盖集成方自己的注册。上下文未初始化（纯单测构造门面）
+     * 时静默跳过——缺扩展仓储属于正常部署形态，委托自动生效会跟着静默跳过，不打断建单。</p>
+     */
+    private static void publishExtRepository(IProcessExtRepository extRepository) {
+        if (extRepository == null || ServiceContext.getContext() == null) return;
+        if (ServiceContext.find(IProcessExtRepository.class) != null) return;
+        ServiceContext.put("ext", extRepository);
     }
 
     /**
@@ -1307,7 +1323,10 @@ public class JeeflowFacade {
         s.setSurrogate(toStr(args.get("surrogate")));
         s.setStartTime(parseTime(args.get("startTime")));
         s.setEndTime(parseTime(args.get("endTime")));
-        s.setEnabled(toInt(args.get("enabled"), 1));
+        // issues/116：enabled 缺省=1（契约默认），显式传入但不可解析为整数的脏值按**停用**落库——
+        // 「只有 1 生效」，脏值不得默认当启用（原 toInt(x, 1) 会把 "abc" 折叠成 1 而误生效）
+        Object enabledArg = args.get("enabled");
+        s.setEnabled(enabledArg == null ? Integer.valueOf(1) : toInt(enabledArg, 0));
         s.setUpdateUser(operator);
     }
 

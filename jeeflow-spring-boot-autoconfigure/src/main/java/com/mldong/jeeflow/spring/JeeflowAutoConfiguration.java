@@ -109,10 +109,14 @@ public class JeeflowAutoConfiguration {
             ObjectProvider<IOrgUserProvider> orgProvider,
             ObjectProvider<ITransactionTemplate> txTemplate,
             ObjectProvider<IExpressionEvaluator> exprEvaluator,
-            ObjectProvider<IIdGenerator> idGenerator) {
+            ObjectProvider<IIdGenerator> idGenerator,
+            ObjectProvider<IProcessExtRepository> extRepository,
+            JeeflowProperties properties) {
 
         // 初始化引擎上下文并注册解析器
         com.mldong.jeeflow.Configuration config = new com.mldong.jeeflow.Configuration();
+        // 委托代理自动生效（issues/116）：引擎内置默认开启，jeeflow.surrogate.auto-apply=false 关闭
+        config.surrogateAutoApply(properties.getSurrogate().isAutoApply());
 
         // 注册 SPI（允许业务方覆盖，也允许部分不注册）
         repository.ifAvailable(r -> ServiceContext.put("repository", r));
@@ -123,6 +127,9 @@ public class JeeflowAutoConfiguration {
         txTemplate.ifAvailable(t -> ServiceContext.put("tx", t));
         exprEvaluator.ifAvailable(e -> ServiceContext.put("expr", e));
         idGenerator.ifAvailable(i -> ServiceContext.put("idGen", i));
+        // 扩展仓储（可选）：委托代理自动生效要按 actor 查生效委托，业务方声明了 Bean 才挂得上；
+        // 未声明时引擎静默跳过委托应用（缺扩展仓储属于正常部署形态，不得打断建单）
+        extRepository.ifAvailable(x -> ServiceContext.put("ext", x));
 
         JeeflowEngine engine = new JeeflowEngineImpl();
         engine.configure(config);

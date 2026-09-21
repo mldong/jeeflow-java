@@ -9,6 +9,7 @@ import com.mldong.jeeflow.spi.PageResult;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -128,17 +129,26 @@ public class MemoryProcessExtRepository implements IProcessExtRepository {
 
     @Override
     public ProcessSurrogate getSurrogate(String operator, String processName, LocalDateTime time) {
+        // 四条生效判据与 SQL 仓 JdbcProcessExtRepository#querySurrogate 逐条对齐（规范 05 §getSurrogate）：
+        // enabled 只认 1（脏值/ null 均不生效）/ 时间窗 NULL=该侧不限 / 自委托过滤 surrogate<>operator /
+        // 多条命中取 id 最大（SQL 侧 ORDER BY id DESC LIMIT 1）——08-compliance 用例 27 要求双仓同答案。
+        if (operator == null) return null;
         List<ProcessSurrogate> candidates = surrogates.values().stream()
                 .filter(s -> operator.equals(s.getOperator()))
-                .filter(s -> s.getEnabled() != null && s.getEnabled() == 1)
+                .filter(s -> Integer.valueOf(1).equals(s.getEnabled()))
+                .filter(s -> !operator.equals(s.getSurrogate()))
+                // surrogate 为 NULL 的行不参与命中（SQL 侧 `surrogate <> ?` 对 NULL 求值为 UNKNOWN，同效）
+                .filter(s -> s.getSurrogate() != null)
                 .filter(s -> time == null || (s.getStartTime() == null || !s.getStartTime().isAfter(time))
                         && (s.getEndTime() == null || !s.getEndTime().isBefore(time)))
+                .sorted(Comparator.comparingLong(
+                        (ProcessSurrogate s) -> s.getId() == null ? 0L : s.getId()).reversed())
                 .collect(Collectors.toList());
         // 精确匹配流程优先
         for (ProcessSurrogate s : candidates) {
             if (processName != null && processName.equals(s.getProcessName())) return s;
         }
-        // 全流程委托兜底
+        // 全流程委托兜底（processName 为空 = 全部流程）
         for (ProcessSurrogate s : candidates) {
             if (s.getProcessName() == null || s.getProcessName().isEmpty()) return s;
         }

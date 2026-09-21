@@ -8,6 +8,7 @@ import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.*;
 import com.mldong.jeeflow.event.ProcessEvent;
 import com.mldong.jeeflow.event.ProcessPublisher;
+import com.mldong.jeeflow.interceptor.impl.SurrogateInterceptor;
 import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.model.*;
 import com.mldong.jeeflow.parser.ModelParser;
@@ -17,6 +18,7 @@ import com.mldong.jeeflow.spi.IUserProvider;
 import com.mldong.jeeflow.util.FlowUtil;
 import com.mldong.jeeflow.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -34,9 +36,14 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     private IProcessRepository repository;
     private IJsonProvider jsonProvider;
     private IUserProvider userProvider;
+    /** 引擎配置（承载 issues/116 委托自动生效开关；configure 时写入） */
+    private Configuration config;
+    /** 委托代理自动生效（issues/116）：引擎内置、默认开启，任务落库前把代理人并入参与者集合 */
+    private final SurrogateInterceptor surrogateApplier = new SurrogateInterceptor();
 
     @Override
     public JeeflowEngine configure(Configuration config) {
+        this.config = config;
         this.repository = ServiceContext.find(IProcessRepository.class);
         this.jsonProvider = ServiceContext.find(IJsonProvider.class);
         this.userProvider = ServiceContext.find(IUserProvider.class);
@@ -98,8 +105,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             //    CreateTaskHandler 在 handler 阶段（taskId 尚未生成）不再 fire，避免 sourceId=null
             //    导致监听器（onEvent 的 sourceId==null 守卫）漏发「新待办」TODO 消息。
             for (ProcessTask task : exec.getProcessTaskList()) {
-                repository.saveTask(task);
-                notifyTaskStart(task);
+                saveNewTask(exec, task);
             }
             repository.updateInstance(instance);
             return instance;
@@ -295,14 +301,32 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     private void persistTasks(Execution exec) {
         for (ProcessTask task : exec.getProcessTaskList()) {
-            repository.saveTask(task);
-            // TASK_START 在落库（分配 taskId）后 fire，见 start 内注释与 spec §4.4
-            notifyTaskStart(task);
+            saveNewTask(exec, task);
         }
         if (exec.getProcessTask() != null && exec.getProcessTask().getTaskId() != null) {
             repository.updateTask(exec.getProcessTask());
         }
         repository.updateInstance(exec.getProcessInstance());
+    }
+
+    /**
+     * 新任务落库唯一收口（发起 / 办理推进 / 串行会签推进 / 跳转 都走这里）。
+     *
+     * <p>落库前先应用生效委托（issues/116）：被委托人**并入参与者集合本身**，
+     * 再由 {@code saveTask} 随任务一起全量写入 {@code wf_process_task_actor}。
+     * 顺序不能反——此刻 taskId 尚未分配，走「事后 addTaskActor 补写」会打在空 id 上静默无效。
+     * 开关：{@code Configuration#surrogateAutoApply(false)}（默认开启）；
+     * 未配置 {@code IProcessExtRepository} 时静默跳过，不打断建单。</p>
+     */
+    private void saveNewTask(Execution exec, ProcessTask task) {
+        if (config == null || config.isSurrogateAutoApply()) {
+            String processName = exec.getProcessModel() != null
+                    ? exec.getProcessModel().getName() : null;
+            surrogateApplier.apply(task, processName, LocalDateTime.now());
+        }
+        repository.saveTask(task);
+        // TASK_START 在落库（分配 taskId）后 fire，见 start 内注释与 spec §4.4
+        notifyTaskStart(task);
     }
 
     /**

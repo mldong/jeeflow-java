@@ -255,8 +255,22 @@ IProcessExtRepository extRepo = new JdbcProcessExtRepository(dataSource);
 ProcessSurrogate s = extRepo.getSurrogate("zhangsan", "leave", LocalDateTime.now());
 ```
 
-**委托自动生效**：把 `SurrogateInterceptor`（core 提供，默认不注册）加入拦截器列表，
-任务创建后自动把代理人加入参与者：
+**委托自动生效（引擎内置、默认开启）**：任务落库前，引擎对每个参与者查一次生效委托
+（`getSurrogate`），命中则把被委托人**并入该任务的参与者集合**随任务一起落库，
+原授权人保留、任一可办（委托不是转办）。集成方零配置即生效。
+
+```java
+// 关闭（回到"仅台账"：配了委托也不会追加参与者）——一行
+engine.configure(new Configuration().surrogateAutoApply(false));
+// Spring Boot 侧等价配置项
+// jeeflow.surrogate.auto-apply=false
+```
+
+未注册 `IProcessExtRepository` 时该行为**静默跳过**（委托是增强能力，缺仓储属于正常部署形态，
+不会打断建单）；`JeeflowFacade` 构造时传入的扩展仓储会自动暴露给引擎，无需二次注册。
+
+`SurrogateInterceptor` 也是普通的 `FlowInterceptor` 实现，需要自定义委托策略
+（如按部门改写、级联委托）时可注册自己的实例替换之，追加逻辑幂等，两者并存不会重复加人：
 
 ```java
 ServiceContext.put("surrogateInterceptor", new SurrogateInterceptor(extRepo));
