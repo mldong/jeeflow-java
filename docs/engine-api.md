@@ -77,7 +77,7 @@ List<ProcessTask> executeAndJumpTask(
     Long processTaskId,
     String operator,
     FlowData args,
-    String nodeName           // 目标节点名称，null=退回上一步
+    String nodeName           // 目标节点名称；null=退回上一步（语义见规范「引擎操作 04 · 退回上一步」：血缘版取 task_parent_id 行，本栈待对齐）
 );
 ```
 
