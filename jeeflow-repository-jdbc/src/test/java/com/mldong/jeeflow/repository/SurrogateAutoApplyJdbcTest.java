@@ -167,7 +167,22 @@ public class SurrogateAutoApplyJdbcTest {
 
     private ProcessSurrogate ledger(String operator, String agent, String processName,
                                     LocalDateTime start, LocalDateTime end, Integer enabled) {
+        return saveLedger(null, operator, agent, processName, start, end, enabled);
+    }
+
+    /**
+     * 台账里插一条**指定主键 id** 的行（契约 1.4 夹具要故意让 id 序与插入序不一致）。
+     * {@code saveSurrogate} 对非 null 的 id 不再自动分配，与内存仓同约定。
+     */
+    private ProcessSurrogate ledgerWithId(long id, String operator, String agent, String processName,
+                                          LocalDateTime start, LocalDateTime end, Integer enabled) {
+        return saveLedger(id, operator, agent, processName, start, end, enabled);
+    }
+
+    private ProcessSurrogate saveLedger(Long id, String operator, String agent, String processName,
+                                        LocalDateTime start, LocalDateTime end, Integer enabled) {
         ProcessSurrogate s = new ProcessSurrogate();
+        s.setId(id);
         s.setOperator(operator);
         s.setSurrogate(agent);
         s.setProcessName(processName);
@@ -351,10 +366,14 @@ public class SurrogateAutoApplyJdbcTest {
         assertNull("enabled=2 不生效", extRepo.getSurrogate("opD2", FLOW, now));
         assertNull("enabled=-1 不生效", extRepo.getSurrogate("opD9", FLOW, now));
 
-        // 多条命中取最新（与内存仓同答案）
-        ledger("opE", "sE-old", FLOW, null, null, 1);
-        ledger("opE", "sE-new", FLOW, null, null, 1);
-        assertEquals("双仓一致：多条命中取 id 最大", "sE-new",
+        // 多条命中取哪条（契约 1.4：ORDER BY id DESC LIMIT 1，与内存仓同答案）。
+        // ⚠️ 夹具故意**打乱 id 插入序**（先插 id 大的、后插 id 小的），与内存仓同一份数据形状（条款 6）。
+        // 自然序插入时"末条"与"id 最大"同答案、钉不住 1.4——内存侧实测如此；SQL 侧本轮探针实测
+        // 把"ORDER BY id DESC"改成"无序取结果集末条"在打乱序夹具下**仍然绿**（H2/InnoDB 按主键序回行，
+        // 末条恒等于 id 最大），即打乱序在 SQL 侧不构成额外判别力，真正钉住 1.4 的是那句 ORDER BY。
+        ledgerWithId(900002L, "opE", "sE-new", FLOW, null, null, 1);   // 先插：id 最大 = 应命中
+        ledgerWithId(900001L, "opE", "sE-old", FLOW, null, null, 1);   // 后插：id 更小 = 不应命中
+        assertEquals("双仓一致：多条命中取 id 最大（不是插入序末条）", "sE-new",
                 extRepo.getSurrogate("opE", FLOW, now).getSurrogate());
     }
 
@@ -362,21 +381,26 @@ public class SurrogateAutoApplyJdbcTest {
 
     @Test
     public void dirtyEnabledViaFacadeIsNotTreatedAsEnabled() {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("operator", "opDirty");
-        body.put("surrogate", "sDirty");
-        body.put("processName", FLOW);
-        body.put("enabled", "abc");                          // 不可解析为整数的脏值
-        com.mldong.jeeflow.facade.JeeflowFacade facade =
-                new com.mldong.jeeflow.facade.JeeflowFacade(engine, repo, extRepo);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> r = (Map<String, Object>) facade.flow("processSurrogate/save", body);
-        assertEquals("save 应成功: " + r, Integer.valueOf(0), r.get("code"));
-        Object id = ((Map<?, ?>) r.get("data")).get("id");
-        assertNotNull(id);
-        assertEquals("脏值不得折叠成启用", Integer.valueOf(0),
-                extRepo.findSurrogateById(Long.valueOf(String.valueOf(id))).getEnabled());
-        assertNull("脏值委托不得生效", extRepo.getSurrogate("opDirty", FLOW, LocalDateTime.now()));
+        // 契约 5 写侧两类脏值都要落 0：`"abc"`（不可解析）与 `""`（空串，**跨栈实测分叉点**——
+        // Python 首版把空串落成 1）；且都不得抛错变 500（Node 首版 toInt 直接抛）。
+        for (Object dirty : new Object[]{"", "abc"}) {
+            String op = "opDirty-" + dirty;
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("operator", op);
+            body.put("surrogate", "sDirty-" + dirty);
+            body.put("processName", FLOW);
+            body.put("enabled", dirty);
+            com.mldong.jeeflow.facade.JeeflowFacade facade =
+                    new com.mldong.jeeflow.facade.JeeflowFacade(engine, repo, extRepo);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> r = (Map<String, Object>) facade.flow("processSurrogate/save", body);
+            assertEquals("脏值 enabled=" + dirty + " 不得报错变 500: " + r, Integer.valueOf(0), r.get("code"));
+            Object id = ((Map<?, ?>) r.get("data")).get("id");
+            assertNotNull(id);
+            assertEquals("脏值 enabled=" + dirty + " 落库（SQL 列读回）必须是 0", Integer.valueOf(0),
+                    extRepo.findSurrogateById(Long.valueOf(String.valueOf(id))).getEnabled());
+            assertNull("脏值委托不得生效", extRepo.getSurrogate(op, FLOW, LocalDateTime.now()));
+        }
     }
 
     /** getSurrogate 恒抛错的扩展仓储（其余方法用不到） */

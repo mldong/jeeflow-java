@@ -1,12 +1,16 @@
 package com.mldong.jeeflow.interceptor.impl;
 
 import com.mldong.jeeflow.core.Execution;
+import com.mldong.jeeflow.core.JeeflowEngine;
 import com.mldong.jeeflow.core.ServiceContext;
+import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessSurrogate;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
 import com.mldong.jeeflow.interceptor.FlowInterceptor;
+import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
+import com.mldong.jeeflow.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -72,10 +76,49 @@ public class SurrogateInterceptor implements FlowInterceptor {
         if (execution == null) return;
         List<ProcessTask> tasks = execution.getProcessTaskList();
         if (tasks == null || tasks.isEmpty()) return;
-        String processName = execution.getProcessModel() != null
-                ? execution.getProcessModel().getName() : null;
+        String processName = resolveProcessName(execution);
         for (ProcessTask task : tasks) {
             apply(task, processName, LocalDateTime.now());
+        }
+    }
+
+    /**
+     * 委托查询的 processName 取值口径（规范 06 §4.5「运行期语义」条款 1.1）：
+     * **流程模型 {@code name} 优先**，模型未带（键缺失 / 空串 / 纯空白）时才回落
+     * {@code wf_process_define.name}。
+     *
+     * <p>依据是迁移基线：内置版（mldong-wf）{@code SurrogateInterceptor} 用的正是
+     * {@code execution.getProcessModel().getName()}；用户在内置版配的委托，迁到 jeeflow
+     * 后必须命中同一条。正常 deploy 两者恒等（{@code def.setName(model.getName())}），
+     * 但直接落库的定义（自带导入链路 / 测试夹具）会不一致——只取任一头都会漏。</p>
+     *
+     * <p>回落路径读定义行失败按「拿不到流程名」处理（只能命中全流程兜底委托），
+     * 绝不打断建单（条款 4：委托是增强能力）。返回 {@code null} 与空串在两条判据里同义。</p>
+     *
+     * <p>⚠️ 定义行读取带 {@code content} BLOB，故只在**模型未带 name** 的异常形态下发生；
+     * 调用方应逐次 execution 解析一次后复用（见 {@code JeeflowEngineImpl#persistTasks}），
+     * 不要逐任务解析。</p>
+     */
+    public static String resolveProcessName(Execution execution) {
+        if (execution == null) return null;
+        ProcessModel model = execution.getProcessModel();
+        if (model != null && StringUtils.isNotBlank(model.getName())) {
+            return model.getName().trim();
+        }
+        ProcessInstance instance = execution.getProcessInstance();
+        JeeflowEngine engine = execution.getEngine();
+        if (instance == null || instance.getDefineId() == null || engine == null
+                || engine.getRepository() == null) {
+            return null;
+        }
+        try {
+            ProcessInstance.ProcessDefine define = engine.getRepository().findDefineById(instance.getDefineId());
+            return (define == null || StringUtils.isBlank(define.getName()))
+                    ? null : define.getName().trim();
+        } catch (RuntimeException e) {
+            System.err.println("[jeeflow] findDefineById(" + instance.getDefineId()
+                    + ") failed, surrogate processName unresolved: " + e.getMessage());
+            return null;
         }
     }
 
@@ -86,7 +129,7 @@ public class SurrogateInterceptor implements FlowInterceptor {
      * <p>幂等：代理人已在集合里则不重复追加，可安全地对同一任务多次调用。</p>
      *
      * @param task        任务（参与者集合被就地更新，供随后的 saveTask 全量落库）
-     * @param processName 当前流程名（= 流程定义 name，null 时只命中全流程委托）
+     * @param processName 当前流程名（取值口径见 {@link #resolveProcessName}，null 时只命中全流程委托）
      * @param now         判定时间（一般传 {@link LocalDateTime#now()}）
      */
     public void apply(ProcessTask task, String processName, LocalDateTime now) {

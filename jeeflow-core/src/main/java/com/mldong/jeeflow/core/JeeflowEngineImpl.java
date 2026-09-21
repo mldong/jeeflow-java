@@ -104,8 +104,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             //    「任务落库后逐任务 fire，监听器可按 taskId 反查」与 Go 参考实现。
             //    CreateTaskHandler 在 handler 阶段（taskId 尚未生成）不再 fire，避免 sourceId=null
             //    导致监听器（onEvent 的 sourceId==null 守卫）漏发「新待办」TODO 消息。
+            String surrogateProcessName = SurrogateInterceptor.resolveProcessName(exec);
             for (ProcessTask task : exec.getProcessTaskList()) {
-                saveNewTask(exec, task);
+                saveNewTask(task, surrogateProcessName);
             }
             repository.updateInstance(instance);
             return instance;
@@ -300,8 +301,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     }
 
     private void persistTasks(Execution exec) {
+        // 委托查询的流程名逐次 execution 解析一次后复用（对齐 Go/Node）：回落路径要读定义行
+        // （含 content BLOB），不能逐任务重复读
+        String surrogateProcessName = SurrogateInterceptor.resolveProcessName(exec);
         for (ProcessTask task : exec.getProcessTaskList()) {
-            saveNewTask(exec, task);
+            saveNewTask(task, surrogateProcessName);
         }
         if (exec.getProcessTask() != null && exec.getProcessTask().getTaskId() != null) {
             repository.updateTask(exec.getProcessTask());
@@ -310,18 +314,21 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     }
 
     /**
-     * 新任务落库唯一收口（发起 / 办理推进 / 串行会签推进 / 跳转 都走这里）。
+     * 新任务落库唯一收口（发起 / 办理推进 / 串行会签的每一步推进 / 跳转(JUMP) / 回退(ROLLBACK)
+     * 都走这里——契约 1「覆盖全部建任务路径」，只挂发起一处就会漏掉流转中产生的新单）。
      *
      * <p>落库前先应用生效委托（issues/116）：被委托人**并入参与者集合本身**，
      * 再由 {@code saveTask} 随任务一起全量写入 {@code wf_process_task_actor}。
      * 顺序不能反——此刻 taskId 尚未分配，走「事后 addTaskActor 补写」会打在空 id 上静默无效。
      * 开关：{@code Configuration#surrogateAutoApply(false)}（默认开启）；
      * 未配置 {@code IProcessExtRepository} 时静默跳过，不打断建单。</p>
+     *
+     * @param processName 委托查询用的流程名，由调用方经
+     *                    {@link SurrogateInterceptor#resolveProcessName} 解析（契约 1.1：
+     *                    模型 name 优先、缺失回落 {@code wf_process_define.name}）后传入
      */
-    private void saveNewTask(Execution exec, ProcessTask task) {
+    private void saveNewTask(ProcessTask task, String processName) {
         if (config == null || config.isSurrogateAutoApply()) {
-            String processName = exec.getProcessModel() != null
-                    ? exec.getProcessModel().getName() : null;
             surrogateApplier.apply(task, processName, LocalDateTime.now());
         }
         repository.saveTask(task);
