@@ -7,6 +7,7 @@ import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.model.TaskModel;
 import com.mldong.jeeflow.model.CustomModel;
+import com.mldong.jeeflow.util.FlowUtil;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -205,7 +206,8 @@ public class ProcessInstance {
 
     /** 创建普通任务 */
     public ProcessTask createTask(TaskModel taskModel, String displayName,
-                                   List<String> actorIds, String operator) {
+                                   List<String> actorIds, String operator,
+                                   Long parentTaskId, boolean isFirstTaskNode) {
         ProcessTask task = ProcessTask.create(
                 this.instanceId,
                 taskModel.getName(),
@@ -214,7 +216,9 @@ public class ProcessInstance {
                 taskModel.getPerformType(),
                 taskModel.getForm(),
                 actorIds,
-                operator
+                operator,
+                parentTaskId,
+                isFirstTaskNode
         );
         if (taskModel.getExpireTime() != null) {
             task.setExpireTime(LocalDateTime.now()); // will be overridden by util later
@@ -225,7 +229,8 @@ public class ProcessInstance {
 
     /** 创建会签任务 */
     public List<ProcessTask> createCountersignTasks(TaskModel taskModel, List<String> actorIds,
-                                                     String operator) {
+                                                     String operator, Long parentTaskId,
+                                                     boolean isFirstTaskNode) {
         List<ProcessTask> list = new ArrayList<>();
         // 串行会签（issues/93）：仅创建第一位成员任务，并把会签计数状态写入该任务变量
         // （operatorList_{node} 全量办理人 / loopCounter_{node} 当前序号 / nrOfInstances_{node} 总数），
@@ -242,7 +247,9 @@ public class ProcessInstance {
                     taskModel.getPerformType(),
                     taskModel.getForm(),
                     new ArrayList<>(java.util.Collections.singletonList(actorIds.get(0))),
-                    operator
+                    operator,
+                    parentTaskId,
+                    isFirstTaskNode
             );
             first.getVariables().put(FlowConst.COUNTERSIGN_OPERATOR_LIST + "_" + node, new ArrayList<>(actorIds));
             first.getVariables().put(FlowConst.LOOP_COUNTER + "_" + node, 0);
@@ -261,7 +268,9 @@ public class ProcessInstance {
                     taskModel.getPerformType(),
                     taskModel.getForm(),
                     new ArrayList<>(java.util.Collections.singletonList(actorId)),
-                    operator
+                    operator,
+                    parentTaskId,
+                    isFirstTaskNode
             );
             list.add(task);
             this.tasks.add(task);
@@ -283,7 +292,11 @@ public class ProcessInstance {
                     prevModel.getPerformType(),
                     prevModel.getForm(),
                     Collections.singletonList(currentTask.getActorId()),
-                    currentTask.getCreateUser()
+                    currentTask.getCreateUser(),
+                    // 仍是拓扑版落点（P2 换血缘版）：parent 先记"谁造了它"＝当前被回退的任务，
+                    // 届时按契约第 8 条改为随复活行拷贝（＝上一步的上一步）。
+                    currentTask.getTaskId(),
+                    FlowUtil.isFirstTaskName(model, prevModel.getName())
             );
             this.tasks.add(newTask);
             return newTask;
@@ -292,7 +305,8 @@ public class ProcessInstance {
     }
 
     /** 创建历史任务记录（自定义节点用） */
-    public ProcessTask createHistoryTask(CustomModel customModel, String operator) {
+    public ProcessTask createHistoryTask(CustomModel customModel, String operator,
+                                          Long parentTaskId, boolean isFirstTaskNode) {
         ProcessTask task = ProcessTask.create(
                 this.instanceId,
                 customModel.getName(),
@@ -301,7 +315,9 @@ public class ProcessInstance {
                 null,
                 null,
                 Collections.singletonList(operator),
-                operator
+                operator,
+                parentTaskId,
+                isFirstTaskNode
         );
         task.setTaskState(ProcessTaskStateEnum.FINISHED.getCode());
         this.tasks.add(task);

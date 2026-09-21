@@ -306,8 +306,13 @@ public class JeeflowFacade {
                 Map<String, Object> ext = t.getVariables() != null
                         ? new LinkedHashMap<>(t.getVariables()) : new LinkedHashMap<>();
                 boolean doing = ProcessTaskStateEnum.DOING.getCode().equals(t.getTaskState());
-                // 首个任务节点且进行中 → 前端详情抽屉可"重新提交"（对齐 boot3）
-                ext.put("isFirstTaskNode", doing && t.getTaskName().equals(firstTaskNodeId));
+                // 首个任务节点 → 前端详情抽屉可"重新提交"（对齐 boot3）。
+                // 行上值优先（引擎建单时写入，已办结的历史行同样有效）；缺键（存量行）才回退现算——
+                // 现算带"仅进行中"判定，只够展示用，不能当引擎判据（issues/121 §4）。
+                Object rowFirst = ext.get(FlowConst.IS_FIRST_TASK_NODE);
+                ext.put("isFirstTaskNode", rowFirst != null
+                        ? Boolean.parseBoolean(String.valueOf(rowFirst))
+                        : doing && t.getTaskName().equals(firstTaskNodeId));
                 vo.put("ext", ext);
                 tasks.add(vo);
                 if (doing) activeTaskList.add(vo);
@@ -712,7 +717,9 @@ public class JeeflowFacade {
         boolean doing = ProcessTaskStateEnum.DOING.getCode().equals(task.getTaskState());
         Map<String, Object> tExt = task.getVariables() != null
                 ? new LinkedHashMap<>(task.getVariables()) : new LinkedHashMap<>();
-        tExt.put("isFirstTaskNode", false);
+        Object tRowFirst = tExt.get(FlowConst.IS_FIRST_TASK_NODE);
+        tExt.put("isFirstTaskNode", tRowFirst != null
+                && Boolean.parseBoolean(String.valueOf(tRowFirst)));
         vo.put("ext", tExt);
         // taskModel：流程定义中对应节点（显示名/表单）
         ProcessInstance inst = repository.findInstanceById(task.getProcessInstanceId());
@@ -721,7 +728,10 @@ public class JeeflowFacade {
             Map<String, Object> jsonObject = def != null ? parseGraph(def.getContent()) : null; // issues/05
             vo.put("jsonObject", jsonObject);
             if (def != null) {
-                tExt.put("isFirstTaskNode", doing && task.getTaskName().equals(firstTaskNodeId(jsonObject)));
+                if (tRowFirst == null) {
+                    // 存量行没有落库标记 ⇒ 回退现算（仅进行中口径）
+                    tExt.put("isFirstTaskNode", doing && task.getTaskName().equals(firstTaskNodeId(jsonObject)));
+                }
                 try {
                     ProcessModel model = ModelParser.parse(def.getContent());
                     for (com.mldong.jeeflow.model.NodeModel node : model.getNodes()) {

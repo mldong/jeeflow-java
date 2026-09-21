@@ -39,9 +39,19 @@ public class ProcessTask {
 
     // ═══ 工厂方法 ═══
 
+    /**
+     * 建单唯一入口，同时兑现两条**建单不变量**（规范「引擎操作 04 · 退回上一步」）：
+     * ① 必写 {@code parentTaskId}（发起 execution 无当前任务时传 null，落库 0）；
+     * ② 必写 {@code variable.isFirstTaskNode}——血缘版回退要读**已办结的历史行**，
+     *    靠门面出口现算（带"仅进行中"判定）在历史行上恒 false，会把首节点回退错判成普通回退。
+     *
+     * @param parentTaskId    上一步任务ID，来自 execution 当前任务；null⇒落库 0
+     * @param isFirstTaskNode 该行节点是否 start 直接后继
+     */
     public static ProcessTask create(Long instanceId, String taskName, String displayName,
                                       ProcessTaskTypeEnum taskType, ProcessTaskPerformTypeEnum performType,
-                                      String formKey, List<String> actorIds, String operator) {
+                                      String formKey, List<String> actorIds, String operator,
+                                      Long parentTaskId, boolean isFirstTaskNode) {
         ProcessTask task = new ProcessTask();
         task.processInstanceId = instanceId;
         task.taskName = taskName;
@@ -51,7 +61,9 @@ public class ProcessTask {
         task.taskState = ProcessTaskStateEnum.DOING.getCode();
         task.formKey = formKey;
         task.actorIds = actorIds != null ? new ArrayList<>(actorIds) : new ArrayList<String>();
+        task.parentTaskId = parentTaskId != null ? parentTaskId : 0L;
         task.variables = FlowData.create();
+        task.variables.put(FlowConst.IS_FIRST_TASK_NODE, isFirstTaskNode);
         task.createTime = LocalDateTime.now();
         task.createUser = operator;
         task.updateTime = LocalDateTime.now();

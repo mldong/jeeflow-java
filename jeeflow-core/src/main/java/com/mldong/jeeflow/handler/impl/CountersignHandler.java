@@ -146,7 +146,10 @@ public class CountersignHandler implements IHandler {
                 taskModel.getPerformType(),
                 taskModel.getForm(),
                 new ArrayList<>(java.util.Collections.singletonList(nextActor)),
-                execution.getOperator()
+                execution.getOperator(),
+                // 建单不变量：串行会签的下一位成员，parent＝刚完成的那一位（execution 当前任务）
+                execution.getProcessTaskId(),
+                com.mldong.jeeflow.util.FlowUtil.isFirstTaskName(execution.getProcessModel(), node)
         );
         next.getVariables().put(FlowConst.COUNTERSIGN_OPERATOR_LIST + "_" + node,
                 readOperatorList(execution, node));

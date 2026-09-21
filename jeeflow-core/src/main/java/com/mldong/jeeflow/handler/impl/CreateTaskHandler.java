@@ -15,6 +15,7 @@ import com.mldong.jeeflow.interceptor.AssignmentHandler;
 import com.mldong.jeeflow.interceptor.FlowInterceptor;
 import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.model.TaskModel;
+import com.mldong.jeeflow.util.FlowUtil;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -44,11 +45,17 @@ public class CreateTaskHandler implements IHandler {
         execution.setNodeModel(taskModel);
         List<String> actors = resolveActors(taskModel, model, execution);
 
+        // 建单不变量（规范 04 · 退回上一步）：parent＝本 execution 刚办结的那个任务；
+        // 发起 execution 没有当前任务 ⇒ 传 null，由 ProcessTask.create 落库 0。
+        Long parentTaskId = execution.getProcessTaskId();
+        boolean isFirstTaskNode = FlowUtil.isFirstTaskName(model, taskModel.getName());
+
         List<ProcessTask> tasks;
         if (ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(taskModel.getPerformType())) {
-            tasks = instance.createCountersignTasks(taskModel, actors, operator);
+            tasks = instance.createCountersignTasks(taskModel, actors, operator, parentTaskId, isFirstTaskNode);
         } else {
-            ProcessTask task = instance.createTask(taskModel, taskModel.getDisplayName(), actors, operator);
+            ProcessTask task = instance.createTask(taskModel, taskModel.getDisplayName(), actors, operator,
+                    parentTaskId, isFirstTaskNode);
             tasks = new ArrayList<>();
             tasks.add(task);
         }

@@ -4,9 +4,13 @@ import com.mldong.jeeflow.Configuration;
 import com.mldong.jeeflow.core.JeeflowEngine;
 import com.mldong.jeeflow.core.JeeflowEngineImpl;
 import com.mldong.jeeflow.core.ServiceContext;
+import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessInstance;
+import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.domain.ProcessDesign;
 import com.mldong.jeeflow.domain.ProcessDesignHis;
+import com.mldong.jeeflow.enums.FlowConst;
+import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
 import com.mldong.jeeflow.facade.JeeflowFacade;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
@@ -1332,6 +1336,47 @@ public class JeeflowFacadeTest {
         Map<String, Object> vo2 = (Map<String, Object>) d2.get("data");
         assertEquals("会签任务 performType 应为数字 1", Integer.valueOf(1), vo2.get("performType"));
         assertEquals("会签任务 taskType 应为数字 0", Integer.valueOf(0), vo2.get("taskType"));
+    }
+
+    /**
+     * issues/121 P1：出口 ext.isFirstTaskNode 的读时兜底——**行上值优先，缺键才回退现算**。
+     * 差值只在**已办结的历史行**上看得见：现算带"仅进行中"判定⇒历史行恒 false，
+     * 而行上值是真 true；血缘版回退要读这条历史行决定参与者，读成 false 就会把首节点回退派错人。
+     */
+    @Test
+    public void testIsFirstTaskNodePrefersPersistedRow() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("02-multi-task.json");
+        // 用引擎发起（不是 startAndExecute——它会把 apply 也一并办结，就拿不到"进行中的首节点行"了）
+        Long iid = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create()).getInstanceId();
+        Long applyId = doingTaskId(iid, "apply");
+        assertNotNull("应有进行中的 apply 行", applyId);
+        assertEquals("进行中的首节点行读行上值", Boolean.TRUE, extOfRow(iid, "apply").get("isFirstTaskNode"));
+
+        ProcessTask apply = rawRepo.findTaskById(applyId);
+        rawRepo.addTaskActor(applyId, Arrays.asList("applicant"));
+        apply.getActorIds().add("applicant");
+        engine.executeProcessTask(applyId, "applicant", FlowData.create()
+                .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+
+        assertEquals("历史行仍应读到 true（标记随行存活）", Boolean.TRUE,
+                extOfRow(iid, "apply").get("isFirstTaskNode"));
+
+        // 存量行形状（引擎尚未写标记时落的老数据）：抹掉行上键 ⇒ 只能回退现算 ⇒ 历史行为 false
+        rawRepo.findTaskById(applyId).getVariables().remove(FlowConst.IS_FIRST_TASK_NODE);
+        assertEquals("缺键的历史行回退现算（这格同时说明为何引擎不能靠现算）", Boolean.FALSE,
+                extOfRow(iid, "apply").get("isFirstTaskNode"));
+    }
+
+    /** 从 processInstance/detail 的 tasks 里按任务名取该行 ext（仓储/出口读回，不用内存聚合根） */
+    private Map<String, Object> extOfRow(Long instanceId, String taskName) {
+        Map<String, Object> r = call("processInstance/detail", args("id", instanceId));
+        assertOk(r);
+        Map<String, Object> data = (Map<String, Object>) r.get("data");
+        for (Object o : (List<?>) data.get("tasks")) {
+            Map<String, Object> vo = (Map<String, Object>) o;
+            if (taskName.equals(vo.get("taskName"))) return (Map<String, Object>) vo.get("ext");
+        }
+        throw new AssertionError("detail.tasks 里应有 " + taskName + " 行");
     }
 
     /** 找指定实例下进行中、名为 name 的任务 id */

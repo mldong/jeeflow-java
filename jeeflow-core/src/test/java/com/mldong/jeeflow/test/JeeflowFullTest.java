@@ -10,6 +10,7 @@ import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessInstanceStateEnum;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
+import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.spi.IUserProvider;
 import com.mldong.jeeflow.spi.IUserProvider.UserInfo;
@@ -121,6 +122,59 @@ public class JeeflowFullTest {
         // 验证流程结束
         ProcessInstance updated = repo.findInstanceById(inst.getInstanceId());
         assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), updated.getState());
+    }
+
+    // ═══════════════════════════════════════════
+    // 测试 16.5：建单不变量——task_parent_id 与 variable.isFirstTaskNode（issues/121 P1）
+    // 夹具是 4 个任务节点的链：两步流里"上一节点"与"首任务节点"同格，断言恒真、测不出东西
+    // ═══════════════════════════════════════════
+    @Test
+    public void test165CreateWritesLineageColumns() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("02-multi-task.json");
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        Long iid = inst.getInstanceId();
+
+        ProcessTask apply = doingByName(iid, "apply");
+        // 发起 execution 没有当前任务 ⇒ parent 落 0；apply 是 start 直接后继 ⇒ 标记 true
+        assertEquals("发起那条 parent 应为 0", Long.valueOf(0L), apply.getParentTaskId());
+        assertEquals("首任务节点行应写 isFirstTaskNode=true", Boolean.TRUE,
+                apply.getVariables().get(FlowConst.IS_FIRST_TASK_NODE));
+        approve(apply, "applicant");
+
+        ProcessTask t1 = doingByName(iid, "task1");
+        assertEquals("task1 的 parent 应是刚办结的 apply", apply.getTaskId(), t1.getParentTaskId());
+        assertEquals("非首节点行应写 false", Boolean.FALSE,
+                t1.getVariables().get(FlowConst.IS_FIRST_TASK_NODE));
+        approve(t1, "leader");
+
+        ProcessTask t2 = doingByName(iid, "task2");
+        assertEquals("链式血缘：task2.parent == task1.id", t1.getTaskId(), t2.getParentTaskId());
+        approve(t2, "manager");
+
+        ProcessTask t3 = doingByName(iid, "task3");
+        assertEquals("链式血缘：task3.parent == task2.id", t2.getTaskId(), t3.getParentTaskId());
+
+        // 本案真正要的那格：血缘版回退读的是**已办结的历史行**，标记必须随行存活。
+        // 门面出口现算版带"仅进行中"判定，历史行上恒 false ⇒ 首节点回退会被错判成普通回退。
+        ProcessTask hisApply = repo.findTaskById(apply.getTaskId());
+        assertEquals("apply 应已办结", ProcessTaskStateEnum.FINISHED.getCode(), hisApply.getTaskState());
+        assertEquals("历史行的标记必须还在", Boolean.TRUE,
+                hisApply.getVariables().get(FlowConst.IS_FIRST_TASK_NODE));
+        assertEquals("历史行的血缘指针不能被别的路径覆写", Long.valueOf(0L), hisApply.getParentTaskId());
+    }
+
+    /** 按任务名取该实例进行中的那条（仓储读回，不用聚合根内存对象） */
+    private ProcessTask doingByName(Long instanceId, String name) {
+        return repo.findDoingTasks(instanceId, null).stream()
+                .filter(t -> name.equals(t.getTaskName())).findFirst()
+                .orElseThrow(() -> new AssertionError("应有进行中的 " + name + " 任务"));
+    }
+
+    private void approve(ProcessTask task, String actor) throws Exception {
+        repo.addTaskActor(task.getTaskId(), Arrays.asList(actor));
+        task.getActorIds().add(actor);
+        engine.executeProcessTask(task.getTaskId(), actor, FlowData.create()
+                .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
     }
 
     // ═══════════════════════════════════════════

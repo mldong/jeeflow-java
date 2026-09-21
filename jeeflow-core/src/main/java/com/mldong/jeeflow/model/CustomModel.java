@@ -54,7 +54,10 @@ public class CustomModel extends NodeModel {
         }
 
         // 记录历史任务
-        execution.getProcessInstance().createHistoryTask(this, execution.getOperator());
+        // 建单不变量（规范 04 · 退回上一步）：历史行同样要带 parent 与首节点标记
+        execution.getProcessInstance().createHistoryTask(this, execution.getOperator(),
+                execution.getProcessTaskId(),
+                com.mldong.jeeflow.util.FlowUtil.isFirstTaskName(execution.getProcessModel(), getName()));
         runOutTransition(execution);
     }
 
