@@ -89,9 +89,16 @@ public class ProcessTask {
         this.updateUser = operator;
     }
 
-    /** 退回任务（恢复到进行中） */
-    public void withdraw() {
+    /**
+     * 撤回（issues/114）：任务态置 WITHDRAW(30)，并把 `update_user` 回写为真实撤回人。
+     *
+     * <p>调用方（{@link com.mldong.jeeflow.domain.ProcessInstance#withdraw(String)}）只对进行中任务下发本命令，
+     * 已完成(20)/已终止(40) 的任务行不得被撤回改写；99 是"废弃"语义专用码，不得混用。</p>
+     */
+    public void withdraw(String operator) {
         this.taskState = ProcessTaskStateEnum.WITHDRAW.getCode();
+        this.updateTime = LocalDateTime.now();
+        this.updateUser = operator;
     }
 
     /** 强行终止 */

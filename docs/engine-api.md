@@ -131,6 +131,9 @@ FlowData copy = args.copy();  // 深拷贝
 | `BUSINESS_NO` | `"BUSINESS_NO"` | 业务编号 |
 | `SUBMIT_TYPE` | `"submitType"` | 提交类型 |
 | `APPROVAL_COMMENT` | `"tf_approvalComment"` | 审批意见 |
+| `TRANSFER_TO` | `"tf_transferTo"` | 转办目标人（`processTask/transfer` 留痕） |
+| `TRANSFER_REASON` | `"tf_transferReason"` | 转办原因（`processTask/transfer` 留痕） |
+| `TRANSFER_HISTORY` | `"tf_transferHistory"` | 转办跨跳账本：list，每跳 append 一条 `{submitType,fromActor,toActor,reason,time,operator}`，只追加不覆盖；`time` 为 `yyyy-MM-dd HH:mm:ss` 字符串（跨栈同形，不用 ISO 方言） |
 | `NEXT_NODE_OPERATOR` | `"tf_nextNodeOperator"` | 下一节点执行人 |
 | `FORM_DATA_PREFIX` | `"f_"` | 表单数据前缀 |
 | `PROCESS_DEFINE_ID_KEY` | `"processDefineId"` | 流程定义 ID |
@@ -146,4 +149,5 @@ FlowData copy = args.copy();  // 深拷贝
 | `ROLLBACK` | 3 | 退回上一步 |
 | `JUMP` | 4 | 跳转 |
 | `ROLLBACK_TO_OPERATOR` | 6 | 退回发起人 |
-| `COUNTERSIGN_DISAGREE` | 20 | 会签不同意 |
+| `TRANSFER` | 7 | 转办（`processTask/transfer` 留痕用，不走 `executeProcessTask`） |
+| `COUNTERSIGN_DISAGREE` | 20 | 会签拒绝（spec 07 定名；此前与 2 同为「拒绝申请」，同字典两项同名前端下拉不可区分） |

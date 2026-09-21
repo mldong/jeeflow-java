@@ -48,6 +48,18 @@ public final class FlowConst {
     /** 启动参数中的抄送人 */
     public static final String CC_ACTORS_START = "f_ccActors";
 
+    /** 转办目标人（issues/115：`processTask/transfer` 留痕，落任务变量） */
+    public static final String TRANSFER_TO = "tf_transferTo";
+    /** 转办原因（issues/115：`processTask/transfer` 留痕，落任务变量） */
+    public static final String TRANSFER_REASON = "tf_transferReason";
+    /**
+     * 转办跨跳账本（issues/115：`processTask/transfer` 留痕，落任务变量）。
+     * <p>List&lt;Map&gt;，每一跳 append 一条
+     * {@code {submitType:7, fromActor, toActor, reason, time, operator}}，只追加不覆盖。
+     * {@code time} 为 {@code "yyyy-MM-dd HH:mm:ss"} 字符串（spec §2.4 全生态时间格式，跨栈同形）。</p>
+     */
+    public static final String TRANSFER_HISTORY = "tf_transferHistory";
+
     /** 用户 ID */
     public static final String USER_USER_ID = "u_userId";
     /** 用户姓名 */

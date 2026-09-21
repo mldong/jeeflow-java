@@ -139,6 +139,7 @@ public class JeeflowFacade {
                 case "processTask/candidatePage": return candidatePage(args);
                 case "processTask/surrogate": return taskSurrogate(args);
                 case "processTask/addCandidate": return taskAddCandidate(args);
+                case "processTask/transfer": return taskTransfer(args);          // issues/115
                 case "processTask/latest": return taskLatest(args);
                 // ── 委托代理（需扩展仓储）──
                 case "processSurrogate/page": return surrogatePage(args);
@@ -316,12 +317,43 @@ public class JeeflowFacade {
 
     private Map<String, Object> withdraw(Map<String, Object> args) {
         Long instanceId = toLong(args.get("id"));
-        String operator = toStr(args.get("operator"), "user1");
+        // issues/114：operator 硬必填——严禁缺省回落 user1 等固定账号（撤回人会被静默记成
+        // 别人，update_user 与审计链一起失真且不报错）。msg 跨栈统一「operator 必填」。
+        String operator = toStr(args.get("operator"));
+        if (StringUtils.isBlank(operator)) return error("operator 必填");
         ProcessInstance inst = repository.findInstanceById(instanceId);
         if (inst == null) return error("流程实例不存在");
+        if (!canWithdraw(inst, operator)) return error("无权限撤回该流程实例");
         inst.withdraw(operator);
         repository.updateInstance(inst); // v1.0.1：级联持久化任务状态
         return ok();
+    }
+
+    /**
+     * 撤回归属判据（issues/114，命中任一即放行，全不命中拒绝）：
+     *
+     * <ol>
+     *   <li>{@code operator} = 实例发起人（{@code wf_process_instance.operator}）——
+     *       <b>不可复用 {@link ProcessTask#isAllowed}</b>：各语言引擎的 isAllowed 只判
+     *       "operator 在不在该任务 actorIds"，从不查实例发起人，这一支必须显式补；</li>
+     *   <li>{@code operator} 是该实例任一<b>进行中</b>任务的参与者
+     *       （{@code wf_process_task_actor.actor_id}，以参与者表为准，不用聚合副本）；</li>
+     *   <li>{@code operator} ∈ {{@code flow.auto}, {@code flow.admin}}（沿用 isAllowed 既有放行约定）。</li>
+     * </ol>
+     */
+    private boolean canWithdraw(ProcessInstance inst, String operator) {
+        if (isPrivilegedOperator(operator)) return true;
+        if (operator.equals(inst.getOperator())) return true;
+        List<ProcessTask> doingTasks = repository.findDoingTasks(inst.getInstanceId(), new String[]{});
+        for (ProcessTask task : doingTasks) {
+            if (repository.findTaskActors(task.getTaskId()).contains(operator)) return true;
+        }
+        return false;
+    }
+
+    /** 系统代执行（flow.auto）/ 超级管理员（flow.admin）放行——isAllowed 既有约定，撤回/转办共用 */
+    private static boolean isPrivilegedOperator(String operator) {
+        return FlowConst.AUTO_ID.equalsIgnoreCase(operator) || FlowConst.ADMIN_ID.equalsIgnoreCase(operator);
     }
 
     // ═══ 流程任务 ═══
@@ -811,6 +843,104 @@ public class JeeflowFacade {
 
     private Map<String, Object> taskAddCandidate(Map<String, Object> args) {
         return taskSurrogate(args);
+    }
+
+    /**
+     * 转办（issues/115）：摘原办理人 + 换新参与人，区别于 {@code processTask/surrogate} 加签的
+     * "只追加"（加签后原人保留可办，本 action 会把待办从 A 挪到 B）。契约七条语义（spec 06
+     * §processTask/transfer）逐条落地：
+     *
+     * <ol>
+     *   <li><b>摘原人</b>：只删 {@code fromActor} 在该任务的 {@code wf_process_task_actor} 行，
+     *       会签节点转的是"自己那一票"，其余成员不受影响；</li>
+     *   <li><b>加新人</b>：{@code toActor} 追加为该任务参与人，办理规则不变；</li>
+     *   <li><b>任务不新建</b>：沿用同一 {@code processTaskId}，高亮图/节点进度不变；</li>
+     *   <li><b>留痕（三件，缺一不可）</b>：
+     *     <ul>
+     *       <li>任务行 {@code submitType=7}（TRANSFER）作"当前槽位"——{@code approvalRecord} 取实例全部任务行
+     *           （不按状态过滤），故 B 办结前这条在审批历史里直接读作"转办"，B 办结后该槽位由 B 的办理动作
+     *           （1/2/20）覆盖，属预期。<b>不写任务 {@code actor_id}/{@code operator} 列</b>（契约条款 4 的 ⚠️，
+     *           Node 实测纠偏：进行中任务该列恒无值是家族不变量，写入被摘走的人会在撤回/终止后污染其"我已办"
+     *           列表），办理人由 {@code update_user} + {@code tf_transferHistory[].operator} 承载；</li>
+     *       <li>任务变量 {@code tf_transferHistory} 作<b>跨跳追加式账本</b>，每一跳 append 一条
+     *           {@code {submitType, fromActor, toActor, reason, time, operator}}，只追加不覆盖
+     *           （动机见下方行内注释）；单跳便捷键 {@code tf_transferTo} / {@code tf_transferReason}
+     *           一并写，前端可省一次遍历；</li>
+     *       <li>末跳可读文案写审批意见 {@code tf_approvalComment}（"A 转办给 B（原因…）"），
+     *           走前端既有读取位（issues/15：approvalRecord 的 variable/ext）；多跳时它只留末跳，
+     *           全量账本以 {@code tf_transferHistory} 为准。引擎不新增响应字段、不新造历史表。</li>
+     *     </ul></li>
+     *   <li><b>变量合并序</b>（本 action 留痕存活的前置条件）：办理提交走"实例变量 ← 任务既有变量 ←
+     *       本次提交参数"，见 {@code ProcessTask.finish} 的 {@code variables.putAll(args)}——
+     *       合并而非整体替换，故 {@code tf_transferHistory} 能活到办结后；</li>
+     *   <li><b>去重</b>：{@code toActor} 已是参与者 / {@code fromActor} 不在参与者里 → 明确报错；</li>
+     *   <li><b>前置态</b>：任务非进行中 → 明确报错。</li>
+     * </ol>
+     *
+     * <p>鉴权：只能转自己那一条待办（{@code operator == fromActor}），
+     * {@code flow.auto} / {@code flow.admin} 例外，与撤回同口径；operator 硬必填，msg 跨栈统一。</p>
+     */
+    private Map<String, Object> taskTransfer(Map<String, Object> args) {
+        Long taskId = toLong(args.get(FlowConst.PROCESS_TASK_ID_KEY));
+        String operator = toStr(args.get("operator"));
+        if (StringUtils.isBlank(operator)) return error("operator 必填");
+        String fromActor = toStr(args.get("fromActor"));
+        String toActor = toStr(args.get("toActor"));
+        if (StringUtils.isBlank(fromActor)) return error("fromActor 必填");
+        if (StringUtils.isBlank(toActor)) return error("toActor 必填");
+        ProcessTask task = taskId == null ? null : repository.findTaskById(taskId);
+        if (task == null) return error("任务不存在");
+        if (!isPrivilegedOperator(operator) && !operator.equals(fromActor)) return error("无权限转办该任务");
+        // 前置态：仅进行中（DOING=10）任务可转办
+        if (!task.isDoing()) return error("任务非进行中，不可转办");
+        // 以参与者表为判据（聚合副本可能滞后于加签/转办的增量写入）
+        List<String> actors = repository.findTaskActors(taskId);
+        if (!actors.contains(fromActor)) return error("原办理人不是该任务参与人");
+        if (actors.contains(toActor)) return error("目标人已是该任务参与人");
+        // 摘原人（仅 fromActor 一行）+ 加新人（同一 taskId，不新建任务）
+        repository.removeTaskActor(taskId, Collections.singletonList(fromActor));
+        repository.addTaskActor(taskId, Collections.singletonList(toActor));
+        // 留痕（契约第 4 条·三件）
+        String reason = toStr(args.get("reason"));
+        FlowData vars = task.getVariables() != null ? task.getVariables() : FlowData.create();
+        // 账本为何必须是追加式列表而非单跳键：本家族审批记录的槽位就是任务行本身，B 办结时
+        // submitType 会被 B 的办理参数覆盖；没有追加式账本，多跳转办只剩末跳、办结后转办事实整体消失。
+        List<Object> history = new ArrayList<>();
+        Object existing = vars.get(FlowConst.TRANSFER_HISTORY);
+        if (existing instanceof Collection) {
+            history.addAll((Collection<?>) existing);   // 只追加：既往各跳原样带过来，不重排不裁剪
+        }
+        Map<String, Object> hop = new LinkedHashMap<>();  // LinkedHashMap 锁定键序，与契约同序序列化
+        hop.put("submitType", ProcessSubmitTypeEnum.TRANSFER.getCode());
+        hop.put("fromActor", fromActor);
+        hop.put("toActor", toActor);
+        hop.put("reason", StringUtils.isNotBlank(reason) ? reason : "");
+        // 账本 time 一律 "yyyy-MM-dd HH:mm:ss"（契约条款 4 + spec §2.4 全生态时间格式，Go/Python/Node/PHP/Rust/C# 同形）：
+        // 不得用 LocalDateTime.toString() 的 ISO 方言（带 T 和小数秒），也不塞时刻对象（序列化方言差异）——账本要跨栈同形
+        hop.put("time", LocalDateTime.now().format(TIME_FMT));
+        hop.put("operator", operator);
+        history.add(hop);
+        vars.put(FlowConst.TRANSFER_HISTORY, history);
+        // 当前槽位（契约第 4 条①）+ 单跳便捷键（②的另一半）
+        vars.put(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.TRANSFER.getCode());
+        vars.put(FlowConst.TRANSFER_TO, toActor);
+        vars.put(FlowConst.TRANSFER_REASON, StringUtils.isNotBlank(reason) ? reason : "");
+        // 末跳可读文案（契约第 4 条③）：多跳时它只留末跳，全量以 tf_transferHistory 为准
+        String transferText = fromActor + " " + ProcessSubmitTypeEnum.TRANSFER.getMessage() + "给 " + toActor
+                + (StringUtils.isNotBlank(reason) ? "（" + reason + "）" : "");
+        vars.put(FlowConst.APPROVAL_COMMENT, transferText);
+        task.setVariables(vars);
+        // ⚠️ 严禁覆写任务 actor_id/operator 列（契约条款 4 的 ⚠️，Node 实测纠偏）：进行中任务该列恒无值是
+        // 本家族既有不变量，而 pageDoneTasks 按 state <> 10 AND operator = ? 过滤——把被摘走的原人写进这一列，
+        // 该单一旦撤回/终止（离开 DOING 但列值留着）会凭空出现在他从没办过的「我已办」列表里。
+        // "办理人记谁"改由 update_user（下行）+ tf_transferHistory[].operator 账本承载。
+        task.setUpdateUser(operator);
+        task.setUpdateTime(LocalDateTime.now());
+        // 仓储 updateTask 会以任务副本的 actorIds 全量覆写参与者行（内存/JDBC 同语义），
+        // 必须同步为摘/加之后的最新集合，否则留痕落库时把旧参与者原样写回
+        task.setActorIds(new ArrayList<>(repository.findTaskActors(taskId)));
+        repository.updateTask(task);
+        return ok();
     }
 
     private Map<String, Object> taskLatest(Map<String, Object> args) {

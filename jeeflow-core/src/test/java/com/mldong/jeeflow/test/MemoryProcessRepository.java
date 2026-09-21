@@ -178,12 +178,24 @@ public class MemoryProcessRepository implements IProcessRepository {
         for (String a : actors) {
             if (!existing.contains(a)) existing.add(a);
         }
+        syncTaskActorIds(taskId, existing);
     }
 
     @Override
     public void removeTaskActor(Long taskId, List<String> actors) {
         List<String> existing = taskActors.get(taskId);
-        if (existing != null) existing.removeAll(actors);
+        if (existing != null) {
+            existing.removeAll(actors);
+            syncTaskActorIds(taskId, existing);
+        }
+    }
+
+    /** issues/114/115：actor 表是权威源，任务聚合副本须同步——JDBC 仓每次加载都从
+     *  {@code wf_process_task_actor} 重读参与者，内存仓不同步就会出现"加签进来的人被
+     *  updateInstance 级联抹掉、撤回归属判据判不出新参与人"两栈不一致。 */
+    private void syncTaskActorIds(Long taskId, List<String> actors) {
+        ProcessTask task = tasks.get(taskId);
+        if (task != null) task.setActorIds(new ArrayList<>(actors));
     }
 
     @Override
@@ -202,10 +214,12 @@ public class MemoryProcessRepository implements IProcessRepository {
 
     @Override
     public PageResult<TaskRow> pageDoneTasks(PageQuery query) {
-        // 通用条件过滤（含 t.operator EQ，Facade doneList 依赖），仅已完成任务
+        // 通用条件过滤（含 t.operator EQ，Facade doneList 依赖）。已办判据与契约/JDBC 同形：
+        // state <> 10（不是只看 20）——撤回/终止行离开 DOING 即进入「我已办」扫描范围，
+        // 转办若污染 operator 列只有这条口径才测得出来（契约条款 4 的 ⚠️，Node 实测）。
         List<TaskRow> rows = new ArrayList<>();
         for (ProcessTask t : tasks.values()) {
-            if (!Integer.valueOf(20).equals(t.getTaskState())) continue;
+            if (Integer.valueOf(10).equals(t.getTaskState())) continue;
             TaskRow r = toTaskRow(t);
             if (matches(query.getConditions(), taskFields(r))) rows.add(r);
         }
@@ -317,7 +331,13 @@ public class MemoryProcessRepository implements IProcessRepository {
         for (PageQuery.Condition c : conditions) {
             Object v = fields.get(c.getColumn());
             Object expect = c.getValue();
-            if (v == null || expect == null) continue;
+            if (expect == null) continue;
+            if (v == null) {
+                // SQL 三值逻辑同形：列在行字段中但值为 NULL → 任何条件恒不命中（如已办的
+                // t.operator=NULL 不得通过 operator=? 过滤进列表）；列未被行字段建模才跳过。
+                if (fields.containsKey(c.getColumn())) return false;
+                continue;
+            }
             switch (c.getOperator().toUpperCase()) {
                 case "EQ":
                     if (!eq(v, expect)) return false;

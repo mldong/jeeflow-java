@@ -51,11 +51,20 @@ public class MetadataTest {
     public void testSubmitTypeDict() {
         EnumDictRegistry registry = new EnumDictRegistry();
         List<EnumDictRegistry.DictItem> items = registry.getDict("wf_process_submit_type");
-        assertEquals(8, items.size());
+        // issues/115：新增 7=转办（spec 07 字典表同代），枚举顺序即字典顺序 0/1/2/3/4/5/6/7/20
+        assertEquals(9, items.size());
         assertEquals("0", items.get(0).getValue());
         assertEquals("发起申请", items.get(0).getLabel());
-        assertEquals("20", items.get(7).getValue());
-        assertEquals("拒绝申请", items.get(7).getLabel());
+        assertEquals("6", items.get(6).getValue());
+        assertEquals("退回发起人", items.get(6).getLabel());
+        assertEquals("7", items.get(7).getValue());
+        assertEquals("转办", items.get(7).getLabel());
+        assertEquals("20", items.get(8).getValue());
+        // spec 07 定名：2 与 20 曾同为「拒绝申请」，同字典两项同名前端下拉无法区分
+        assertEquals("会签拒绝", items.get(8).getLabel());
+        assertEquals("拒绝申请", items.get(2).getLabel());
+        assertNotEquals("2 与 20 的 label 不得同名（否则字典项不可区分）",
+                items.get(2).getLabel(), items.get(8).getLabel());
     }
 
     @Test

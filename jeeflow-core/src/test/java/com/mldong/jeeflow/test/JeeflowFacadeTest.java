@@ -169,7 +169,7 @@ public class JeeflowFacadeTest {
         assertEquals(com.mldong.jeeflow.enums.ProcessInstanceStateEnum.FINISHED.getCode(),
                 repo.findInstanceById(inst.getInstanceId()).getState());
 
-        // withdraw：完成前撤回
+        // withdraw：完成前撤回（发起人自己撤，合规用例 24 判据①）
         ProcessInstance.ProcessDefine def2 = registerFlow("01-simple.json");
         r = call("processInstance/startAndExecute", args("processDefineId", def2.getId(), "operator", "zhangsan"));
         Long instanceId2 = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
@@ -177,9 +177,423 @@ public class JeeflowFacadeTest {
         assertOk(r);
         assertEquals(com.mldong.jeeflow.enums.ProcessInstanceStateEnum.WITHDRAW.getCode(),
                 repo.findInstanceById(instanceId2).getState());
-        // 级联：doing 任务全部废弃（v1.0.1）
+        // 断持久值而非"doing 列表为空"——30(撤回) 与 99(废弃) 都满足后者（issues/113 的根因）；
+        // 已完成(20) 的 apply 行不得被撤回改写
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findHistoryTasks(instanceId2)) {
+            assertEquals("apply".equals(t.getTaskName())
+                    ? "已完成(20) 任务行不得被撤回改写：apply"
+                    : "进行中任务须落 30(WITHDRAW)，不能是 99(废弃码)：" + t.getTaskName(),
+                    "apply".equals(t.getTaskName())
+                            ? com.mldong.jeeflow.enums.ProcessTaskStateEnum.FINISHED.getCode()
+                            : com.mldong.jeeflow.enums.ProcessTaskStateEnum.WITHDRAW.getCode(),
+                    t.getTaskState());
+        }
+        assertEquals("实例 update_user 回写真实撤回人", "zhangsan", repo.findInstanceById(instanceId2).getUpdateUser());
+        // 级联：doing 任务全部撤回（v1.0.1）
         List<com.mldong.jeeflow.domain.ProcessTask> after = rawRepo.findDoingTasks(instanceId2, null);
         assertEquals(0, after.size());
+    }
+
+    // ═══ 撤回鉴权（issues/114 · 合规用例 24）═══
+
+    /** 断言负向：code=99999999 且 msg 含跨栈统一关键字。 */
+    private void assertRejected(Map<String, Object> r, String msgKeyword) {
+        assertEquals("负向应报错（禁止静默成功）: " + r, Integer.valueOf(99999999), r.get("code"));
+        assertTrue("msg 应含「" + msgKeyword + "」: " + r, String.valueOf(r.get("msg")).contains(msgKeyword));
+    }
+
+    /** 某人的待办任务 id 集合（走门面真实查询路径，不直接翻仓储） */
+    private List<Object> todoIds(String operator) {
+        Map<String, Object> r = call("processTask/todoList", args("operator", operator));
+        assertOk(r);
+        List<Object> ids = new ArrayList<>();
+        for (Object o : (List<?>) ((Map<String, Object>) r.get("data")).get("rows")) {
+            ids.add(((Map<String, Object>) o).get("id"));
+        }
+        return ids;
+    }
+
+    /** 某人的已办任务 id 集合（走门面真实查询路径；pageDoneTasks 按 state<>10 AND operator=? 过滤） */
+    private List<Object> doneIds(String operator) {
+        Map<String, Object> r = call("processTask/doneList", args("operator", operator));
+        assertOk(r);
+        List<Object> ids = new ArrayList<>();
+        for (Object o : (List<?>) ((Map<String, Object>) r.get("data")).get("rows")) {
+            ids.add(((Map<String, Object>) o).get("id"));
+        }
+        return ids;
+    }
+
+    /**
+     * 合规用例 24（issues/114）：撤回鉴权矩阵 + 审计回写。
+     *
+     * <p>三条归属判据逐条验（发起人 / 任一进行中任务参与者 / flow.auto+flow.admin），
+     * operator 硬必填（缺失与空串都拒，且**绝不回落 user1**）；全部断言打在读回的持久值上：
+     * 实例 state+update_user、每条任务行 task_state+update_user，已完成(20) 行不得被改写。</p>
+     */
+    @Test
+    public void testWithdrawAuthorizationMatrixAndAuditFields() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("02-multi-task.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        Long task1Id = rawRepo.findDoingTasks(instanceId, new String[]{}).get(0).getTaskId();
+        assertEquals("task1", rawRepo.findTaskById(task1Id).getTaskName());
+
+        // 负向①：缺 operator → 明确报错；且实例/任务一行未动，撤回人也没被记成 user1
+        assertRejected(call("processInstance/withdraw", args("id", instanceId)), "operator 必填");
+        // 负向①b：空串 operator 同样拒绝（契约"缺失或空串"）
+        assertRejected(call("processInstance/withdraw", args("id", instanceId, "operator", "   ")), "operator 必填");
+        ProcessInstance untouched = repo.findInstanceById(instanceId);
+        assertEquals("缺 operator 的撤回不得改动实例状态",
+                com.mldong.jeeflow.enums.ProcessInstanceStateEnum.DOING.getCode(), untouched.getState());
+        assertNotEquals("严禁缺省回落为固定账号 user1（审计链失真）", "user1", untouched.getUpdateUser());
+        assertEquals("缺 operator 的撤回不得改动任务状态",
+                com.mldong.jeeflow.enums.ProcessTaskStateEnum.DOING.getCode(),
+                repo.findTaskById(task1Id).getTaskState());
+
+        // 负向②：无关第三人（既非发起人，也不在任何进行中任务的参与者里）
+        assertRejected(call("processInstance/withdraw",
+                args("id", instanceId, "operator", "nobody")), "无权限撤回该流程实例");
+        assertEquals("越权撤回不得改状态",
+                com.mldong.jeeflow.enums.ProcessInstanceStateEnum.DOING.getCode(),
+                repo.findInstanceById(instanceId).getState());
+        assertEquals(com.mldong.jeeflow.enums.ProcessTaskStateEnum.DOING.getCode(),
+                repo.findTaskById(task1Id).getTaskState());
+
+        // 正向：进行中任务的参与者（判据②）撤回 → 作用于整单 + update_user 回写真实撤回人
+        assertOk(call("processInstance/withdraw", args("id", instanceId, "operator", "leader")));
+        ProcessInstance after = repo.findInstanceById(instanceId);
+        assertEquals(com.mldong.jeeflow.enums.ProcessInstanceStateEnum.WITHDRAW.getCode(), after.getState());
+        assertEquals("实例 update_user 须回写真实撤回人（不是发起人、不是 user1）",
+                "leader", after.getUpdateUser());
+        int withdrawnRows = 0;
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findHistoryTasks(instanceId)) {
+            if ("apply".equals(t.getTaskName())) {
+                assertEquals("已完成(20) 任务行不得被撤回改写",
+                        com.mldong.jeeflow.enums.ProcessTaskStateEnum.FINISHED.getCode(), t.getTaskState());
+                assertEquals("已完成行的 update_user 保持办理人", "zhangsan", t.getUpdateUser());
+            } else {
+                assertEquals("进行中任务须落 30(WITHDRAW)，不能是 99(废弃码)",
+                        com.mldong.jeeflow.enums.ProcessTaskStateEnum.WITHDRAW.getCode(), t.getTaskState());
+                assertEquals("被撤任务的 update_user 同样回写撤回人", "leader", t.getUpdateUser());
+                withdrawnRows++;
+            }
+        }
+        assertEquals(1, withdrawnRows);
+    }
+
+    /** 合规用例 24 补全：撤回作用于整单（一个参与者撤掉全部会签任务）+ 发起人 / flow.admin / flow.auto 放行。 */
+    @Test
+    public void testWithdrawWholeInstanceAndPrivilegedOperators() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("05-countersign-parallel.json");
+
+        // 判据②（整单）：userA 只是三条会签任务里一条的参与者，撤回的是整单不是自己那条
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long inst1 = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        assertEquals("并行会签应有 3 条进行中任务", 3, rawRepo.findDoingTasks(inst1, new String[]{}).size());
+        assertOk(call("processInstance/withdraw", args("id", inst1, "operator", "userA")));
+        assertEquals(com.mldong.jeeflow.enums.ProcessInstanceStateEnum.WITHDRAW.getCode(),
+                repo.findInstanceById(inst1).getState());
+        assertEquals("整单撤回后不应残留进行中任务", 0, rawRepo.findDoingTasks(inst1, new String[]{}).size());
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findHistoryTasks(inst1)) {
+            assertEquals("apply".equals(t.getTaskName())
+                            ? com.mldong.jeeflow.enums.ProcessTaskStateEnum.FINISHED.getCode()
+                            : com.mldong.jeeflow.enums.ProcessTaskStateEnum.WITHDRAW.getCode(),
+                    t.getTaskState());
+        }
+
+        // 判据③：flow.admin / flow.auto 放行沿用 isAllowed 既有约定（回归），update_user 记真实操作人
+        for (String privileged : Arrays.asList(com.mldong.jeeflow.enums.FlowConst.ADMIN_ID,
+                com.mldong.jeeflow.enums.FlowConst.AUTO_ID)) {
+            r = call("processInstance/startAndExecute", args("processDefineId", def.getId(), "operator", "zhangsan"));
+            assertOk(r);
+            Long inst = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+            assertOk(call("processInstance/withdraw", args("id", inst, "operator", privileged)));
+            ProcessInstance done = repo.findInstanceById(inst);
+            assertEquals(privileged + " 应放行撤回",
+                    com.mldong.jeeflow.enums.ProcessInstanceStateEnum.WITHDRAW.getCode(), done.getState());
+            assertEquals(privileged, done.getUpdateUser());
+        }
+    }
+
+
+    // ═══ 转办（issues/115 · 合规用例 25）═══
+
+    /**
+     * 合规用例 25（issues/115）：转办六条语义 + 四类明确报错 + 加签回归。
+     *
+     * <p>断言全部打在"读回值"上：参与者表、任务行变量（submitType=7 / tf_transferTo /
+     * tf_transferReason / 文案）、update_user（actor_id/operator 列须保持无值——契约条款 4 的 ⚠️），
+     * 以及 approvalRecord 出口。</p>
+     */
+    @Test
+    public void testTaskTransferMovesTodoAndWritesTrace() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        Long taskId = rawRepo.findDoingTasks(instanceId, new String[]{}).get(0).getTaskId();
+        assertTrue("转办前 leader 有该待办", todoIds("leader").contains(taskId));
+
+        // 负向①：operator 必填
+        assertRejected(call("processTask/transfer",
+                args("processTaskId", taskId, "fromActor", "leader", "toActor", "lisi")), "operator 必填");
+        // 负向②：第三人转别人的待办（只能转自己那条，非 auto/admin）
+        assertRejected(call("processTask/transfer", args("processTaskId", taskId,
+                "operator", "nobody", "fromActor", "leader", "toActor", "lisi")), "无权限转办该任务");
+        assertEquals("越权转办后参与者一行未动", Arrays.asList("leader"), rawRepo.findTaskActors(taskId));
+        // 负向③：fromActor 不在参与者里
+        assertRejected(call("processTask/transfer", args("processTaskId", taskId,
+                "operator", "wangwu", "fromActor", "wangwu", "toActor", "lisi")), "原办理人不是该任务参与人");
+        // 回归：加签（surrogate/addCandidate）仍是"只追加"，原人保留可办——它不是转办
+        assertOk(call("processTask/surrogate",
+                args("processTaskId", taskId, "actorIds", Arrays.asList("lisi"))));
+        assertTrue("加签后原办理人保留", rawRepo.findTaskActors(taskId).contains("leader"));
+        // 负向④：toActor 已是参与者 → 明确报错，不静默成功
+        assertRejected(call("processTask/transfer", args("processTaskId", taskId,
+                "operator", "leader", "fromActor", "leader", "toActor", "lisi")), "目标人已是该任务参与人");
+
+        // 正向：leader 把自己那条转给 xiaohe（带原因）
+        assertOk(call("processTask/transfer", args("processTaskId", taskId,
+                "operator", "leader", "fromActor", "leader", "toActor", "xiaohe", "reason", "临时出差")));
+        assertFalse("转办后 A 待办消失", todoIds("leader").contains(taskId));
+        assertTrue("转办后 B 待办出现", todoIds("xiaohe").contains(taskId));
+        List<String> actors = rawRepo.findTaskActors(taskId);
+        assertFalse("原办理人被摘走", actors.contains("leader"));
+        assertTrue("目标人加入", actors.contains("xiaohe"));
+        assertTrue("同任务其他参与人（加签进来的 lisi）不受影响", actors.contains("lisi"));
+
+        // 留痕：任务变量读回（同一 taskId，任务不新建、状态仍进行中）
+        com.mldong.jeeflow.domain.ProcessTask transferred = rawRepo.findTaskById(taskId);
+        assertEquals(com.mldong.jeeflow.enums.ProcessTaskStateEnum.DOING.getCode(), transferred.getTaskState());
+        assertEquals("转办留痕 submitType 须为 7(TRANSFER)",
+                Integer.valueOf(7), transferred.getVariables().getInt(com.mldong.jeeflow.enums.FlowConst.SUBMIT_TYPE));
+        assertEquals("xiaohe", transferred.getVariables().getStr(com.mldong.jeeflow.enums.FlowConst.TRANSFER_TO));
+        assertEquals("临时出差", transferred.getVariables().getStr(com.mldong.jeeflow.enums.FlowConst.TRANSFER_REASON));
+        assertEquals("leader 转办给 xiaohe（临时出差）",
+                transferred.getVariables().getStr(com.mldong.jeeflow.enums.FlowConst.APPROVAL_COMMENT));
+        assertNull("转办不得覆写任务 actor_id/operator 列（契约条款 4 的 ⚠️：进行中任务该列恒无值是家族不变量，"
+                + "写入被摘走的人会让撤回/终止后的单凭空出现在其「我已办」里）", transferred.getActorId());
+        assertEquals("办理人由 update_user 承载（转办操作人）", "leader", transferred.getUpdateUser());
+        // 单跳：账本一条，形状与两跳用例同一把尺子
+        @SuppressWarnings("unchecked")
+        List<Object> singleLedger = (List<Object>) transferred.getVariables()
+                .get(com.mldong.jeeflow.enums.FlowConst.TRANSFER_HISTORY);
+        assertNotNull("tf_transferHistory 应为列表", singleLedger);
+        assertEquals("单跳账本应只有一条: " + singleLedger, 1, singleLedger.size());
+        assertEquals("leader→xiaohe 首跳字段",
+                Arrays.asList("submitType", "fromActor", "toActor", "reason", "time", "operator"),
+                new ArrayList<>(((Map<String, Object>) singleLedger.get(0)).keySet()));
+        assertTransferHop((Map<String, Object>) singleLedger.get(0), 1, "leader", "xiaohe", "临时出差", "leader");
+
+        // approvalRecord 出口：同一行里既要能读到 submitType=7，也要能读出"A 转办给 B（原因）"
+        r = call("processInstance/approvalRecord", args("id", instanceId));
+        assertOk(r);
+        Map<String, Object> record = null;
+        for (Object o : (List<?>) r.get("data")) {
+            Map<String, Object> row = (Map<String, Object>) o;
+            if ("task1".equals(row.get("taskName"))) record = row;
+        }
+        assertNotNull("审批记录应含 task1 行", record);
+        Map<String, Object> recordVar = (Map<String, Object>) record.get("variable");
+        assertEquals("7", String.valueOf(recordVar.get(com.mldong.jeeflow.enums.FlowConst.SUBMIT_TYPE)));
+        assertEquals("xiaohe", recordVar.get(com.mldong.jeeflow.enums.FlowConst.TRANSFER_TO));
+        assertEquals("临时出差", recordVar.get(com.mldong.jeeflow.enums.FlowConst.TRANSFER_REASON));
+        assertTrue("审批记录文案须读得出「A 转办给 B（原因）」: " + recordVar,
+                String.valueOf(recordVar.get(com.mldong.jeeflow.enums.FlowConst.APPROVAL_COMMENT))
+                        .contains("leader 转办给 xiaohe（临时出差）"));
+        assertNull("approvalRecord 的 operator 读自任务 actor_id——转办不覆写该列（契约条款 4 的 ⚠️），"
+                + "办结前应为空；转办事实由上方 submitType=7/账本/文案承载", record.get("operator"));
+
+        // 负向⑤：任务非进行中不可转办（B 办完再转）
+        assertOk(call("processTask/execute",
+                args("processTaskId", taskId, "operator", "xiaohe", "submitType", 1)));
+        assertRejected(call("processTask/transfer", args("processTaskId", taskId,
+                "operator", "xiaohe", "fromActor", "xiaohe", "toActor", "leader")), "任务非进行中，不可转办");
+    }
+
+    /** 合规用例 25 补全：会签节点转的是"自己那一票"——只摘 fromActor 一行，其余成员不受影响。 */
+    @Test
+    public void testTaskTransferOnCountersignOnlyMovesOwnVote() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("05-countersign-parallel.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, new String[]{});
+        assertEquals(3, doing.size());
+        Long taskA = null;
+        List<Long> otherTasks = new ArrayList<>();
+        for (com.mldong.jeeflow.domain.ProcessTask t : doing) {
+            if (rawRepo.findTaskActors(t.getTaskId()).contains("userA")) taskA = t.getTaskId();
+            else otherTasks.add(t.getTaskId());
+        }
+        assertNotNull(taskA);
+        assertEquals(2, otherTasks.size());
+
+        // flow.admin 代转（契约例外支：管理员/系统可代转，鉴权仍要求 operator 必填）
+        assertOk(call("processTask/transfer", args("processTaskId", taskA,
+                "operator", com.mldong.jeeflow.enums.FlowConst.ADMIN_ID, "fromActor", "userA", "toActor", "userD")));
+
+        assertEquals("会签转办只摘 userA 一行", Arrays.asList("userD"), rawRepo.findTaskActors(taskA));
+        List<String> othersActors = new ArrayList<>();
+        for (Long other : otherTasks) othersActors.addAll(rawRepo.findTaskActors(other));
+        java.util.Collections.sort(othersActors);
+        assertEquals("其余成员不受影响（userB/userC 各自那票原样保留）",
+                Arrays.asList("userB", "userC"), othersActors);
+        assertEquals("任务不新建：仍是 3 条进行中会签任务", 3, rawRepo.findDoingTasks(instanceId, new String[]{}).size());
+        assertFalse(todoIds("userA").contains(taskA));
+        assertTrue(todoIds("userD").contains(taskA));
+        // 变量落库形态（内存仓）：submitType=7 与 tf_transferTo 读回
+        com.mldong.jeeflow.domain.ProcessTask t = rawRepo.findTaskById(taskA);
+        assertEquals(Integer.valueOf(7), t.getVariables().getInt(com.mldong.jeeflow.enums.FlowConst.SUBMIT_TYPE));
+        assertEquals("userD", t.getVariables().getStr(com.mldong.jeeflow.enums.FlowConst.TRANSFER_TO));
+        assertEquals("无原因时文案不带括号", "userA 转办给 userD",
+                t.getVariables().getStr(com.mldong.jeeflow.enums.FlowConst.APPROVAL_COMMENT));
+    }
+
+    /**
+     * 合规用例 25 · 追加式账本 {@code tf_transferHistory}（契约 fc0883a 留痕三件之第三件）。
+     *
+     * <p>缺陷机理：本家族审批记录的槽位就是任务行本身，转办发生在任务办结前，B 办结时
+     * {@code submitType} 被 B 自己的办理参数覆盖——只有单跳槽位键的话，多跳转办只剩末跳、
+     * 办结后转办事实整体消失。故账本必须"每跳 append、只追加不覆盖"，且能活过办结。</p>
+     *
+     * <p>断言打在形状上：条数、 append 顺序、逐字段值、键名键序（供另外七栈对齐），
+     * 而不是只断"读得到"。</p>
+     */
+    @Test
+    public void testTaskTransferHistoryAppendsEachHopAndSurvivesFinish() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        Long taskId = rawRepo.findDoingTasks(instanceId, new String[]{}).get(0).getTaskId();
+
+        // 跳 1：A(leader) → B(xiaohe)，跳 2：B(xiaohe) → C(lisi)
+        assertOk(call("processTask/transfer", args("processTaskId", taskId,
+                "operator", "leader", "fromActor", "leader", "toActor", "xiaohe", "reason", "临时出差")));
+        assertOk(call("processTask/transfer", args("processTaskId", taskId,
+                "operator", "xiaohe", "fromActor", "xiaohe", "toActor", "lisi", "reason", "由其代批")));
+
+        // 两跳后：账本两条、append 顺序、逐字段；当前槽位仍是 7（C 未办结）
+        com.mldong.jeeflow.domain.FlowData vars = rawRepo.findTaskById(taskId).getVariables();
+        assertEquals("C 办结前当前槽位 submitType 读作转办", Integer.valueOf(7),
+                vars.getInt(com.mldong.jeeflow.enums.FlowConst.SUBMIT_TYPE));
+        List<Map<String, Object>> history = assertTransferLedger(vars, "两跳后");
+        assertTransferHop(history.get(0), 1, "leader", "xiaohe", "临时出差", "leader");
+        assertTransferHop(history.get(1), 2, "xiaohe", "lisi", "由其代批", "xiaohe");
+        // 单跳便捷键与末跳文案只留末跳（全量以账本为准）
+        assertEquals("lisi", vars.getStr(com.mldong.jeeflow.enums.FlowConst.TRANSFER_TO));
+        assertEquals("xiaohe 转办给 lisi（由其代批）",
+                vars.getStr(com.mldong.jeeflow.enums.FlowConst.APPROVAL_COMMENT));
+
+        // C 办结（execute submitType=1）：变量走"合并"语义，账本须存活
+        assertOk(call("processTask/execute",
+                args("processTaskId", taskId, "operator", "lisi", "submitType", 1)));
+
+        com.mldong.jeeflow.domain.FlowData after = rawRepo.findTaskById(taskId).getVariables();
+        assertEquals("办结后当前槽位由 B/C 的办理参数覆盖为 1（契约明确的预期行为）",
+                Integer.valueOf(1), after.getInt(com.mldong.jeeflow.enums.FlowConst.SUBMIT_TYPE));
+        List<Map<String, Object>> afterHistory = assertTransferLedger(after, "C 办结后");
+        assertTransferHop(afterHistory.get(0), 1, "leader", "xiaohe", "临时出差", "leader");
+        assertTransferHop(afterHistory.get(1), 2, "xiaohe", "lisi", "由其代批", "xiaohe");
+
+        // approvalRecord 出口（前端读取位）：variable 与 ext 两条路径都要读得出全量账本
+        r = call("processInstance/approvalRecord", args("id", instanceId));
+        assertOk(r);
+        Map<String, Object> record = null;
+        for (Object o : (List<?>) r.get("data")) {
+            Map<String, Object> row = (Map<String, Object>) o;
+            if ("task1".equals(row.get("taskName"))) record = row;
+        }
+        assertNotNull("审批记录应含 task1 行", record);
+        assertTransferLedger((Map<String, Object>) record.get("variable"), "approvalRecord.variable 出口");
+        assertTransferLedger((Map<String, Object>) record.get("ext"), "approvalRecord.ext 出口");
+    }
+
+    /**
+     * 契约条款 4 的 ⚠️（jeeflow-doc 778340a，Node 实测纠偏）内存仓路径：转办严禁覆写任务
+     * {@code actor_id}/{@code operator} 列。
+     *
+     * <p>进行中任务该列恒无值是家族不变量；{@code pageDoneTasks} 按 {@code state <> 10 AND operator = ?}
+     * 过滤（内存仓已对齐该口径，见 MemoryProcessRepository）——转办时把被摘走的人写进这一列，该单一旦
+     * 撤回/终止（离开 DOING 但列值留着），会凭空出现在他从没办过的「我已办」里（Node 实测：转办→撤回后
+     * A 的 doneList 冒出 task#30，未转办对照为空）。办理人由 update_user + tf_transferHistory[].operator 承载。</p>
+     */
+    @Test
+    public void testTaskTransferKeepsActorIdUnsetAndWithdrawOutOfDoneList() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        Long taskId = rawRepo.findDoingTasks(instanceId, new String[]{}).get(0).getTaskId();
+
+        assertOk(call("processTask/transfer", args("processTaskId", taskId,
+                "operator", "leader", "fromActor", "leader", "toActor", "xiaohe")));
+
+        // ① 转办后（任务仍进行中）actor_id/operator 仍无值；办理人记在 update_user
+        com.mldong.jeeflow.domain.ProcessTask transferred = rawRepo.findTaskById(taskId);
+        assertNull("转办后任务 actor_id 应仍无值（契约条款 4 的 ⚠️）", transferred.getActorId());
+        assertEquals("leader", transferred.getUpdateUser());
+
+        // 发起人撤回整单：task1 落 30(WITHDRAW) 离开 DOING——若转办曾污染 operator 列，污染窗口就此打开
+        assertOk(call("processInstance/withdraw", args("id", instanceId, "operator", "zhangsan")));
+        assertEquals(com.mldong.jeeflow.enums.ProcessTaskStateEnum.WITHDRAW.getCode(),
+                rawRepo.findTaskById(taskId).getTaskState());
+
+        // ② 被摘走的 fromActor 从没办过这单，「我已办」不得凭空出现（回归位）；接手人 B 未办结同样不进
+        assertFalse("转办→撤回后 fromActor 的 doneList 不得含该单: " + doneIds("leader"),
+                doneIds("leader").contains(taskId));
+        assertFalse("转办→撤回后接手人（未办结）的 doneList 也不得含该单: " + doneIds("xiaohe"),
+                doneIds("xiaohe").contains(taskId));
+        // 正向对照：apply 行由 zhangsan 实际办结（startAndExecute 自动完成），证明 doneList 查询非恒空
+        assertFalse("对照：zhangsan 实际办结的 apply 行应在其已办列表", doneIds("zhangsan").isEmpty());
+    }
+
+    /** 断言 {@code tf_transferHistory} 的形状与条数；返回账本供逐字段断言。 */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> assertTransferLedger(Map<String, Object> vars, String when) {
+        Object raw = vars.get(com.mldong.jeeflow.enums.FlowConst.TRANSFER_HISTORY);
+        assertTrue(when + "：tf_transferHistory 应为列表，实际: " + raw, raw instanceof List);
+        List<Object> list = (List<Object>) raw;
+        assertEquals(when + "：账本应为两条（每跳 append，不覆盖不裁剪）", 2, list.size());
+        List<Map<String, Object>> hops = new ArrayList<>();
+        for (Object o : list) {
+            assertTrue(when + "：账本每条应为 map，实际: " + o, o instanceof Map);
+            Map<String, Object> hop = (Map<String, Object>) o;
+            // 键名 + 键序锁死（六栈/七栈按此形态对齐，多一少一都算漂移）
+            assertEquals(when + "：账本键序须与契约一致: " + hop,
+                    Arrays.asList("submitType", "fromActor", "toActor", "reason", "time", "operator"),
+                    new ArrayList<>(hop.keySet()));
+            hops.add(hop);
+        }
+        return hops;
+    }
+
+    /** 逐字段断一条账本记录（含 append 位置）。 */
+    private void assertTransferHop(Map<String, Object> hop, int position,
+                                   String from, String to, String reason, String operator) {
+        String at = "第 " + position + " 跳 " + from + "→" + to + ": " + hop;
+        assertEquals(at + " 的 submitType", 7, ((Number) hop.get("submitType")).intValue());
+        assertEquals(at + " 的 fromActor", from, hop.get("fromActor"));
+        assertEquals(at + " 的 toActor", to, hop.get("toActor"));
+        assertEquals(at + " 的 reason", reason, hop.get("reason"));
+        assertEquals(at + " 的 operator", operator, hop.get("operator"));
+        Object time = hop.get("time");
+        // 跨栈同形锁：Go/Python/Node/PHP/Rust/C# 一律 yyyy-MM-dd HH:mm:ss（spec §2.4），
+        // 不得是 Java LocalDateTime.toString() 的 ISO 方言（带 T/小数秒）
+        assertTrue(at + " 的 time 应为 yyyy-MM-dd HH:mm:ss 串（跨栈同形），实际: " + time,
+                time instanceof String && ((String) time).matches("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$"));
+        assertNotNull(at + " 的 time 应按该格式可解析", java.time.LocalDateTime.parse((String) time,
+                java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
     }
 
     // ═══ 流程设计 + 委托（扩展仓储） ═══

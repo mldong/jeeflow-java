@@ -176,11 +176,12 @@ public class ProcessInstance {
         this.updateUser = operator;
     }
 
-    /** 撤回 */
+    /** 撤回（issues/114）：作用于整单——全部**进行中**任务置 WITHDRAW(30)，
+     *  已完成(20)/已终止(40) 任务行不改写；实例与被撤任务的 `update_user` 均回写撤回人 */
     public void withdraw(String operator) {
         for (ProcessTask task : tasks) {
             if (task.isDoing()) {
-                task.withdraw();
+                task.withdraw(operator);
             }
         }
         this.state = ProcessInstanceStateEnum.WITHDRAW.getCode();
