@@ -1560,7 +1560,11 @@ public class JeeflowFacade {
         m.put("instanceCreateTime", fmtTime(r.getInstanceCreateTime()));
         Map<String, Object> instanceExt = parseJsonMap(r.getInstanceVariable());
         Map<String, Object> ext = parseJsonMap(r.getVariable());
-        if (ext.isEmpty()) ext = instanceExt;
+        // issues/121 P1：引擎建单必写的控制键不算「任务变量非空」，否则新建任务的 ext
+        // 永远不再回退实例变量（issues/82-3 既有契约）。
+        if (ext.isEmpty() || (ext.size() == 1 && ext.containsKey(FlowConst.IS_FIRST_TASK_NODE))) {
+            ext = instanceExt;
+        }
         m.put("ext", ext);
         m.put("instanceExt", instanceExt);
         m.put("version", r.getProcessDefineVersion());
