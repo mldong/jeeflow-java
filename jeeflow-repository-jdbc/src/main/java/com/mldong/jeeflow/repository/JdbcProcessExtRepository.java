@@ -271,30 +271,31 @@ public class JdbcProcessExtRepository implements IProcessExtRepository {
 
     @Override
     public ProcessSurrogate getSurrogate(String operator, String processName, LocalDateTime time) {
-        // 1. 精确匹配流程
-        ProcessSurrogate hit = querySurrogate(operator, processName, time);
-        if (hit != null) return hit;
-        // 2. 全流程委托兜底（process_name 为空）
-        return querySurrogate(operator, "", time);
+        if (operator == null) return null;
+        // 规范 06 §4.5 条款 1.4：多条同时命中时按主键 id 取**最新一条**，再交 ProcessSurrogate#isEffective
+        // 裁决。反过来写（SQL 先把 enabled/窗口/自委托滤掉，剩下的才排序）等价于
+        // "历史上出现过一条窗内委托就永久生效"——用户随后改停用、改到未来都不算数，
+        // 这就是 issues/123 里 13 栈"窗外 / enabled=0 / 脏值一律并入"的成因。
+        // 两个作用域各取自己最新的一条、各自裁决：精确作用域那条判否时仍要看全流程作用域的最新一条
+        // （JdbcProcessExtRepositoryTest#testSurrogateCrudAndGet 钉的正是"精确已过期 → 兜底全流程委托"）。
+        ProcessSurrogate exact = queryNewestSurrogate(operator, processName);
+        if (exact != null && exact.isEffective(operator, time)) return exact;
+        ProcessSurrogate global = queryNewestSurrogate(operator, "");
+        return global != null && global.isEffective(operator, time) ? global : null;
     }
 
-    private ProcessSurrogate querySurrogate(String operator, String processName, LocalDateTime time) {
+    /** 取该授权人在指定流程作用域内**最新的一条**委托；只排序取首行，不带任何生效判据过滤。 */
+    private ProcessSurrogate queryNewestSurrogate(String operator, String processName) {
         StringBuilder sql = new StringBuilder("SELECT id, process_name, operator, surrogate, start_time, end_time, enabled, " +
                 "create_time, create_user, update_time, update_user FROM wf_process_surrogate " +
-                "WHERE operator = ? AND enabled = 1 AND surrogate <> ?");
+                "WHERE operator = ?");
         List<Object> params = new ArrayList<>();
-        params.add(operator);
         params.add(operator);
         if (processName == null || processName.isEmpty()) {
             sql.append(" AND (process_name IS NULL OR process_name = '')");
         } else {
             sql.append(" AND process_name = ?");
             params.add(processName);
-        }
-        if (time != null) {
-            sql.append(" AND (start_time IS NULL OR start_time <= ?) AND (end_time IS NULL OR end_time >= ?)");
-            params.add(Timestamp.valueOf(time));
-            params.add(Timestamp.valueOf(time));
         }
         sql.append(" ORDER BY id DESC LIMIT 1");
         List<ProcessSurrogate> list = queryList(sql.toString(), params, rs -> mapSurrogate(rs));

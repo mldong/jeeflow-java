@@ -261,6 +261,52 @@ public class SurrogateAutoApplyTest {
                 repo.findTaskActors(firstDoingTask(inst.getInstanceId()).getTaskId()));
     }
 
+    // ═══ issues/123 · 规范 06 §4.5 条款 1.4：多条并存时由「最新一条」裁决 ═══
+    // 缺这几条，把实现改回"先滤生效、再从剩下的取最新"也不会红——而那个写法正是
+    // 13 栈在 L2-17/L2-18 上恒并入的根因（上一条窗内委托会把用户后续设置永久盖掉）。
+
+    /** 先配窗内有效、再配一条更"新"的无效记录 ⇒ 不得并入（四种无效形状各一格）。 */
+    private void assertNewestInvalidBeatsOlderValid(String op, LocalDateTime s, LocalDateTime e,
+                                                   String agent, int enabled, String why) throws Exception {
+        boot(true, true);
+        LocalDateTime now = LocalDateTime.now();
+        ledger(op, AGENT, FLOW, now.minusDays(1), now.plusDays(1), 1);   // 旧：窗内 + enabled=1
+        ledger(op, agent, FLOW, s, e, enabled);                          // 新：由它裁决
+        ProcessInstance inst = engine.startProcessInstanceById(registerSimpleFlow().getId(),
+                op, FlowData.create());
+        assertEquals(why + " ⇒ 最新一条不生效时不得并入，更不得复活旧的那条",
+                java.util.Collections.singletonList(op),
+                repo.findTaskActors(firstDoingTask(inst.getInstanceId()).getTaskId()));
+    }
+
+    @Test
+    public void newestOutOfWindowBeatsOlderEffectiveOne() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        assertNewestInvalidBeatsOlderValid("op-new-out", now.plusDays(1), now.plusDays(2),
+                AGENT, 1, "最新一条窗外");
+    }
+
+    @Test
+    public void newestDisabledBeatsOlderEffectiveOne() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        assertNewestInvalidBeatsOlderValid("op-new-off", now.minusDays(1), now.plusDays(1),
+                AGENT, 0, "最新一条 enabled=0");
+    }
+
+    @Test
+    public void newestDirtyEnabledBeatsOlderEffectiveOne() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        assertNewestInvalidBeatsOlderValid("op-new-dirty", now.minusDays(1), now.plusDays(1),
+                AGENT, 2, "最新一条 enabled 脏值 2（契约：只认 1）");
+    }
+
+    @Test
+    public void newestSelfDelegationBeatsOlderEffectiveOne() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        assertNewestInvalidBeatsOlderValid("op-new-self", now.minusDays(1), now.plusDays(1),
+                "op-new-self", 1, "最新一条是自己委托给自己");
+    }
+
     @Test
     public void selfDelegationNotApplied() throws Exception {
         boot(true, true);

@@ -129,29 +129,27 @@ public class MemoryProcessExtRepository implements IProcessExtRepository {
 
     @Override
     public ProcessSurrogate getSurrogate(String operator, String processName, LocalDateTime time) {
-        // 四条生效判据与 SQL 仓 JdbcProcessExtRepository#querySurrogate 逐条对齐（规范 05 §getSurrogate）：
-        // enabled 只认 1（脏值/ null 均不生效）/ 时间窗 NULL=该侧不限 / 自委托过滤 surrogate<>operator /
-        // 多条命中取 id 最大（SQL 侧 ORDER BY id DESC LIMIT 1）——08-compliance 用例 27 要求双仓同答案。
+        // 与 SQL 仓 JdbcProcessExtRepository#getSurrogate 同形（规范 06 §4.5 条款 1.4）：
+        // 先在指定流程作用域内按 id 取**最新一条**，交 ProcessSurrogate#isEffective 裁决；
+        // 该作用域没有记录才看"全流程"作用域（各自取自己作用域里最新的一条）。
+        // 不得"先滤生效再取最新"——那等于上一条窗内委托把用户后续改停用/改到未来的设置永久盖掉（issues/123）。
         if (operator == null) return null;
-        List<ProcessSurrogate> candidates = surrogates.values().stream()
+        ProcessSurrogate exact = newestInScope(operator, processName, false);
+        if (exact != null && exact.isEffective(operator, time)) return exact;
+        ProcessSurrogate global = newestInScope(operator, processName, true);
+        return global != null && global.isEffective(operator, time) ? global : null;
+    }
+
+    /** scopeGlobal=false ⇒ processName 精确匹配；true ⇒ 全流程委托（processName 为空）。取 id 最大的一条。 */
+    private ProcessSurrogate newestInScope(String operator, String processName, boolean scopeGlobal) {
+        Comparator<ProcessSurrogate> newestFirst = Comparator.comparingLong(
+                (ProcessSurrogate s) -> s.getId() == null ? 0L : s.getId()).reversed();
+        return surrogates.values().stream()
                 .filter(s -> operator.equals(s.getOperator()))
-                .filter(s -> Integer.valueOf(1).equals(s.getEnabled()))
-                .filter(s -> !operator.equals(s.getSurrogate()))
-                // surrogate 为 NULL 的行不参与命中（SQL 侧 `surrogate <> ?` 对 NULL 求值为 UNKNOWN，同效）
-                .filter(s -> s.getSurrogate() != null)
-                .filter(s -> time == null || (s.getStartTime() == null || !s.getStartTime().isAfter(time))
-                        && (s.getEndTime() == null || !s.getEndTime().isBefore(time)))
-                .sorted(Comparator.comparingLong(
-                        (ProcessSurrogate s) -> s.getId() == null ? 0L : s.getId()).reversed())
-                .collect(Collectors.toList());
-        // 精确匹配流程优先
-        for (ProcessSurrogate s : candidates) {
-            if (processName != null && processName.equals(s.getProcessName())) return s;
-        }
-        // 全流程委托兜底（processName 为空 = 全部流程）
-        for (ProcessSurrogate s : candidates) {
-            if (s.getProcessName() == null || s.getProcessName().isEmpty()) return s;
-        }
-        return null;
+                .filter(s -> scopeGlobal
+                        ? (s.getProcessName() == null || s.getProcessName().isEmpty())
+                        : (processName != null && processName.equals(s.getProcessName())))
+                .min(newestFirst)
+                .orElse(null);
     }
 }
