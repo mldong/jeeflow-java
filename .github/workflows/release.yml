@@ -60,4 +60,8 @@ jobs:
           done
           echo "❌ 3 次尝试均失败"
           exit 1
+      # 发布成功 ≠ 用户拉得到：Sonatype → repo1.maven.org 传播有 ~15min 延迟，
+      # 没这一步时 CI 绿只代表 `mvn deploy` 退 0（历史上出过假绿）。轮询各模块 .pom 到 200 才算发出去。
+      - name: Verify artifacts visible on repo1.maven.org
+        run: bash scripts/verify-maven-central.sh "$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout)"
 
