@@ -285,7 +285,9 @@ public class JeeflowFacade {
         data.put("parentNodeName", inst.getParentNodeName());
         data.put("businessNo", inst.getBusinessNo());
         data.put("operator", inst.getOperator());
-        data.put("variables", inst.getVariables());
+        // issues/124：变量唯一对外出口是 ext（实例侧；任务行另有 instanceExt），variables 全集不进契约
+        data.put("ext", inst.getVariables() != null
+                ? new LinkedHashMap<>(inst.getVariables()) : new LinkedHashMap<>());
         data.put("formData", formDataOf(inst.getVariables(), FlowConst.FORM_DATA_PREFIX)); // issues/15
         data.put("createTime", String.valueOf(inst.getCreateTime()));
         data.put("createUser", inst.getCreateUser());
@@ -652,7 +654,6 @@ public class JeeflowFacade {
             vo.put("taskState", t.getTaskState());
             vo.put("operator", t.getActorId());
             vo.put("finishTime", fmtTime(t.getFinishTime()));
-            vo.put("variable", t.getVariables());
             vo.put("ext", t.getVariables() != null ? t.getVariables() : new LinkedHashMap<>()); // issues/15
             rows.add(vo);
         }
@@ -1520,7 +1521,6 @@ public class JeeflowFacade {
         m.put("businessNo", r.getBusinessNo());
         m.put("operator", r.getOperator());
         m.put("expireTime", fmtTime(r.getExpireTime()));
-        m.put("variable", r.getVariable());
         m.put("createTime", fmtTime(r.getCreateTime()));
         m.put("createUser", r.getCreateUser());
         m.put("updateTime", fmtTime(r.getUpdateTime()));
@@ -1549,14 +1549,12 @@ public class JeeflowFacade {
         m.put("expireTime", fmtTime(r.getExpireTime()));
         m.put("formKey", r.getFormKey());
         m.put("taskParentId", r.getTaskParentId());
-        m.put("variable", r.getVariable());
         m.put("createTime", fmtTime(r.getCreateTime()));
         m.put("createUser", r.getCreateUser());
         m.put("updateTime", fmtTime(r.getUpdateTime()));
         m.put("updateUser", r.getUpdateUser());
         m.put("processDefineName", r.getProcessDefineName());
         m.put("processDefineDisplayName", r.getProcessDefineDisplayName());
-        m.put("instanceVariable", r.getInstanceVariable());
         m.put("instanceCreateTime", fmtTime(r.getInstanceCreateTime()));
         Map<String, Object> instanceExt = parseJsonMap(r.getInstanceVariable());
         Map<String, Object> ext = parseJsonMap(r.getVariable());

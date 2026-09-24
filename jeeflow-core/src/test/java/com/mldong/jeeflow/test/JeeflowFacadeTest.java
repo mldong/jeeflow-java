@@ -404,7 +404,7 @@ public class JeeflowFacadeTest {
             if ("task1".equals(row.get("taskName"))) record = row;
         }
         assertNotNull("审批记录应含 task1 行", record);
-        Map<String, Object> recordVar = (Map<String, Object>) record.get("variable");
+        Map<String, Object> recordVar = (Map<String, Object>) record.get("ext"); // issues/124：variable 原串出口已下线，读 ext
         assertEquals("7", String.valueOf(recordVar.get(com.mldong.jeeflow.enums.FlowConst.SUBMIT_TYPE)));
         assertEquals("xiaohe", recordVar.get(com.mldong.jeeflow.enums.FlowConst.TRANSFER_TO));
         assertEquals("临时出差", recordVar.get(com.mldong.jeeflow.enums.FlowConst.TRANSFER_REASON));
@@ -518,7 +518,6 @@ public class JeeflowFacadeTest {
             if ("task1".equals(row.get("taskName"))) record = row;
         }
         assertNotNull("审批记录应含 task1 行", record);
-        assertTransferLedger((Map<String, Object>) record.get("variable"), "approvalRecord.variable 出口");
         assertTransferLedger((Map<String, Object>) record.get("ext"), "approvalRecord.ext 出口");
     }
 
@@ -1962,6 +1961,59 @@ public class JeeflowFacadeTest {
             if (((Map<String, Object>) o).get("ext") != null) hasExt = true;
         }
         assertTrue("审批记录行应含 ext（issues/15）: " + r, hasExt);
+    }
+
+    // ═══ issues/124：变量唯一对外出口是 ext（实例侧）/ instanceExt（任务侧），variables 全集与 variable 原串不进契约 ═══
+
+    @Test
+    public void testVariablesOnlyExitViaExt() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Map<String, Object> r = call("processInstance/startAndExecute", args("processDefineId", def.getId(),
+                "operator", "zhangsan", "f_reasonType", "休假", "f_amount", 500));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        // 正向：detail.ext = 实例变量全集（键形态与列表行 ext 一致），详情头部两键有真值
+        r = call("processInstance/detail", args("id", instanceId));
+        assertOk(r);
+        Map<String, Object> data = (Map<String, Object>) r.get("data");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ext = (Map<String, Object>) data.get("ext");
+        assertNotNull("detail 应含 ext（issues/124）: " + data.keySet(), ext);
+        assertEquals("休假", ext.get("f_reasonType"));
+        assertEquals(500, ((Number) ext.get("f_amount")).intValue());
+        assertEquals("详情头部发起人应为真名（u_realName）: " + ext.keySet(),
+                "用户zhangsan", ext.get("u_realName"));
+        assertNotNull("详情头部标题键 autoGenTitle 应有值: " + ext.keySet(), ext.get("autoGenTitle"));
+        // 出口键集合：variables/variable 不再出现在门面出口
+        assertFalse("detail 出口不应含 variables: " + data.keySet(), data.containsKey("variables"));
+        assertFalse("detail 出口不应含 variable: " + data.keySet(), data.containsKey("variable"));
+
+        // 行出口：variable / instanceVariable 原串不出现，ext/instanceExt 仍在
+        r = call("processInstance/page", args("operator", "zhangsan"));
+        assertOk(r);
+        Map<String, Object> row = (Map<String, Object>) ((List<?>) ((Map<String, Object>) r.get("data")).get("rows")).get(0);
+        assertFalse("实例行不应含 variable 原串: " + row.keySet(), row.containsKey("variable"));
+        assertNotNull(row.get("ext"));
+
+        r = call("processTask/todoList", args("operator", "leader"));
+        assertOk(r);
+        row = (Map<String, Object>) ((List<?>) ((Map<String, Object>) r.get("data")).get("rows")).get(0);
+        assertFalse("任务行不应含 variable 原串: " + row.keySet(), row.containsKey("variable"));
+        assertFalse("任务行不应含 instanceVariable 原串: " + row.keySet(), row.containsKey("instanceVariable"));
+        assertNotNull(row.get("ext"));
+        assertNotNull(row.get("instanceExt"));
+
+        // 负向：变量为空的实例 ext 出 {} 而非缺键/null
+        ProcessInstance inst = rawRepo.findInstanceById(instanceId);
+        inst.setVariables(new FlowData());
+        rawRepo.updateInstance(inst);
+        r = call("processInstance/detail", args("id", instanceId));
+        assertOk(r);
+        data = (Map<String, Object>) r.get("data");
+        assertTrue("变量为空时 detail.ext 键应存在: " + data.keySet(), data.containsKey("ext"));
+        assertTrue("变量为空时 ext 应为空对象而非 null 串: " + data.get("ext"),
+                data.get("ext") instanceof Map && ((Map<?, ?>) data.get("ext")).isEmpty());
     }
 
     // ═══ candidatePage 双源候选（issues/16 GlobalCandidateHandler 语义）═══
