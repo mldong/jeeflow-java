@@ -794,19 +794,35 @@ public class JdbcProcessRepository implements IProcessRepository {
         return 0;
     }
 
+    /**
+     * 统计类判据的统一"现在"（issues/125）。
+     *
+     * <p>默认取 JVM 本地钟，与本仓储写进 {@code create_time}/{@code expire_time}/{@code update_time}
+     * 的是同一把尺子。<b>不要改成 SQL 里的 {@code NOW()}</b>：那取的是数据库会话时区
+     * （{@code @@session.time_zone}），与引擎写入的时间列不同基准，宿主时区 ≠ 库时区时
+     * 整批统计会平移一个时区差（160 实测差 8 小时）。单测/子类可覆写本方法注入偏移钟来验判据有牙。</p>
+     */
+    protected LocalDateTime statsNow() {
+        return LocalDateTime.now();
+    }
+
     @Override
     public int[] statsPendingAndOverdueCount() {
+        // issues/125：now 由引擎侧供给并作为绑定参数进 SQL；本方法内只取一次，两半用同一个值
+        LocalDateTime now = statsNow();
         String sql = "SELECT COUNT(*) AS pending, " +
-                "SUM(CASE WHEN expire_time IS NOT NULL AND expire_time < NOW() THEN 1 ELSE 0 END) AS overdue " +
+                "SUM(CASE WHEN expire_time IS NOT NULL AND expire_time < ? THEN 1 ELSE 0 END) AS overdue " +
                 "FROM wf_process_task WHERE task_state = 10";
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-            if (rs.next()) {
-                int pending = rs.getInt("pending");
-                int overdue = rs.getInt("overdue");
-                if (rs.wasNull()) overdue = 0;
-                return new int[]{pending, overdue};
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setTimestamp(1, toTimestamp(now));
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    int pending = rs.getInt("pending");
+                    int overdue = rs.getInt("overdue");
+                    if (rs.wasNull()) overdue = 0;
+                    return new int[]{pending, overdue};
+                }
             }
         } catch (SQLException e) {
             throw new RuntimeException("统计待办/逾期数失败", e);
