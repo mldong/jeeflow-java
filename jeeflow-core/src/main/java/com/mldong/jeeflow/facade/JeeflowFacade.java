@@ -200,7 +200,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> startAndExecute(Map<String, Object> args) {
         Long defineId = toLong(args.get(FlowConst.PROCESS_DEFINE_ID_KEY));
-        String operator = toStr(args.get("operator"), "user1");
+        String operator = operatorArg(args);
         FlowData flowArgs = FlowData.create();
         args.forEach((k, v) -> {
             if (!FlowConst.PROCESS_DEFINE_ID_KEY.equals(k) && !"operator".equals(k)) flowArgs.put(k, v);
@@ -267,7 +267,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> instancePage(Map<String, Object> args) {
         PageQuery query = queryParser.parse(args);
-        String userId = toStr(args.get("operator"), "user1");
+        String userId = operatorArg(args);
         query.add("t.operator", "EQ", userId);
         PageResult<IProcessRepository.InstanceRow> page = repository.pageInstances(query);
         return pageResult(page);
@@ -383,7 +383,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> todoList(Map<String, Object> args) {
         PageQuery query = queryParser.parse(args);
-        String userId = toStr(args.get("operator"), "user1");
+        String userId = operatorArg(args);
         query.add("pta.actor_id", "EQ", userId);
         PageResult<IProcessRepository.TaskRow> page = repository.pageTodoTasks(query);
         return pageResult(page);
@@ -391,7 +391,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> doneList(Map<String, Object> args) {
         PageQuery query = queryParser.parse(args);
-        String userId = toStr(args.get("operator"), "user1");
+        String userId = operatorArg(args);
         query.add("t.operator", "EQ", userId);
         PageResult<IProcessRepository.TaskRow> page = repository.pageDoneTasks(query);
         return pageResult(page);
@@ -399,7 +399,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> execute(Map<String, Object> args) {
         Long taskId = toLong(args.get(FlowConst.PROCESS_TASK_ID_KEY));
-        String operator = toStr(args.get("operator"), "user1");
+        String operator = operatorArg(args);
         Object submitTypeObj = args.getOrDefault(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode());
         Integer submitType = submitTypeObj instanceof Number ? ((Number) submitTypeObj).intValue()
                 : Integer.parseInt(submitTypeObj.toString());
@@ -679,7 +679,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> createCCInstance(Map<String, Object> args) {
         Long instanceId = toLong(args.get("processInstanceId"));
-        String operator = toStr(args.get("operator"), "user1");
+        String operator = operatorArg(args);
         Object actorIds = args.get("actorIds");
         if (!(actorIds instanceof java.util.Collection) || ((java.util.Collection<?>) actorIds).isEmpty()) {
             return error("actorIds 缺失");
@@ -692,14 +692,14 @@ public class JeeflowFacade {
 
     private Map<String, Object> updateCCStatus(Map<String, Object> args) {
         Long instanceId = toLong(args.get("processInstanceId"));
-        String operator = toStr(args.get("operator"), "user1");
+        String operator = operatorArg(args);
         repository.updateCcStatus(instanceId, operator);
         return ok();
     }
 
     private Map<String, Object> ccList(Map<String, Object> args) {
         PageQuery query = queryParser.parse(args);
-        String userId = toStr(args.get("operator"), "user1");
+        String userId = operatorArg(args);
         query.add("cc.actor_id", "EQ", userId);
         PageResult<IProcessRepository.InstanceRow> page = repository.pageCcInstances(query);
         return pageResult(page);
@@ -707,7 +707,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> taskDetail(Map<String, Object> args) {
         Long taskId = toLong(args.get("id"));
-        String operator = toStr(args.get("operator"), "user1");
+        String operator = operatorArg(args);
         ProcessTask task = repository.findTaskById(taskId);
         if (task == null) return error("任务不存在");
         Map<String, Object> vo = taskVo(task);
@@ -1029,7 +1029,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> designSave(Map<String, Object> args) {
         IProcessExtRepository ext = ext();
-        String operator = toStr(args.get("operator"), "user1");
+        String operator = operatorArg(args);
         Long id = toLong(args.get("id"));
         ProcessDesign design;
         if (id == null) {
@@ -1279,7 +1279,7 @@ public class JeeflowFacade {
 
     private Map<String, Object> surrogateSave(Map<String, Object> args) {
         IProcessExtRepository ext = ext();
-        String operator = toStr(args.get("operator"), "user1");
+        String operator = operatorArg(args);
         Long id = toLong(args.get("id"));
         ProcessSurrogate surrogate;
         if (id == null) {
@@ -1305,7 +1305,7 @@ public class JeeflowFacade {
     /** 委托更新（issues/77）：按 id 全字段更新，授权人缺省时保留原值（前端编辑表单不带 operator） */
     private Map<String, Object> surrogateUpdate(Map<String, Object> args) {
         IProcessExtRepository ext = ext();
-        String operator = toStr(args.get("operator"), "user1");
+        String operator = operatorArg(args);
         Long id = toLong(args.get("id"));
         if (id == null) return error("id 缺失");
         ProcessSurrogate surrogate = ext.findSurrogateById(id);
@@ -1698,6 +1698,20 @@ public class JeeflowFacade {
     private static String toStr(Object val, String def) {
         String s = toStr(val);
         return s != null ? s : def;
+    }
+
+    /**
+     * 归属/操作人入参归一化（issues/129 案 A · spec 06-facade.md:100 补句）。
+     *
+     * 空串与**缺键同档**：传 ""（或全空白）视同未传，一并回落 demo 缺省 user1。
+     * 以前这里只在 null 时兜缺省，于是 `{"operator":""}` 会原样落进
+     * {@code query.add("t.operator","EQ","")}，再被 JDBC 的"空值不加条件"通用放行丢掉
+     * ⇒ "我的实例/我的已办"读出**全库**（实测 25 行 vs user1 的 4 行，行上是别人的 operator）。
+     * 门面归一化是第一层，仓储的归属兜底是第二层（JdbcProcessRepository.buildWhere），两层都要在。
+     */
+    private static String operatorArg(Map<String, Object> args) {
+        String s = toStr(args.get("operator"));
+        return s != null && !s.trim().isEmpty() ? s : "user1";
     }
 
     /** 解析时间入参：兼容 `yyyy-MM-dd HH:mm:ss`（前端 RangePicker/SPEC 契约）与 ISO `T`（issues/77） */

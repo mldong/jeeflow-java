@@ -1822,6 +1822,72 @@ public class JeeflowFacadeTest {
         assertEquals("m_t_LIKE_displayName 不应命中: " + r, 0, rows.size());
     }
 
+    // ═══ issues/129 第一层：空串 operator 与缺键同档（回落 demo 缺省 user1） ═══
+
+    /**
+     * 立法见 spec 06-facade.md §2.5「空串与缺键同档」+「归属过滤是双层义务」。
+     *
+     * 修前 {@code JeeflowFacade} 只在 null 时兜缺省（{@code toStr(v,"user1")}），显式空串原样落进
+     * {@code query.add("t.operator","EQ","")}；内存仓储按值比对 ⇒ 0 行，JDBC 仓储则把这条条件整条丢掉
+     * ⇒ 读**全库**（160 实测：实例 25 行 vs user1 的 4 行）。门面这层归一化后，空串档必须与
+     * 缺键档、显式 user1 档三者逐行数相等。
+     *
+     * 反空转设计：user1 在三个出口各有真实行（下面单独断言），"0 == 0"的自等假绿挡不住；
+     * 另有一格反向哨兵——待办在 leader 手里，若有人把"空值"实现成"不加条件"（本 issue 的生产症状），
+     * 空串档会读出 leader 的那条 ⇒ 这一条挡住的是"假修"。
+     */
+    @Test
+    public void testEmptyOperatorIsSameAsAbsentKey() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Map<String, Object> mine = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1", "amount", 500));
+        assertOk(mine);
+        Map<String, Object> theirs = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan", "amount", 500));
+        assertOk(theirs);
+        Long theirInstId = toLong(((Map<String, Object>) theirs.get("data")).get(FlowConst.PROCESS_INSTANCE_ID_KEY));
+        // 抄送两个收件人，让 ccList 的 user1 档非空、且与"别人的档"可区分
+        assertOk(call("processInstance/createCCInstance",
+                args("processInstanceId", theirInstId, "operator", "zhangsan",
+                        "actorIds", Arrays.asList("user1", "zhangsan"))));
+
+        String[] exits = {"processInstance/page", "processTask/todoList",
+                "processTask/doneList", "processInstance/ccList"};
+
+        // 正向对照（先立"数据真的在"，否则三档相等的断言是空转）
+        assertEquals("user1 应看到自己那 1 条实例", 1, pageRows("processInstance/page", args("operator", "user1")));
+        assertEquals("user1 应收到 1 条抄送", 1, pageRows("processInstance/ccList", args("operator", "user1")));
+        assertTrue("user1 办结的 apply 应进自己已办",
+                pageRows("processTask/doneList", args("operator", "user1")) >= 1);
+        assertTrue("leader 手上应有待办（对照档，也是下面空串档的反面参照）",
+                pageRows("processTask/todoList", args("operator", "leader")) >= 1);
+
+        for (String action : exits) {
+            int empty = pageRows(action, args("operator", ""));
+            int blank = pageRows(action, args("operator", "   "));
+            int absent = pageRows(action, args());
+            int asUser1 = pageRows(action, args("operator", "user1"));
+            assertEquals(action + "：空串档应＝缺键档（同档回落缺省 user1）", absent, empty);
+            assertEquals(action + "：空串档应＝显式 user1 档", asUser1, empty);
+            assertEquals(action + "：全空白与空串同档", empty, blank);
+        }
+
+        // 反向哨兵：空串档读到的行数必须＝user1 档，而不是"全库"（user1 0 条待办、leader ≥1 条）
+        assertEquals("todoList 空串档不得读成全库", 0, pageRows("processTask/todoList", args("operator", "")));
+        assertTrue("同栈的 leader 档确实有行 ⇒ 上一格的 0 不是数据空",
+                pageRows("processTask/todoList", args("operator", "leader")) >= 1);
+    }
+
+    /** 走门面的分页出口，取行数（code 非 0 直接红） */
+    @SuppressWarnings("unchecked")
+    private int pageRows(String action, Map<String, Object> a) {
+        Map<String, Object> r = call(action, a);
+        assertOk(r);
+        List<Map<String, Object>> rows =
+                (List<Map<String, Object>>) ((Map<String, Object>) r.get("data")).get("rows");
+        return rows.size();
+    }
+
     // ═══ issues/07：设计详情 jsonObject 缺失基本信息时从设计表补齐 ═══
 
     @Test

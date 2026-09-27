@@ -18,6 +18,7 @@ import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.json.TypeReference;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.spi.IUserProvider;
+import com.mldong.jeeflow.spi.PageQuery;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.After;
 import org.junit.Before;
@@ -631,6 +632,62 @@ public class JdbcRepositoryTest {
                 time instanceof String && ((String) time).matches("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$"));
         assertNotNull(at + " 的 time 应按该格式可解析", java.time.LocalDateTime.parse((String) time,
                 java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+    }
+
+    // ═══ issues/129 第二层：归属谓词列拿到空值 ⇒ 空页，而不是"这条条件不加"（读全库） ═══
+
+    /**
+     * 生产症状：{@code {"operator":""}} 走门面后落进 {@code query.add("t.operator","EQ","")}，
+     * 被 {@link JdbcProcessRepository#buildWhere} 那句"空值当作没填"的通用放行丢掉 ⇒
+     * "我的实例/我的已办"读出**全库**（160 实测 25 行 vs user1 的 4 行，行上是别人的 operator）。
+     *
+     * 这里绕过门面直接打仓储，测第二层兜底本身；同时用"空值非归属条件仍被忽略"这一格
+     * 钉住改动面——只收归属谓词，不改 PageQuery 的通用空值放行（否则 m_LIKE_* 可选过滤一起坏）。
+     */
+    @Test
+    public void testBlankOwnershipConditionYieldsEmptyPage() throws Exception {
+        ProcessInstance.ProcessDefine def = registerSimpleFlow();
+        // 两人各一单：user1 那单是"应当看得到"的，otherUser 那单是"不该串味"的
+        ProcessInstance mine = engine.startProcessInstanceById(def.getId(), "user1",
+                FlowData.create().set(FlowConst.BUSINESS_NO, "OWN-129-A"));
+        ProcessInstance theirs = engine.startProcessInstanceById(def.getId(), "otherUser",
+                FlowData.create().set(FlowConst.BUSINESS_NO, "OWN-129-B"));
+
+        // ── 正向对照（先跑，挡住"空页是因为整张查询恒 0"这种假绿）──
+        assertEquals("真值归属条件应命中 user1 那 1 条实例", 1,
+                repo.pageInstances(new PageQuery(1, 50).add("t.operator", "EQ", "user1")).getRecordCount());
+        assertTrue("leader 手上应有待办（待办出口的正向对照）",
+                repo.pageTodoTasks(new PageQuery(1, 50).add("pta.actor_id", "EQ", "leader")).getRecordCount() >= 1);
+
+        // ── 缺陷档：空值三形（空串 / 全空白 / null）都不得回落成"不过滤" ──
+        assertEquals("空串归属条件不得读成全库实例", 0,
+                repo.pageInstances(new PageQuery(1, 50).add("t.operator", "EQ", "")).getRecordCount());
+        assertEquals("全空白与空串同档", 0,
+                repo.pageInstances(new PageQuery(1, 50).add("t.operator", "EQ", "   ")).getRecordCount());
+        assertEquals("null 归属条件同样不得读成全库", 0,
+                repo.pageInstances(new PageQuery(1, 50).add("t.operator", "EQ", null)).getRecordCount());
+        assertEquals("空串待办归属条件不得读成全库任务", 0,
+                repo.pageTodoTasks(new PageQuery(1, 50).add("pta.actor_id", "EQ", "")).getRecordCount());
+        assertEquals("空串已办归属条件不得读成全库任务", 0,
+                repo.pageDoneTasks(new PageQuery(1, 50).add("t.operator", "EQ", "")).getRecordCount());
+
+        // ── 抄送出口（cc.actor_id）：落一行 cc 再打两档 ──
+        repo.createCcInstance(theirs.getInstanceId(), "otherUser", "user1");
+        assertEquals("抄送出口正向对照：user1 收到 1 条", 1,
+                repo.pageCcInstances(new PageQuery(1, 50).add("cc.actor_id", "EQ", "user1")).getRecordCount());
+        assertEquals("空串抄送归属条件不得读成全库", 0,
+                repo.pageCcInstances(new PageQuery(1, 50).add("cc.actor_id", "EQ", "")).getRecordCount());
+
+        // ── 改动面哨兵：非归属列的空值仍走"当作没填"（可选过滤不许改成空页）──
+        assertEquals("空值非归属条件应被忽略，归属条件照常生效（实例 2 条里筛出 user1 的 1 条）", 1,
+                repo.pageInstances(new PageQuery(1, 50)
+                        .add("t.operator", "EQ", "user1")
+                        .add("t.business_no", "LIKE", "")).getRecordCount());
+        assertEquals("只给空值非归属条件时应返回全库（这条放行没被改坏）", 2,
+                repo.pageInstances(new PageQuery(1, 50)
+                        .add("t.business_no", "LIKE", "")).getRecordCount());
+
+        assertNotNull(mine.getInstanceId());
     }
 
     // ═══ 辅助方法 ═══

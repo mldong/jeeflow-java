@@ -1092,6 +1092,17 @@ public class JdbcProcessRepository implements IProcessRepository {
             String col = cond.getColumn();
             if (!whitelist.contains(col)) continue; // 不在白名单，丢弃
             Object val = cond.getValue();
+            // issues/129 案 A 第二层：归属谓词列拿到空值 ⇒ 空页，而不是"这条条件不加"。
+            // 门面已把空串归一化成缺省（JeeflowFacade.operatorArg），这一道防的是绕过门面直接
+            // 调仓储的调用方与将来的门面改动——只留门面那半不算修完（rust 1.0.17 同为两层）。
+            // 只收归属列：下面那句"空值当作没填"是 PageQuery 对 m_LIKE_* 等可选过滤的通用放行，
+            // 照字面改成"空值即空页"会把可选过滤一起改坏。
+            boolean blankVal = val == null || (val instanceof String && ((String) val).trim().isEmpty());
+            if (blankVal && "EQ".equalsIgnoreCase(cond.getOperator())
+                    && OWNERSHIP_COLUMNS.contains(cond.getColumn())) {
+                sql.append(" AND 1=0");
+                continue;
+            }
             if (val == null || (val instanceof String && ((String) val).isEmpty())) continue;
 
             switch (cond.getOperator().toUpperCase()) {
@@ -1209,6 +1220,14 @@ public class JdbcProcessRepository implements IProcessRepository {
     }
 
     // ═══ 列白名单（与 mldong-boot2 别名一致） ═══
+
+    /**
+     * 归属谓词列（issues/129）：这几列定义"这条记录属于谁"，空值绝不能等于"不过滤"。
+     * 取自门面实际 add 的那四个条件（todoList 用 pta.actor_id、doneList/instancePage 用 t.operator、
+     * ccList 用 cc.actor_id、任务分页里带出的实例发起人用 pi.operator）。
+     */
+    private static final java.util.Set<String> OWNERSHIP_COLUMNS = new java.util.HashSet<>(
+            java.util.Arrays.asList("t.operator", "pi.operator", "pta.actor_id", "cc.actor_id"));
 
     private static final java.util.Set<String> TASK_TODO_WHITELIST = new java.util.HashSet<>(java.util.Arrays.asList(
             "t.id", "t.task_name", "t.display_name", "t.task_type", "t.perform_type", "t.task_state",
