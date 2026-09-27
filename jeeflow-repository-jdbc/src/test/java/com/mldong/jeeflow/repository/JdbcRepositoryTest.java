@@ -465,8 +465,10 @@ public class JdbcRepositoryTest {
         Map<String, Object> row = null;
         for (Map<String, Object> rec : records) if ("task1".equals(rec.get("taskName"))) row = rec;
         assertNotNull(row);
+        assertFalse("SQL 仓路径同样不得再透出 variable 原串（issues/124 立法）: " + row.keySet(),
+                row.containsKey("variable"));
         @SuppressWarnings("unchecked")
-        Map<String, Object> vars = (Map<String, Object>) row.get("variable");
+        Map<String, Object> vars = (Map<String, Object>) row.get("ext"); // issues/124：variable 原串出口已下线，读 ext（对齐 core 侧 JeeflowFacadeTest:407）
         assertEquals("7", String.valueOf(vars.get(FlowConst.SUBMIT_TYPE)));
         assertEquals("lisi", vars.get(FlowConst.TRANSFER_TO));
         assertTrue("审批记录文案要读得出「A 转办给 B（原因）」: " + vars,
@@ -555,8 +557,8 @@ public class JdbcRepositoryTest {
         for (Map<String, Object> rec : records) if ("task1".equals(rec.get("taskName"))) row = rec;
         assertNotNull(row);
         @SuppressWarnings("unchecked")
-        Map<String, Object> vars = (Map<String, Object>) row.get("variable");
-        readLedger(vars, "approvalRecord.variable 出口");
+        Map<String, Object> vars = (Map<String, Object>) row.get("ext"); // issues/124：原串出口下线，读 ext（对齐 core 侧 JeeflowFacadeTest:521）
+        readLedger(vars, "approvalRecord.ext 出口");
     }
 
     /**
