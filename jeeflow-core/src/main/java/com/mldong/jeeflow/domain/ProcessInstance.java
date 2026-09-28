@@ -181,8 +181,19 @@ public class ProcessInstance {
     }
 
     /** 撤回（issues/114）：作用于整单——全部**进行中**任务置 WITHDRAW(30)，
-     *  已完成(20)/已终止(40) 任务行不改写；实例与被撤任务的 `update_user` 均回写撤回人 */
+     *  已完成(20)/已终止(40) 任务行不改写；实例与被撤任务的 `update_user` 均回写撤回人。
+     *
+     *  <p>issues/134 案 A：撤回只允许**进行中(10)** 的实例。实例不是 10（已完成 20 / 已撤回 30 /
+     *  强行终止 40 / 已拒绝 45 / 挂起 50 / 已废弃 99）⇒ 抛 20010009，**一行都不改、不落库**——
+     *  守卫排在下面的任务行循环之前，否则已办结实例会被静默改写成 30（改历史、且不报错）。
+     *  任务行层面那句"已完成/已终止行不改写"的既有保护保持原样。</p>
+     *
+     * @throws JeeflowException 20010009 实例非进行中
+     */
     public void withdraw(String operator) {
+        if (!ProcessInstanceStateEnum.DOING.getCode().equals(this.state)) {
+            throw new JeeflowException(WfErrEnum.WITHDRAW_INSTANCE_NOT_DOING);
+        }
         for (ProcessTask task : tasks) {
             if (task.isDoing()) {
                 task.withdraw(operator);

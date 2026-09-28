@@ -21,7 +21,9 @@ public enum WfErrEnum {
     /** 退回上一步：当前行没有血缘（task_parent_id 为空或 0） */
     ROLLBACK_PARENT_TASK_ID_EMPTY(20010007, "上一步任务ID为空，无法驳回至上一步处理"),
     /** 退回上一步：血缘守卫不通过（上一步是 fork/join/subprocess/会签） */
-    ROLLBACK_PARENT_NOT_REJECTABLE(20010008, "无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务");
+    ROLLBACK_PARENT_NOT_REJECTABLE(20010008, "无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务"),
+    /** 撤回：实例不是进行中(10)——已完成(20)/已撤回(30)/已终止(40) 等一律不得被撤回改写（issues/134 案 A） */
+    WITHDRAW_INSTANCE_NOT_DOING(20010009, "流程实例非进行中，无法撤回");
 
     private final Integer code;
     private final String message;
