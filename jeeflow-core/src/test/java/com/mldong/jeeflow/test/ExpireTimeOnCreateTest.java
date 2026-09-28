@@ -92,4 +92,50 @@ public class ExpireTimeOnCreateTest {
         ProcessTask task = instance().createTask(node("approve", "not-a-time"), "审批", one(), "op", 0L, true);
         assertNull(task.getExpireTime());
     }
+
+    /**
+     * 并行会签全员（案文 §1.8 写点③）：每个成员行都必须带到期时间。
+     *
+     * <p>这一格是补 csharp 执行者报出的缺口——它说本栈"并行全员"无专测格，摘掉那处没有格会红；
+     * 一查 java 参考实现同样只有四格形状（串行首成员/推进位在 JeeflowFacadeTest 里，并行没人钉）。
+     * 参考实现自己没覆盖的分支，等于给七栈派活时长老自己缺一块证据，故在这里补上。
+     */
+    @Test
+    public void parallelCountersignEveryMemberGetsExpire() {
+        TaskModel model = node("cs", "2h");
+        model.setPerformType(com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum.COUNTERSIGN);
+        model.setCountersignType(com.mldong.jeeflow.enums.CountersignTypeEnum.PARALLEL);
+        List<String> actors = new ArrayList<>();
+        actors.add("u1");
+        actors.add("u2");
+        actors.add("u3");
+
+        ProcessInstance inst = instance();
+        List<ProcessTask> tasks = inst.createCountersignTasks(model, actors, "op", 0L, true);
+        assertEquals("并行会签应为每位成员各建一行", 3, tasks.size());
+        for (ProcessTask task : tasks) {
+            assertNotNull("成员 " + task.getActorIds() + " 的行必须带到期时间", task.getExpireTime());
+            long delta = Duration.between(task.getCreateTime(), task.getExpireTime()).getSeconds();
+            assertTrue("成员 " + task.getActorIds() + " 的 expire − create 应≈2h（实得 " + delta + "s）",
+                    delta >= 2 * 3600L - 5L && delta <= 2 * 3600L + 60L);
+        }
+    }
+
+    /** 同一分支的负向档：并行会签且节点没配到期表达式 ⇒ 三行都留空 */
+    @Test
+    public void parallelCountersignUnconfiguredKeepsExpireNull() {
+        TaskModel model = node("cs", null);
+        model.setPerformType(com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum.COUNTERSIGN);
+        model.setCountersignType(com.mldong.jeeflow.enums.CountersignTypeEnum.PARALLEL);
+        List<String> actors = new ArrayList<>();
+        actors.add("u1");
+        actors.add("u2");
+        ProcessInstance inst = instance();
+        List<ProcessTask> tasks = inst.createCountersignTasks(model, actors, "op", 0L, true);
+        assertEquals(2, tasks.size());
+        for (ProcessTask task : tasks) {
+            assertNotNull("行本身要读到，且 createTime 有值（内部对照）", task.getCreateTime());
+            assertNull("并行会签未配到期表达式的成员行不该有到期时间", task.getExpireTime());
+        }
+    }
 }
