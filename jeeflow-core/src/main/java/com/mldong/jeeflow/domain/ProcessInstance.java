@@ -207,6 +207,34 @@ public class ProcessInstance {
         this.updateTime = LocalDateTime.now();
     }
 
+    /**
+     * issues/126 案 A（基准＝boot2 内置版 `ProcessTaskServiceImpl` 的三处写：:213 普通建单 /
+     * :386 回退新建 / :524 会签建单）：任务行的到期时间在**建单那一刻**按节点到期表达式算出来。
+     *
+     * <p>表达式语义逐字取 {@link FlowUtil#processTime(String, FlowData)}：
+     * ① args 里存在与表达式同名的键 ⇒ 用该键的值（Date / 毫秒时间戳 / "yyyy-MM-dd HH:mm:ss"）；
+     * ② 否则以 <code>s|m|h|d</code> 结尾 ⇒ 当前时间 + 偏移；③ 否则把表达式本身当绝对时刻解析。
+     *
+     * <p>**节点没配就保持 NULL**（owner 2026-09-28 明确：不造默认值）。原来的占位写法
+     * <code>setExpireTime(LocalDateTime.now()) // will be overridden by util later</code> 既没等号
+     * （建单即逾期），也没有 util 会来覆盖 ⇒ 只在这一处就把表达式真算出来。
+     *
+     * @param expr 节点上配的到期表达式；null/空串 ⇒ 不动这一列
+     * @param args 变量源：建单路径＝实例变量（boot2 的 execution.getArgs()），
+     *             回退路径＝随行拷贝的那份变量（boot2 的 hisVariable）
+     */
+    private static void applyExpireTime(ProcessTask task, String expr, FlowData args) {
+        if (expr == null || expr.isEmpty() || task == null) {
+            return;
+        }
+        task.setExpireTime(FlowUtil.processTime(expr, args == null ? FlowData.create() : args));
+    }
+
+    /** 建单路径的默认变量源＝实例变量（与 boot2 <code>execution.getArgs()</code> 同档） */
+    private void applyExpireTime(ProcessTask task, String expr) {
+        applyExpireTime(task, expr, this.variables);
+    }
+
     /** 创建普通任务 */
     public ProcessTask createTask(TaskModel taskModel, String displayName,
                                    List<String> actorIds, String operator,
@@ -223,9 +251,7 @@ public class ProcessInstance {
                 parentTaskId,
                 isFirstTaskNode
         );
-        if (taskModel.getExpireTime() != null) {
-            task.setExpireTime(LocalDateTime.now()); // will be overridden by util later
-        }
+        applyExpireTime(task, taskModel.getExpireTime());
         this.tasks.add(task);
         return task;
     }
@@ -257,6 +283,7 @@ public class ProcessInstance {
             first.getVariables().put(FlowConst.COUNTERSIGN_OPERATOR_LIST + "_" + node, new ArrayList<>(actorIds));
             first.getVariables().put(FlowConst.LOOP_COUNTER + "_" + node, 0);
             first.getVariables().put(FlowConst.NR_OF_INSTANCES + "_" + node, actorIds.size());
+            applyExpireTime(first, taskModel.getExpireTime());
             list.add(first);
             this.tasks.add(first);
             return list;
@@ -275,6 +302,7 @@ public class ProcessInstance {
                     parentTaskId,
                     isFirstTaskNode
             );
+            applyExpireTime(task, taskModel.getExpireTime());
             list.add(task);
             this.tasks.add(task);
         }
@@ -332,12 +360,10 @@ public class ProcessInstance {
                 isFirstRow
         );
         newTask.setVariables(vars);
-        // 到期时间按"被回退掉的那个"节点（＝当前节点）的表达式重算，同 mldong-boot2
+        // 到期时间按"被回退掉的那个"节点（＝当前节点）的表达式重算，同 mldong-boot2；
+        // 变量源用新建行自带的 vars（＝boot2 的 hisVariable），不是实例变量
         if (current instanceof TaskModel) {
-            String expire = ((TaskModel) current).getExpireTime();
-            if (expire != null && !expire.isEmpty()) {
-                newTask.setExpireTime(FlowUtil.processTime(expire, vars));
-            }
+            applyExpireTime(newTask, ((TaskModel) current).getExpireTime(), vars);
         }
         this.tasks.add(newTask);
         return newTask;
