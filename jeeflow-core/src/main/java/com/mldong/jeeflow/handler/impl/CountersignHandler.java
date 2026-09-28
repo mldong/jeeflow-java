@@ -155,6 +155,10 @@ public class CountersignHandler implements IHandler {
                 readOperatorList(execution, node));
         next.getVariables().put(FlowConst.LOOP_COUNTER + "_" + node, nextLoopCounter);
         next.getVariables().put(FlowConst.NR_OF_INSTANCES + "_" + node, total);
+        // issues/126 A: this branch bypasses createTask, so apply the same ruler here
+        // (baseline boot2 serial advance calls back into createCountersignTask, which writes
+        //  expire_time at ProcessTaskServiceImpl:524)
+        instance.applyNodeExpireTime(next, taskModel);
         instance.getTasks().add(next);
         execution.addTask(next);
     }

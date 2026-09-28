@@ -230,6 +230,19 @@ public class ProcessInstance {
         task.setExpireTime(FlowUtil.processTime(expr, args == null ? FlowData.create() : args));
     }
 
+    /**
+     * 供处理器在"绕过 {@link #createTask} 直建任务"的路径上补同一把尺子——issues/126：
+     * 串行会签推进出的<b>下一位成员</b>就是这种路径。基准侧 boot2 的串行推进是回调
+     * {@code createCountersignTask}（{@code ProcessTaskServiceImpl:485}，内含 :524 那处到期写），
+     * 所以基准形状里"推进新建的那一位"同样带到期时间；不补就是"首成员有、后续没有"。
+     */
+    public void applyNodeExpireTime(ProcessTask task, TaskModel taskModel) {
+        if (taskModel == null) {
+            return;
+        }
+        applyExpireTime(task, taskModel.getExpireTime(), this.variables);
+    }
+
     /** 建单路径的默认变量源＝实例变量（与 boot2 <code>execution.getArgs()</code> 同档） */
     private void applyExpireTime(ProcessTask task, String expr) {
         applyExpireTime(task, expr, this.variables);

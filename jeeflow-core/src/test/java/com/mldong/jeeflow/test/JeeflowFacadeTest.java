@@ -2377,4 +2377,81 @@ public class JeeflowFacadeTest {
         assertNull(provider.permissionCodes("processInstance/bizData"));
     }
 
+
+    /**
+     * issues/126 案 A · 第五处写点：串行会签**推进出的下一位成员**也要按节点表达式算到期时间。
+     *
+     * <p>为什么单独钉这一格：这一支绕过 {@code ProcessInstance.createTask} 直建任务
+     * （{@code CountersignHandler.createNextCountersignTask}），是四处写点之外的第五条路径；
+     * 而基准侧 boot2 的串行推进回调 {@code createCountersignTask}
+     * （{@code ProcessTaskServiceImpl:485}，内含 {@code :524} 那处到期写）⇒ 基准形状里
+     * "推进新建的那一位"同样带到期时间。不补就是"首成员有到期、第二三位没有"。
+     */
+    @Test
+    public void testSerialCountersignAdvanceWritesExpireOnNextMember() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("06-countersign-sequential-expire.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        com.mldong.jeeflow.domain.ProcessTask first = memberRow(instanceId, "userA");
+        assertNotNull("串行会签首成员行没读到", first);
+        assertExpireAbout2HAfterCreate(first.getExpireTime(), first.getCreateTime(), "首成员（createCountersignTasks）");
+
+        call("processTask/execute", args("processTaskId", taskIdOf(instanceId, "userA"),
+                "operator", "userA", "submitType", 1));
+        com.mldong.jeeflow.domain.ProcessTask second = memberRow(instanceId, "userB");
+        assertNotNull("推进后的第二成员行没读到", second);
+        assertExpireAbout2HAfterCreate(second.getExpireTime(), second.getCreateTime(), "推进新建的第二成员（第五处写点）");
+    }
+
+    /** 同一条会签节点的"未配"档：换成不带 expireTime 的原夹具，两行都必须留空（不造默认值） */
+    @Test
+    public void testSerialCountersignUnconfiguredKeepsExpireNull() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("06-countersign-sequential.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "user1"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        com.mldong.jeeflow.domain.ProcessTask first = memberRow(instanceId, "userA");
+        assertNotNull("首成员行本身要读到（否则这条断言恒真）", first);
+        assertNotNull("对照：createTime 应有值", first.getCreateTime());
+        assertNull("未配到期表达式的会签节点，首成员行不该有到期时间", first.getExpireTime());
+        call("processTask/execute", args("processTaskId", taskIdOf(instanceId, "userA"),
+                "operator", "userA", "submitType", 1));
+        com.mldong.jeeflow.domain.ProcessTask second = memberRow(instanceId, "userB");
+        assertNotNull("推进后的第二成员行本身要读到", second);
+        assertNotNull("对照：第二成员 createTime 应有值", second.getCreateTime());
+        assertNull("推进出的第二成员同样不该有到期时间", second.getExpireTime());
+    }
+
+    /** 取该实例里 actor 为某用户的那条 DOING 任务行本身（找不到返回 null——"行不在"与"值为空"
+     *  必须能分开，否则未配那一档会拿 {@code {null, null}} 和"没读到行"混成一谈） */
+    private com.mldong.jeeflow.domain.ProcessTask memberRow(Long instanceId, String actor) {
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findDoingTasks(instanceId, null)) {
+            if (t.getActorIds() != null && t.getActorIds().contains(actor)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    private Long taskIdOf(Long instanceId, String actor) {
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findDoingTasks(instanceId, null)) {
+            if (t.getActorIds() != null && t.getActorIds().contains(actor)) {
+                return t.getTaskId();
+            }
+        }
+        return null;
+    }
+
+    private void assertExpireAbout2HAfterCreate(java.time.LocalDateTime expire,
+                                                java.time.LocalDateTime create, String who) {
+        assertNotNull(who + " 必须带到期时间", expire);
+        assertNotNull(who + " 的 createTime 应有值（内部对照）", create);
+        long delta = java.time.Duration.between(create, expire).getSeconds();
+        assertTrue(who + " 的 expire − create 应≈2h（实得 " + delta + "s）",
+                delta >= 2 * 3600L - 5L && delta <= 2 * 3600L + 60L);
+    }
 }
