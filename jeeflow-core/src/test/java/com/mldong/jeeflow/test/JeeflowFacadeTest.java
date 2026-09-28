@@ -2454,4 +2454,82 @@ public class JeeflowFacadeTest {
         assertTrue(who + " 的 expire − create 应≈2h（实得 " + delta + "s）",
                 delta >= 2 * 3600L - 5L && delta <= 2 * 3600L + 60L);
     }
+
+    // ═══ issues/126 写点④：回退新建那一行的到期时间取"被退掉的那个节点"（boot2 的 current），
+    //     不取落地节点（prev）。基准逐字见 boot2 ProcessTaskServiceImpl 的 rejectTask：
+    //     model.getNode(currentTask.getTaskName()) → 拿它的 expireTime 去算复活行。
+    //     两节点**各配各的**是刻意的：只给一个节点配表达式时，取错节点也照样绿（没牙）。
+    //     夹具放 flows-local/——不进共享 flows/，免得牵动七仓镜像副本与漂移门禁的流程计数。═══
+
+    private ProcessInstance.ProcessDefine registerLocalFlow(String filename) throws Exception {
+        byte[] bytes = java.nio.file.Files.readAllBytes(
+                java.nio.file.Paths.get("src/test/resources/flows-local/" + filename));
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setName(filename.replace(".json", ""));
+        def.setDisplayName(filename);
+        def.setType("approval");
+        def.setState(1);
+        def.setVersion(1);
+        def.setContent(bytes);
+        repo.addDefine(def);
+        return def;
+    }
+
+    /** 用本地夹具发起并推进到 task2（apply 由 startAndExecute 自动办结），返回实例 id */
+    private Long start126UntilTask2(String fixture) throws Exception {
+        ProcessInstance.ProcessDefine def = registerLocalFlow(fixture);
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+        Long t1 = doingTaskId(instanceId, "task1");
+        assertNotNull("应推进到 task1", t1);
+        rawRepo.addTaskActor(t1, Arrays.asList("leader"));
+        assertOk(call("processTask/execute",
+                args("processTaskId", t1, "operator", "leader", "submitType", 1)));
+        assertNotNull("应推进到 task2", doingTaskId(instanceId, "task2"));
+        return instanceId;
+    }
+
+    private ProcessTask firstDoingRow(Long instanceId, String name) {
+        List<ProcessTask> rows = rawRepo.findDoingTasks(instanceId, new String[]{name});
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /** 正向（节点身份）：task1 配 1d、task2 配 3h，从 task2 退回 ⇒ 复活的那条 task1 行按 **3h** 算 */
+    @Test
+    public void test126RollbackRowTakesExpireFromRolledBackNode() throws Exception {
+        Long inst = start126UntilTask2("126-rollback-current-expire.json");
+        Long t2 = doingTaskId(inst, "task2");
+        rawRepo.addTaskActor(t2, Arrays.asList("manager"));
+        assertOk(call("processTask/execute",
+                args("processTaskId", t2, "operator", "manager", "submitType", 3)));
+
+        ProcessTask revived = firstDoingRow(inst, "task1");
+        assertNotNull("回退应在 task1 产生新待办（行必须存在，否则空值是没建行混过去的）", revived);
+        assertNotNull("被退掉的 task2 配了 3h ⇒ 复活行必须带到期时间", revived.getExpireTime());
+        long delta = java.time.Duration.between(revived.getCreateTime(), revived.getExpireTime()).getSeconds();
+        assertTrue("复活行的到期应≈3h（实得 " + delta + "s）；算成 1d＝取成了落地节点（prev），违反 boot2 的 current 口径",
+                delta >= 3 * 3600L - 5L && delta <= 3 * 3600L + 60L);
+    }
+
+    /**
+     * 负向（owner 2026-09-28 口径：不配就说明没有到期时间）：落地节点 task1 配着 1d，
+     * 而**当前节点 task2 没配** ⇒ 复活行的这一列必须保持空。
+     * 这一档同时钉两件事：①不造默认值、不写 now()；②表达式的来源是当前节点而不是落地节点
+     * ——若实现取错成 task1，这里会算出 1d 而不是空。
+     */
+    @Test
+    public void test126RollbackRowStaysNullWhenRolledBackNodeUnconfigured() throws Exception {
+        Long inst = start126UntilTask2("126-rollback-current-unconfigured.json");
+        Long t2 = doingTaskId(inst, "task2");
+        rawRepo.addTaskActor(t2, Arrays.asList("manager"));
+        assertOk(call("processTask/execute",
+                args("processTaskId", t2, "operator", "manager", "submitType", 3)));
+
+        ProcessTask revived = firstDoingRow(inst, "task1");
+        assertNotNull("回退应照常建出 task1 的复活行", revived);
+        assertNull("当前节点未配到期表达式 ⇒ 该行 expire_time 必须留空（落地节点配的 1d 不该被拿来用）",
+                revived.getExpireTime());
+    }
 }
