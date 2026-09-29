@@ -25,6 +25,9 @@ import com.mldong.jeeflow.spi.IUserSearchProvider;
 import com.mldong.jeeflow.spi.IProcessRepository;
 import com.mldong.jeeflow.spi.JeeflowQueryParser;
 import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
+import com.mldong.jeeflow.enums.ProcessEventTypeEnum;
+import com.mldong.jeeflow.event.ProcessEvent;
+import com.mldong.jeeflow.event.ProcessPublisher;
 
 import java.util.Collections;
 import com.mldong.jeeflow.domain.Candidate;
@@ -349,6 +352,17 @@ public class JeeflowFacade {
         if (!canWithdraw(inst, operator)) return error("无权限撤回该流程实例");
         inst.withdraw(operator);
         repository.updateInstance(inst); // v1.0.1：级联持久化任务状态
+        // TASK_WITHDRAW（spec §11.3 码 8，issues/132 新增，八栈此前零事件）：撤回把实例 state 写 30
+        // **落库之后** fire，且**每轮撤回只 fire 一次**（不逐任务——被撤的是"N 个任务"这个同一事实）。
+        // issues/134 的实例状态守卫（非进行中一律拒，内部码 20010009）在聚合根内抛出、updateInstance
+        // 走不到 ⇒ 被拒的那次不发事件；鉴权失败／实例不存在同样不发（都在上一行就 return 了）。
+        ProcessPublisher.notify(ProcessEvent.builder()
+                .eventType(ProcessEventTypeEnum.TASK_WITHDRAW)
+                .sourceId(instanceId)
+                .data(FlowData.create()
+                        .set(ProcessPublisher.KEY_INSTANCE_ID, instanceId)
+                        .set(ProcessPublisher.KEY_OPERATOR, operator))
+                .build());
         return ok();
     }
 
@@ -685,8 +699,15 @@ public class JeeflowFacade {
             return error("actorIds 缺失");
         }
         java.util.Collection<?> coll = (java.util.Collection<?>) actorIds;
-        repository.createCcInstance(instanceId, operator,
-                coll.stream().map(Object::toString).toArray(String[]::new));
+        String[] ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
+        repository.createCcInstance(instanceId, operator, ccArr);
+        // CC_CREATE（spec §11.3 码 4 ＋ §11.2 原则 1 ＋ §11.6 java 段）：手动抄送腿也必须 fire——
+        // 码值表达"新增了一条抄送记录"这个事实，不表达谁触发（引擎 f_ccActors／办理 tf_ccActors／
+        // 门面手动共用同一支，逐抄送人一次）。java 此前只在引擎侧 fire、手动支静默，是全联邦
+        // "不 fire"那一派，本案按 go/py/node 补齐（issues/132 §5.1 待拍①）。
+        // fire 排在 createCcInstance 落库之后（§11.2 原则 3）；集成层严禁再自己补发（§11.1，
+        // PHP issues/101 的降级路已作废），否则引擎补齐后重复抄送。
+        ProcessPublisher.notifyCcCreate(instanceId, ccArr);
         return ok();
     }
 
@@ -967,6 +988,20 @@ public class JeeflowFacade {
         // 必须同步为摘/加之后的最新集合，否则留痕落库时把旧参与者原样写回
         task.setActorIds(new ArrayList<>(repository.findTaskActors(taskId)));
         repository.updateTask(task);
+        // TASK_TRANSFER（spec §11.3 码 7，issues/132 新增，八栈此前零事件）：任务参与者被替换
+        // **并落库之后** fire——上面 removeTaskActor/addTaskActor 已改参与者行，这次 updateTask
+        // 把摘加后的最新集合与留痕变量写回，转办事实至此成立。载荷带 fromActor/toActor/operator
+        // （§11.3 码 7 直传键），监听器免反查 tf_transferHistory。转办不新建任务行 ⇒ 不伴随码 3。
+        ProcessPublisher.notify(ProcessEvent.builder()
+                .eventType(ProcessEventTypeEnum.TASK_TRANSFER)
+                .sourceId(taskId)
+                .data(FlowData.create()
+                        .set(ProcessPublisher.KEY_INSTANCE_ID, task.getProcessInstanceId())
+                        .set(ProcessPublisher.KEY_TASK_ID, taskId)
+                        .set(ProcessPublisher.KEY_FROM_ACTOR, fromActor)
+                        .set(ProcessPublisher.KEY_TO_ACTOR, toActor)
+                        .set(ProcessPublisher.KEY_OPERATOR, operator))
+                .build());
         return ok();
     }
 

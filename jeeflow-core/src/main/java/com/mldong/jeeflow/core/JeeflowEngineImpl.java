@@ -6,6 +6,7 @@ import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.*;
+import com.mldong.jeeflow.event.PendingInstanceEnd;
 import com.mldong.jeeflow.event.ProcessEvent;
 import com.mldong.jeeflow.event.ProcessPublisher;
 import com.mldong.jeeflow.interceptor.impl.SurrogateInterceptor;
@@ -19,6 +20,7 @@ import com.mldong.jeeflow.util.FlowUtil;
 import com.mldong.jeeflow.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -109,6 +111,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
                 saveNewTask(task, surrogateProcessName);
             }
             repository.updateInstance(instance);
+            // 实例终态事件（码 2）：发起即办结的短流（start→end、decision 直达结束）与
+            // 子流程父实例都从这一支落库后播——顺序判据同 persistTasks 的收口。
+            flushInstanceEndEvents(exec);
             return instance;
         });
     }
@@ -126,8 +131,12 @@ public class JeeflowEngineImpl implements JeeflowEngine {
                 node.execute(exec);
             }
             // issues/47 E19：办理时抄送（tf_ccActors）创建 cc 实例（对齐发起时 f_ccActors 语义）
-            handleCcActors(exec.getProcessInstance().getInstanceId(), operator, args.get(FlowConst.CC_ACTORS));
+            //
+            // 抄送腿排在 persistTasks **之后**：实例行的 updateInstance（以及排在它之后的码 2
+            // flush，见 flushInstanceEndEvents）得先走完。两支各自"落在自己那次写库之后"，
+            // 跨事件的相对次序与本轮修复前逐字一致（recorder 主用例钉的 1,3,5,2,4,4）。
             persistTasks(exec);
+            handleCcActors(exec.getProcessInstance().getInstanceId(), operator, args.get(FlowConst.CC_ACTORS));
             return exec.getProcessTaskList();
         });
     }
@@ -144,28 +153,13 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         }
         if (ccArr != null && ccArr.length > 0) {
             repository.createCcInstance(instanceId, operator, ccArr);
-            // CC_CREATE（issues/102 新增，六语言统一）：逐抄送人 fire，与 createCcInstance 逐行
-            // INSERT 的粒度一一对应（对齐 PHP 参考实现 v1.3.8）。sourceId=instanceId，
-            // ccActorId=抄送人 id（直传事件体，监听器免反查 cc 表）。fire 在 runInTx 事务内
-            // （与 PHP/Java 同事务一致）；监听器侧用 afterCommit 延迟反查（见集成层监听器注释）。
-            notifyCcCreate(instanceId, ccArr);
-        }
-    }
-
-    /**
-     * 抄送知会事件（CC_CREATE / issues/102）：逐抄送人 fire，{@code ccActorId} 直传事件体。
-     * 接收人过滤（trim / 非空 / 纯数字 / 去重）由集成层监听器负责，引擎只按 cc 行粒度 fire。
-     */
-    private void notifyCcCreate(Long instanceId, String[] ccArr) {
-        if (instanceId == null) {
-            return;
-        }
-        for (String ccActorId : ccArr) {
-            ProcessPublisher.notify(ProcessEvent.builder()
-                    .eventType(ProcessEventTypeEnum.CC_CREATE)
-                    .sourceId(instanceId)
-                    .ccActorId(ccActorId)
-                    .build());
+            // CC_CREATE（issues/102 新增，六语言统一；spec §11.3 码 4）：逐抄送人 fire，与
+            // createCcInstance 逐行 INSERT 的粒度一一对应（对齐 PHP 参考实现 v1.3.8）。
+            // sourceId=instanceId，ccActorId=抄送人 id（直传事件体，监听器免反查 cc 表）。
+            // fire 在 runInTx 事务内（与 PHP/Java 同事务一致）；监听器侧用 afterCommit 延迟反查
+            // （见集成层监听器注释）。收口在 ProcessPublisher.notifyCcCreate——门面手动
+            // createCCInstance 与本方法是同一条腿（spec §11.2 原则 1／§11.7）。
+            ProcessPublisher.notifyCcCreate(instanceId, ccArr);
         }
     }
 
@@ -278,6 +272,12 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         }
         repository.updateTask(task);
 
+        // 任务被办掉 / 被退回（spec §11.3 码 5 TASK_COMPLETE / 码 6 TASK_REJECT，issues/132 新增）：
+        // 紧跟上面这次 updateTask（任务行 state 落库）之后 fire，§11.2 原则 3 的"落库之后"即此。
+        // 两条互斥（§11.3 码 6「同一动作走 reject 就不再 fire complete」）：判据取载荷 submitType，
+        // 不为"拒绝/退回上一步/退发起人/会签否决"各开一号（§11.2 原则 2）。
+        notifyTaskFinished(instance, task, operator, args);
+
         // 合并流程变量
         FlowData mergedArgs = FlowData.create();
         mergedArgs.setAll(instance.getVariables());
@@ -311,6 +311,60 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             repository.updateTask(exec.getProcessTask());
         }
         repository.updateInstance(exec.getProcessInstance());
+        // 实例终态事件（码 2）：紧跟上面那次 updateInstance —— 行的 state 已落库才允许播
+        flushInstanceEndEvents(exec);
+    }
+
+    /**
+     * 实例终态事件（码 2 {@code PROCESS_INSTANCE_END}）的统一收口——
+     * spec §11.2 原则 3「只在落库之后 fire」／§11.3 码 2「实例 state 更新为
+     * 20/30/40/45/50/99 之一并落库之后」／08-compliance 场景 32。
+     *
+     * <p>处理器（{@code EndProcessHandler}）只往 execution 挂 {@link PendingInstanceEnd}，
+     * 本方法在实例行<b>真正落库之后</b>把它们播出去。两条路径都要覆盖，缺一即丢事件：</p>
+     * <ul>
+     *   <li><b>正常路径</b>：登记的就是本次 execution 的实例，行已由调用方那次
+     *       {@code repository.updateInstance}（或发起路径的 {@code saveInstance}+{@code updateInstance}）
+     *       写好 ⇒ 这里只补播，不重复写；</li>
+     *   <li><b>子流程父实例路径</b>：子实例办结时处理器在<b>父实例</b>的 execution 上继续流转，
+     *       父实例<b>不走</b>子流程这次的 {@code updateInstance}（历史缺口：父实例终态只改内存，
+     *       那一行永远停在 10）⇒ 这里按登记带的聚合根补一次 {@code updateInstance}，再播。
+     *       先写后播的顺序对父实例同样成立。</li>
+     * </ul>
+     *
+     * <p>载荷 state 取登记时刻的快照整数（＝刚落库那一行的值），不重读聚合根——登记之后
+     * 流转还可能继续触碰该对象，重读会播出一个没写过的中间值。</p>
+     *
+     * <p>本栈可到达的终态档位：码 2 只由结束节点产生（办结 20／拒绝 45，{@code EndProcessHandler}
+     * 是 {@code finish()}/{@code reject()} 的唯一调用者）。其余档位各自的归宿——
+     * 30 撤回走门面 {@code withdraw}（先 {@code updateInstance} 后 fire 码 8，写后播已满足；
+     * "撤回这一档是否还要另发一支码 2"是规范解释问题，本轮按现状不扩火——§11.4 第 3 条
+     * 明写 {@code updateInstance} 的级联落库不构成独立事实，扩之前需 spec 侧先定）；
+     * 40 终止、50 挂起、99 废弃在 main 源<b>没有任何生产者</b>（{@code ProcessInstance#interrupt}
+     * ／{@code pending}／{@code abandonTask} 生产零调用者，见
+     * {@link com.mldong.jeeflow.enums.ProcessEventTypeEnum#INSTANCE_TERMINATED} 的 grep 证据），
+     * 对应门格按 unreachable 记账；将来出现写这些档位的收口点时，须在该次落库后补 fire，
+     * 不得在集成层主动补发（spec §11.1）。</p>
+     *
+     * <p>副作用（顺带收口）：修复前码 2 在 {@code node.execute} 里就地 fire，流转后续步骤抛异常
+     * 导致事务回滚时事件已经漏出去；现在事件排在写库之后，回滚的那次不再播。</p>
+     */
+    private void flushInstanceEndEvents(Execution exec) {
+        List<PendingInstanceEnd> pending = exec.drainPendingEnds();
+        if (pending.isEmpty()) {
+            return;
+        }
+        for (PendingInstanceEnd end : pending) {
+            ProcessInstance instance = end.getInstance();
+            boolean ownInstance = instance == null
+                    || (exec.getProcessInstanceId() != null
+                        && exec.getProcessInstanceId().equals(end.getInstanceId()));
+            if (!ownInstance) {
+                // 父实例（或更上层）被这一支流转连带办结：它的行不在本次 updateInstance 范围内，补写
+                repository.updateInstance(instance);
+            }
+            ProcessPublisher.notifyInstanceEnd(end.getInstanceId(), end.getState());
+        }
     }
 
     /**
@@ -337,22 +391,80 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     }
 
     /**
-     * fire「任务开始」事件（TASK_START / 新待办）。
+     * fire「任务开始」事件（TASK_START / 新待办，spec §11.3 码 3）。
      *
-     * <p>引擎契约（spec §4.4 / Go 参考实现）：事件在任务行**落库之后**触发，事件
+     * <p>引擎契约（spec §4.4 / 规范 11 §11.3 触发时机列）：事件在任务行<b>落库之后</b>触发，事件
      * {@code sourceId = taskId} 必须可被监听器 {@code findTaskById} 反查。故本方法只在
      * {@code saveTask}（分配 taskId）之后调用——{@link CreateTaskHandler} 在 handler 阶段
      * 不再自行 fire（那时 taskId 尚为 null，监听器 sourceId==null 守卫会漏发）。</p>
+     *
+     * <p>直传载荷键按 §11.3 码 3 补齐：{@code instanceId} / {@code taskId} / {@code actors}
+     * （actors 取落库后的参与者行集合，与 {@code saveTask} 写入的 {@code wf_process_task_actor}
+     * 同源；委托自动生效 issues/116 已在 saveTask 前并入集合，故这里读到的就是最终收单人）。</p>
      */
     private void notifyTaskStart(ProcessTask task) {
         if (task == null || task.getTaskId() == null) {
             return;
         }
+        List<String> actors = repository.findTaskActors(task.getTaskId());
+        if (actors == null || actors.isEmpty()) {
+            actors = task.getActorIds();
+        }
         ProcessPublisher.notify(ProcessEvent.builder()
                 .eventType(ProcessEventTypeEnum.PROCESS_TASK_START)
                 .sourceId(task.getTaskId())
+                .data(FlowData.create()
+                        .set(ProcessPublisher.KEY_INSTANCE_ID, task.getProcessInstanceId())
+                        .set(ProcessPublisher.KEY_TASK_ID, task.getTaskId())
+                        .set(ProcessPublisher.KEY_ACTORS, actors == null ? Collections.<String>emptyList() : actors))
                 .build());
     }
+
+    /**
+     * fire「任务办结 / 任务退回」事件（spec §11.3 码 5 {@code TASK_COMPLETE} / 码 6
+     * {@code TASK_REJECT}，issues/132 新增）。
+     *
+     * <p>调用点唯一：{@link #prepareExecution} 里 {@code repository.updateTask(task)} 之后
+     * ——四个办理入口（常规办理 / 跳转 / 退结束 / 退发起人）都汇过这里，任务行的 {@code state}
+     * 就是在这次 updateTask 落库的（契约 1「覆盖全部流转路径」，与 {@link #saveNewTask}
+     * 之于 TASK_START 同构）。</p>
+     *
+     * <p>分派判据＝载荷 {@code submitType}：{@link #REJECT_SUBMIT_TYPES} 命中发 6，其余发 5，
+     * 二者互斥；缺省按 {@code AGREE} 处理（与 {@code EndProcessHandler} 读 submitType 的缺省同口径）。
+     * 「跳转回退」（submitType=4 且目标在上游）本栈仍归 5——引擎不为此做图回溯，
+     * 监听器按载荷 submitType 自判（§11.2 原则 2）。</p>
+     */
+    private void notifyTaskFinished(ProcessInstance instance, ProcessTask task, String operator, FlowData args) {
+        if (task == null || task.getTaskId() == null) {
+            return;
+        }
+        Integer submitType = args == null ? null : args.getInt(FlowConst.SUBMIT_TYPE);
+        if (submitType == null) {
+            submitType = ProcessSubmitTypeEnum.AGREE.getCode();
+        }
+        boolean rejected = REJECT_SUBMIT_TYPES.contains(submitType);
+        ProcessPublisher.notify(ProcessEvent.builder()
+                .eventType(rejected ? ProcessEventTypeEnum.TASK_REJECT : ProcessEventTypeEnum.TASK_COMPLETE)
+                .sourceId(task.getTaskId())
+                .data(FlowData.create()
+                        .set(ProcessPublisher.KEY_INSTANCE_ID,
+                                instance != null ? instance.getInstanceId() : task.getProcessInstanceId())
+                        .set(ProcessPublisher.KEY_TASK_ID, task.getTaskId())
+                        .set(ProcessPublisher.KEY_OPERATOR, operator)
+                        .set(ProcessPublisher.KEY_SUBMIT_TYPE, submitType))
+                .build());
+    }
+
+    /**
+     * 退回族 submitType（共用 {@code TASK_REJECT} 一号，载荷再分）：2 拒绝 / 3 退回上一步 /
+     * 6 退回发起人 / 20 会签拒绝（软拒绝，issues/91 一票否决走这支）。
+     * 0 发起 / 1 同意 / 4 跳转 / 5 重新提交 ⇒ {@code TASK_COMPLETE}。
+     */
+    private static final List<Integer> REJECT_SUBMIT_TYPES = Collections.unmodifiableList(Arrays.asList(
+            ProcessSubmitTypeEnum.REJECT.getCode(),
+            ProcessSubmitTypeEnum.ROLLBACK.getCode(),
+            ProcessSubmitTypeEnum.ROLLBACK_TO_OPERATOR.getCode(),
+            ProcessSubmitTypeEnum.COUNTERSIGN_DISAGREE.getCode()));
 
     private <T> T runInTx(ITransactionTemplate.Supplier<T> action) {
         ITransactionTemplate tx = ServiceContext.find(ITransactionTemplate.class);
