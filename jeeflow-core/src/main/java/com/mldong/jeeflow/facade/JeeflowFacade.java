@@ -700,10 +700,16 @@ public class JeeflowFacade {
         }
         java.util.Collection<?> coll = (java.util.Collection<?>) actorIds;
         String[] ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
+        // issues/141 G10「空不创建行」（spec 06 §2.10）：手动腿与引擎腿走同一个归一函数，
+        // 空串/纯空白/空元素一律丢弃；丢完为空 ⇒ 不建行、不 fire，并且与上面那条
+        // "空集合＝actorIds 缺失"同档（沿用既有文案，不新造错误语义）。
+        java.util.List<String> actors = StringUtils.normalizeCcActors(ccArr);
+        if (actors.isEmpty()) return error("actorIds 缺失");
         // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：手动腿与引擎腿同一条判据
         // （spec §11.7「三条入口共用一支」）——已有 cc 行的 (实例, 人) 跳过，不新增行、
         // 不重置未读、不更新原行时间；只有实际新建的子集拿去 fire。
-        java.util.List<String> created = repository.createCcInstanceIfAbsent(instanceId, operator, ccArr);
+        java.util.List<String> created = repository.createCcInstanceIfAbsent(instanceId, operator,
+                actors.toArray(new String[0]));
         // CC_CREATE（spec §11.3 码 4 ＋ §11.2 原则 1 ＋ §11.6 java 段）：手动抄送腿也必须 fire——
         // 码值表达"新增了一条抄送记录"这个事实，不表达谁触发（引擎 f_ccActors／办理 tf_ccActors／
         // 门面手动共用同一支，逐抄送人一次）。java 此前只在引擎侧 fire、手动支静默，是全联邦

@@ -152,9 +152,16 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
         }
         if (ccArr != null && ccArr.length > 0) {
+            // issues/141 G10「空不创建行」（spec 06 §2.10）：逗号串与数组两形共用同一条归一腿——
+            // 空串/纯空白/数组里的空元素一律丢弃，丢完为空 ⇒ 不建 cc 行、也不 fire 码 4。
+            // java 旧形状是 "".split(",") 得到一个空元素 ⇒ 落一条 actor_id='' 的行（129 那族
+            // "空归属值"的病根），归一放在漏斗这一层，两仓写侧还各有一层兜底（见下）。
+            List<String> actors = StringUtils.normalizeCcActors(ccArr);
+            if (actors.isEmpty()) return;
             // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：同一 (实例, 被抄送人) 已有 cc 行时
             // 跳过——不新增行、不重置未读、不更新原行时间；新建子集才拿去 fire。
-            List<String> created = repository.createCcInstanceIfAbsent(instanceId, operator, ccArr);
+            List<String> created = repository.createCcInstanceIfAbsent(instanceId, operator,
+                    actors.toArray(new String[0]));
             // CC_CREATE（issues/102 新增，六语言统一；spec §11.3 码 4）：逐抄送人 fire，与
             // createCcInstance 逐行 INSERT 的粒度一一对应（对齐 PHP 参考实现 v1.3.8）。
             // sourceId=instanceId，ccActorId=抄送人 id（直传事件体，监听器免反查 cc 表）。

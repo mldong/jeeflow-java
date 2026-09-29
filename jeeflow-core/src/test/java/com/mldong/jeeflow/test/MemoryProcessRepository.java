@@ -154,8 +154,11 @@ public class MemoryProcessRepository implements IProcessRepository {
         // 同一 (实例, 被抄送人) 已有 cc 行 ⇒ 跳过——不新增行、不重置未读（state 保持原值）、
         // 不更新原行时间（createTime/updateTime 逐字不变）。判重在写侧，查询侧不引入去重。
         List<CcRow> rows = ccInstances.computeIfAbsent(instanceId, k -> new ArrayList<>());
-        for (String actorId : actorIds) {
-            if (actorId == null || ccRowOf(rows, actorId) != null) continue;
+        for (String rawActorId : actorIds) {
+            // issues/141 G10「空不创建行」：与 JdbcProcessRepository 同一条判据——
+            // 空串/纯空白/null 丢弃，落库值取 trim 后的串（两仓必须同答案，issues/117 场景 27）。
+            String actorId = rawActorId == null ? null : rawActorId.trim();
+            if (actorId == null || actorId.isEmpty() || ccRowOf(rows, actorId) != null) continue;
             LocalDateTime now = LocalDateTime.now();
             rows.add(new CcRow(actorId, now, now));
         }

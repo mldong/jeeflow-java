@@ -372,4 +372,95 @@ public class JdbcCcOwnershipIdempotentTest {
         assertEquals("重复的 8601 不新增", Arrays.asList("8601", "8602", "8603"),
                 repo.findCcActorIds(instanceId));
     }
+
+    // ═══ G10：空抄送人不建 cc 行（owner 2026-09-29 拍「空不创建行」，spec 06 §2.10） ═══
+
+    /**
+     * 手动腿给全空白 ⇒ 库里一行都不许有、码 4 一支都不发。
+     * java 旧形状：{@code Arrays.asList("")} → {@code actor_id=''} 真落一行——
+     * 空归属值正是 issues/129 那族"空 operator 读全库"的病根，不能从抄送侧继续灌。
+     */
+    @Test
+    public void blankCcActorsCreateNoRowAtAll() throws Exception {
+        long instanceId = newInstance("CC141-G10-ALL-BLANK");
+        ccEvents.clear();
+
+        Map<String, Object> resp = facade.flow("processInstance/createCCInstance", args(
+                "processInstanceId", instanceId, "operator", "zhangsan",
+                "actorIds", Arrays.asList("", "   ")));
+
+        assertEquals("G10：全空白与空集合同档（spec 06 §2.10）", "actorIds 缺失", resp.get("msg"));
+        assertEquals("G10：cc 表必须零行", 0, ccRowCount(instanceId));
+        assertEquals("G10：actor 集合必须为空", Arrays.asList(), repo.findCcActorIds(instanceId));
+        assertEquals("G10：全空白不得 fire 码 4", 0, ccEvents.size());
+    }
+
+    /** 混着给：只丢空元素，有效的人照旧落行＋fire（逗号串与数组两形同判据在 core 侧钉）。 */
+    @Test
+    public void blankElementsAreDroppedValidOnesRemain() throws Exception {
+        long instanceId = newInstance("CC141-G10-MIXED");
+        ccEvents.clear();
+
+        manualCc(instanceId, "8701", "", "  ", "8702");
+
+        assertEquals("G10：空元素丢弃、有效元素保留", Arrays.asList("8701", "8702"),
+                repo.findCcActorIds(instanceId));
+        assertEquals("G10：库里只有两行", 2, ccRowCount(instanceId));
+        assertEquals("G10：fire 的入参只含有效的人", Arrays.asList("8701", "8702"), ccActorIdsOf(ccEvents));
+    }
+
+    /**
+     * 写侧兜底：绕过引擎/门面直连仓储时，空串／纯空白／{@code null} 同样建不出行。
+     * 只修漏斗（{@code handleCcActors}）不修写侧，第三方仓储直投就还能灌进空值——本条钉第二层。
+     */
+    @Test
+    public void repoWritePathAlsoDropsBlankActors() throws Exception {
+        long instanceId = newInstance("CC141-G10-REPO");
+
+        repo.createCcInstance(instanceId, "zhangsan", "", "   ", null, "8801");
+
+        assertEquals("G10：SQL 仓写侧空串/纯空白/null 都不建行", Arrays.asList("8801"),
+                repo.findCcActorIds(instanceId));
+        assertEquals("G10：只落那一行", 1, ccRowCount(instanceId));
+    }
+
+    /** 落库值取 trim 后的串：{@code " 8901 "} 与 {@code "8901"} 是同一个人（与 G2 判重咬合）。 */
+    @Test
+    public void ccActorValueIsTrimmedAndHitsTheDedupRule() throws Exception {
+        long instanceId = newInstance("CC141-G10-TRIM");
+        repo.createCcInstance(instanceId, "zhangsan", " 8901 ");
+        assertEquals("G10：入库值应是 trim 后的串", Arrays.asList("8901"), repo.findCcActorIds(instanceId));
+
+        ccEvents.clear();
+        tick();
+        manualCc(instanceId, "8901");
+
+        assertEquals("G10：带空格与不带空格判为同一人 ⇒ 不新增行", 1, ccRowCount(instanceId));
+        assertEquals("G10：判重命中 ⇒ 不 fire 码 4", 0, ccEvents.size());
+    }
+
+    /** {@code createCcInstanceIfAbsent} 返回的子集也不得含空值——子集直接拿去 fire。 */
+    @Test
+    public void ifAbsentSubsetExcludesBlankActors() throws Exception {
+        long instanceId = newInstance("CC141-G10-SUBSET");
+
+        List<String> created = repo.createCcInstanceIfAbsent(instanceId, "zhangsan",
+                "", "8951", "  ", " 8952 ");
+
+        assertEquals("G10：实际新建子集只含有效且 trim 后的人", Arrays.asList("8951", "8952"), created);
+        assertEquals("G10：子集与库里真行一致", Arrays.asList("8951", "8952"), repo.findCcActorIds(instanceId));
+    }
+
+    /** 反向哨兵：判据只吃空值，不吃 {@code "0"} 这类"看起来像空"的正常 id。 */
+    @Test
+    public void normalActorIdsAreNotMistakenForBlank() throws Exception {
+        long instanceId = newInstance("CC141-G10-SENTINEL");
+        ccEvents.clear();
+
+        manualCc(instanceId, "0", "user-1");
+
+        assertEquals("G10 只丢空串/纯空白：'0' 不得被吃掉", Arrays.asList("0", "user-1"),
+                repo.findCcActorIds(instanceId));
+        assertEquals("反向哨兵：照旧逐人 fire", 2, ccEvents.size());
+    }
 }

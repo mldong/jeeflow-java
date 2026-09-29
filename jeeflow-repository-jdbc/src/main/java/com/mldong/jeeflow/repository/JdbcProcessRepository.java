@@ -355,8 +355,12 @@ public class JdbcProcessRepository implements IProcessRepository {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             Timestamp now = new Timestamp(System.currentTimeMillis());
-            for (String actorId : actorIds) {
-                if (actorId == null || existing.contains(actorId)) continue;
+            for (String rawActorId : actorIds) {
+                // issues/141 G10「空不创建行」（spec 06 §2.10）：空串/纯空白/null 一律丢弃，
+                // 落库值取 trim 后的串——绕过引擎漏斗直连仓储的调用方也建不出 actor_id='' 的行，
+                // 且 " 123 " 与 "123" 判为同一人（与上面的写侧判重同一条尺子）。
+                String actorId = rawActorId == null ? null : rawActorId.trim();
+                if (actorId == null || actorId.isEmpty() || existing.contains(actorId)) continue;
                 ps.setLong(1, nextId());
                 ps.setLong(2, instanceId);
                 ps.setString(3, actorId);

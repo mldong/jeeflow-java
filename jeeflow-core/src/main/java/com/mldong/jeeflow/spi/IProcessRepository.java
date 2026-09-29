@@ -43,6 +43,14 @@ public interface IProcessRepository {
     List<ProcessTask> findDoneTasks(Long instanceId, String[] taskNames);
     List<ProcessTask> findHistoryTasks(Long instanceId);
 
+    /**
+     * 建 cc 行的最底层写入口（{@code wf_process_cc_instance}）。
+     *
+     * <p>issues/141 G10「空不创建行」（spec 06 §2.10）：入参里的<b>空串、纯空白、{@code null}
+     * 一律丢弃</b>，落库值取 trim 后的串。判据要落在这一层而不只落在引擎漏斗里——
+     * 绕过 {@code handleCcActors} 直连仓储的调用方（集成层、第三方仓储消费者）同样不得
+     * 把空归属值灌进 {@code actor_id}，那正是 issues/129 那族"空 operator 读全库"的病根。</p>
+     */
     void createCcInstance(Long instanceId, String creator, String... actorIds);
     void updateCcStatus(Long instanceId, String actorId);
 
@@ -75,12 +83,11 @@ public interface IProcessRepository {
     default List<String> createCcInstanceIfAbsent(Long instanceId, String creator, String... actorIds) {
         List<String> existing = findCcActorIds(instanceId);
         List<String> fresh = new java.util.ArrayList<>();
-        if (actorIds != null) {
-            for (String actorId : actorIds) {
-                if (actorId == null) continue;
-                if (existing != null && existing.contains(actorId)) continue;
-                if (!fresh.contains(actorId)) fresh.add(actorId);
-            }
+        // issues/141 G10「空不创建行」（spec 06 §2.10）：先过归一腿——空串/纯空白/null 丢弃，
+        // 值取 trim 后的串（" 123 " 与 "123" 是同一个人，也才与上面的判重咬合）。
+        for (String actorId : com.mldong.jeeflow.util.StringUtils.normalizeCcActors(actorIds)) {
+            if (existing != null && existing.contains(actorId)) continue;
+            if (!fresh.contains(actorId)) fresh.add(actorId);
         }
         if (!fresh.isEmpty()) {
             createCcInstance(instanceId, creator, fresh.toArray(new String[0]));
