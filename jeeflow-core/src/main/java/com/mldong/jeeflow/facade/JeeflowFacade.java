@@ -698,12 +698,12 @@ public class JeeflowFacade {
         if (!(actorIds instanceof java.util.Collection) || ((java.util.Collection<?>) actorIds).isEmpty()) {
             return error("actorIds 缺失");
         }
-        java.util.Collection<?> coll = (java.util.Collection<?>) actorIds;
-        String[] ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
-        // issues/141 G10「空不创建行」（spec 06 §2.10）：手动腿与引擎腿走同一个归一函数，
-        // 空串/纯空白/空元素一律丢弃；丢完为空 ⇒ 不建行、不 fire，并且与上面那条
-        // "空集合＝actorIds 缺失"同档（沿用既有文案，不新造错误语义）。
-        java.util.List<String> actors = StringUtils.normalizeCcActors(ccArr);
+        // issues/141 G10「空不创建行」（spec 06 §2.10）＋ issues/142 B 批（§2.11 尾注"复用同一枚单点"）：
+        // 手动腿与引擎腿走同一支归一（{@code StringUtils.normalizeActors}），空串/纯空白/空元素一律丢弃；
+        // 丢完为空 ⇒ 不建行、不 fire，并且与上面那条"空集合＝actorIds 缺失"同档（沿用既有文案，不新造错误语义）。
+        // 顺带堵掉旧形状的崩溃：原先 {@code coll.stream().map(Object::toString)} 遇到 {@code null}
+        // 元素直接 NPE（门面 catch 成 code=99999999），归一腿要求的是"丢弃该元素"，不是整条失败。
+        java.util.List<String> actors = StringUtils.normalizeActorArg(actorIds);
         if (actors.isEmpty()) return error("actorIds 缺失");
         // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：手动腿与引擎腿同一条判据
         // （spec §11.7「三条入口共用一支」）——已有 cc 行的 (实例, 人) 跳过，不新增行、
@@ -725,7 +725,11 @@ public class JeeflowFacade {
 
     private Map<String, Object> updateCCStatus(Map<String, Object> args) {
         Long instanceId = toLong(args.get("processInstanceId"));
-        String operator = operatorArg(args);
+        // issues/142 B 批（spec 06 §2.11 第 4 行）：已读判据的 operator 也是归属值，
+        // 入参归一后再比——cc 行落的是 trim 后的串，拿未 trim 的原值比就打不中自己那一行；
+        // 而空 operator 会把 state=1 打到历史 actor_id='' 的脏行上（仓储写侧另挡一层，两层都挡）。
+        String operator = StringUtils.normalizeActor(operatorArg(args));
+        if (operator == null) return error("operator 必填");
         repository.updateCcStatus(instanceId, operator);
         return ok();
     }
@@ -896,6 +900,9 @@ public class JeeflowFacade {
     private Map<String, Object> taskSurrogate(Map<String, Object> args) {
         Long taskId = toLong(args.get("processTaskId"));
         java.util.List<String> actors = toStringList(args.get("actorIds"));
+        // 主键档与归属值档分得很清楚（spec 06 §2.11「主键类参数另判一档」）：
+        // processTaskId 缺失/空串 ⇒ 响亮报错（{@code toLong("")} 得 null 走这一档），
+        // 绝不拿 ''/0 当 id 往下落库；归属值丢完为空 ⇒ 同一支"缺参数"信封，两条都不落。
         if (taskId == null || actors.isEmpty()) return error("processTaskId/actorIds 缺失");
         repository.addTaskActor(taskId, actors);
         return ok();
@@ -944,10 +951,15 @@ public class JeeflowFacade {
         Long taskId = toLong(args.get(FlowConst.PROCESS_TASK_ID_KEY));
         String operator = toStr(args.get("operator"));
         if (StringUtils.isBlank(operator)) return error("operator 必填");
-        String fromActor = toStr(args.get("fromActor"));
-        String toActor = toStr(args.get("toActor"));
-        if (StringUtils.isBlank(fromActor)) return error("fromActor 必填");
-        if (StringUtils.isBlank(toActor)) return error("toActor 必填");
+        // issues/142 B 批（spec 06 §2.11 第 2 行）：fromActor/toActor 是归属值，入参先归一再用作
+        // 删除与插入（硬要求②"落库与比较一律取 trim 后的值"）。旧形状只 isBlank 判必填、
+        // 存的是未 trim 的原值 ⇒ " leader " 与库里的 "leader" 判不成同一个人，转办直接办不成，
+        // 侥幸办成的那条又把带空格的人钉进 actor_id，与 §4 的写侧判重错开成两行。
+        // 必填档沿用既有文案（"fromActor 必填"/"toActor 必填"），不新造错误码或错误语义。
+        String fromActor = StringUtils.normalizeActor(toStr(args.get("fromActor")));
+        String toActor = StringUtils.normalizeActor(toStr(args.get("toActor")));
+        if (fromActor == null) return error("fromActor 必填");
+        if (toActor == null) return error("toActor 必填");
         ProcessTask task = taskId == null ? null : repository.findTaskById(taskId);
         if (task == null) return error("任务不存在");
         if (!isPrivilegedOperator(operator) && !operator.equals(fromActor)) return error("无权限转办该任务");
@@ -1025,16 +1037,11 @@ public class JeeflowFacade {
     }
 
     private static java.util.List<String> toStringList(Object val) {
-        java.util.List<String> list = new ArrayList<>();
-        if (val instanceof java.util.Collection) {
-            for (Object o : (java.util.Collection<?>) val) list.add(String.valueOf(o));
-        } else if (val instanceof String && !((String) val).isEmpty()) {
-            for (String s : ((String) val).split(",")) {
-                String t = s.trim();
-                if (!t.isEmpty()) list.add(t);
-            }
-        }
-        return list;
+        // issues/142 B 批（spec 06 §2.11 第 1＋3 行）：逗号串与数组两形过同一枚尺子。
+        // 反面形状是"两把尺子"——串腿 trim＋丢空、数组腿 String.valueOf(o) 不 trim 不丢空、
+        // null 元素还串化成 "null" 落进归属列。判据本体在 StringUtils.normalizeActors（唯一单点），
+        // 与抄送腿共用，不在这边另抄一份。
+        return StringUtils.normalizeActorArg(val);
     }
 
     // ═══ 流程设计（需扩展仓储） ═══

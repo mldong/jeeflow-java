@@ -16,6 +16,7 @@ import com.mldong.jeeflow.interceptor.FlowInterceptor;
 import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.model.TaskModel;
 import com.mldong.jeeflow.util.FlowUtil;
+import com.mldong.jeeflow.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -81,19 +82,13 @@ public class CreateTaskHandler implements IHandler {
         List<String> actors = new ArrayList<>();
         FlowData args = execution.getArgs();
         // 1. 动态指定下一节点处理人优先（v1.0.1：对齐 boot2/boot3 tf_nextNodeOperator）
+        // issues/142 B 批（spec 06 §2.11 第 3 行）：f_nextNodeOperator／tf_nextNodeOperator 的
+        // 逗号串与数组两形必须同判据，判据本体复用 §2.10 那枚单点（StringUtils.normalizeActorArg）。
+        // 旧形状的数组腿走 {@code String.valueOf(o)}：带 null 元素时被串化成字符串 "null" 当参与者
+        // 落进归属列（五栈同病，分别串成 "null"/"None"/"<nil>"/.NET 类型名）——现在按"丢弃该元素"处理。
         Object nextNodeOperator = args.get(FlowConst.NEXT_NODE_OPERATOR);
         if (nextNodeOperator != null && !nextNodeOperator.toString().isEmpty()) {
-            if (nextNodeOperator instanceof Collection) {
-                for (Object o : (Collection<?>) nextNodeOperator) {
-                    String t = String.valueOf(o).trim();
-                    if (!t.isEmpty() && !actors.contains(t)) actors.add(t);
-                }
-            } else {
-                for (String a : nextNodeOperator.toString().split(",")) {
-                    String t = a.trim();
-                    if (!t.isEmpty() && !actors.contains(t)) actors.add(t);
-                }
-            }
+            actors.addAll(StringUtils.normalizeActorArg(nextNodeOperator));
             return actors;
         }
         // 2. 固定指派 assignee——token 即变量 key，能替换就换，换不了就是字面量（v1.0.1 对齐 boot3 args.get(token, token)）

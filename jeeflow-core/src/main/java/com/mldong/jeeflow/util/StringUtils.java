@@ -31,19 +31,25 @@ public final class StringUtils {
     }
 
     /**
-     * 抄送人集合归一（issues/141 G10「空不创建行」，spec 06-facade.md §2.10）：
-     * 三条入口（发起 {@code f_ccActors}／办理 {@code tf_ccActors}／门面手动
-     * {@code createCCInstance}）解析出的<b>逗号串与数组两种形态</b>都先过这一支——
-     * 逐元素 trim，<b>空串与纯空白丢弃</b>，同一次调用内的重复折叠（顺序保持）。
+     * 归属值（actor id）集合归一——<b>全栈唯一的一枚尺子</b>
+     * （issues/141 G10 · spec 06 §2.10 抄送侧落地，issues/142 B 批 · spec 06 §2.11 逐字搬到任务侧）。
      *
-     * <p>丢完为空 ⇒ 调用方不得建 cc 行、也不得 fire 码 4。</p>
+     * <p>判据（逗号串与数组<b>两形同判</b>）：逐元素 trim，<b>空串与纯空白丢弃</b>，
+     * 同一次调用内的重复折叠（顺序保持）。丢完为空 ⇒ 调用方不得建行、也不得 fire 码 4。</p>
      *
-     * <p>java 尤其需要这一条：{@code "".split(",")} 在 Java 里得到<b>一个空元素</b>而不是零个
-     * ⇒ 旧形状落出一条 {@code actor_id=''} 的 cc 行。空归属值正是 issues/129 那族
-     * "空 operator 读全库"的病根，不能从抄送侧继续往里灌。落库/比较一律用 trim 后的值，
-     * {@code " 123 "} 与 {@code "123"} 判为同一个人，与 G2 的写侧判重咬合。</p>
+     * <p>判空<b>一律</b> {@code trim().isEmpty()}：严禁借语言自带的假值判据
+     * （{@code "0"} 这类"看起来像空"的正常 id 必须留下，且 {@code "0"} 与 {@code "00"}
+     * 是两个不同的人）。落库与比较一律取 trim 后的值——{@code " 123 "} 与 {@code "123"}
+     * 判为同一个人，才与写侧判重咬合（不然同一人落两行）。</p>
+     *
+     * <p>为什么这一支必须只有一枚：{@code actor_id} 是归属列，空归属值正是 issues/129 那族
+     * "空 operator 读全库"的病根；抄送表与参与者表是同一族病灶的两张表。判据抄第二份迟早分叉
+     * （php 本轮实测到"归一函数内部严格比较、仓储写侧却用松散 {@code in_array}"）。</p>
+     *
+     * @param raw 原始归属值数组，元素可为 {@code null}（{@code null} 丢弃，<b>不得</b>串化成 {@code "null"}）
+     * @return 归一后的归属值列表（保序、去重、无空值）；入参为 {@code null} 时返回空列表
      */
-    public static java.util.List<String> normalizeCcActors(String... raw) {
+    public static java.util.List<String> normalizeActors(String... raw) {
         java.util.List<String> out = new java.util.ArrayList<String>();
         if (raw == null) return out;
         for (String actorId : raw) {
@@ -53,6 +59,76 @@ public final class StringUtils {
             if (!out.contains(trimmed)) out.add(trimmed);
         }
         return out;
+    }
+
+    /**
+     * 入参形态收敛＋归一：门面/引擎/handler 三条腿的 actor 入参（{@code actorIds}／
+     * {@code f_ccActors}／{@code tf_ccActors}／{@code f_nextNodeOperator}／{@code tf_nextNodeOperator}）
+     * 一律过这一支——<b>逗号串与数组两形走同一枚尺子</b>（{@link #normalizeActors}）。
+     *
+     * <ul>
+     *   <li>{@code java.util.Collection} ⇒ 逐元素收敛为字符串：{@code null} 元素<b>留 null</b>
+     *       交给尺子丢弃（严禁 {@code String.valueOf(null)} 变成 {@code "null"} 落进归属列，
+     *       也严禁 {@code Object::toString} 在 null 元素上抛 NPE）；数字元素收敛成字符串后照样 trim；</li>
+     *   <li>{@code String} ⇒ 按逗号切分（含 java 的 {@code "".split(",")} 得到一个空元素那个坑——
+     *       空元素由尺子丢掉，因此空串入参得到空集合）；</li>
+     *   <li>其它标量 ⇒ 视作单个字符串（与 {@code toStringList} 逗号串腿同档）；</li>
+     *   <li>{@code null} ⇒ 空集合。</li>
+     * </ul>
+     *
+     * @param raw 原始入参（数组/集合、逗号串、标量或 null）
+     * @return 归一后的归属值列表（保序、去重、无空值），永不为 {@code null}
+     */
+    public static java.util.List<String> normalizeActorArg(Object raw) {
+        if (raw == null) return new java.util.ArrayList<String>();
+        if (raw instanceof java.util.Collection) {
+            java.util.Collection<?> coll = (java.util.Collection<?>) raw;
+            String[] values = new String[coll.size()];
+            int i = 0;
+            for (Object o : coll) values[i++] = o == null ? null : String.valueOf(o);
+            return normalizeActors(values);
+        }
+        if (raw instanceof String) {
+            // java 坑位："".split(",") 得到的是「一个空元素」而不是零个 ⇒ 旧形状落出 actor_id='' 的行。
+            // 这里不特判空串，交给 normalizeActors 丢元素，两形因此共用同一条判据。
+            return normalizeActors(((String) raw).split(","));
+        }
+        return normalizeActors(String.valueOf(raw));
+    }
+
+    /**
+     * 单个归属值归一（标量档，与 {@link #normalizeActors} 同一条尺子）：trim；
+     * 空串/纯空白/{@code null} ⇒ 返回 {@code null}，由调用方按"缺参数"档处理。
+     *
+     * <p>用于 {@code processTask/transfer} 的 {@code fromActor}/{@code toActor} 这类
+     * <b>必填</b>归属值：spec 06 §2.11 要求"落库与比较一律取 trim 后的值"——
+     * 摘人那一条 {@code DELETE} 与判据用的 {@code contains} 都拿原值比的话，
+     * {@code " leader "} 与库里的 {@code "leader"} 判不成同一个人。</p>
+     *
+     * <p>判空仍是 {@code trim().isEmpty()}：{@code "0"} 是合法 id，不得当成空。</p>
+     *
+     * @param raw 原始值（可为 null）
+     * @return trim 后的值；空串/纯空白/null 返回 {@code null}
+     */
+    public static String normalizeActor(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * 抄送人集合归一（issues/141 G10 已落地的公开入口，<b>保留原名转发到 {@link #normalizeActors}</b>）。
+     *
+     * <p>spec 06 §2.11 要求任务侧复用同一枚单点、不要再抄第二份；名字里的 "Cc" 已不贴合
+     * 实际覆盖面，故新增 {@code normalizeActors} 作通用名，本成员原样转发维持 API 面不破。</p>
+     *
+     * @deprecated 语义已扩到全部归属值（抄送／参与者／nextNodeOperator），改用
+     *             {@link #normalizeActors(String...)} 或 {@link #normalizeActorArg(Object)}；
+     *             本转发保留至下一大版本。
+     */
+    @Deprecated
+    public static java.util.List<String> normalizeCcActors(String... raw) {
+        return normalizeActors(raw);
     }
 
     /**

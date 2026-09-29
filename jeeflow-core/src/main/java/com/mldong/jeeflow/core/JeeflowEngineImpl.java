@@ -148,20 +148,15 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     /** 抄送处理（issues/47 E19 抽取）：f_ccActors/tf_ccActors 统一走此逻辑 */
     private void handleCcActors(Long instanceId, String operator, Object ccUserIds) {
         if (ccUserIds == null) return;
-        String[] ccArr = null;
-        if (ccUserIds instanceof String) {
-            ccArr = ((String) ccUserIds).split(",");
-        } else if (ccUserIds instanceof Collection) {
-            Collection<?> coll = (Collection<?>) ccUserIds;
-            ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
-        }
-        if (ccArr != null && ccArr.length > 0) {
-            // issues/141 G10「空不创建行」（spec 06 §2.10）：逗号串与数组两形共用同一条归一腿——
-            // 空串/纯空白/数组里的空元素一律丢弃，丢完为空 ⇒ 不建 cc 行、也不 fire 码 4。
-            // java 旧形状是 "".split(",") 得到一个空元素 ⇒ 落一条 actor_id='' 的行（129 那族
-            // "空归属值"的病根），归一放在漏斗这一层，两仓写侧还各有一层兜底（见下）。
-            List<String> actors = StringUtils.normalizeCcActors(ccArr);
-            if (actors.isEmpty()) return;
+        // issues/141 G10「空不创建行」（spec 06 §2.10）＋ issues/142 B 批（spec 06 §2.11 尾注）：
+        // 逗号串与数组两形共用同一条归一腿，且与任务侧（addCandidate/surrogate/transfer/
+        // nextNodeOperator）用的是<b>同一枚单点</b> {@code StringUtils.normalizeActorArg}——
+        // 空串/纯空白/数组里的空元素一律丢弃，丢完为空 ⇒ 不建 cc 行、也不 fire 码 4。
+        // 旧形状两处病："".split(",") 得到一个空元素 ⇒ 落一条 actor_id='' 的行（129 那族"空归属值"
+        // 的病根）；数组腿 {@code Object::toString} 遇 null 元素直接 NPE。归一腿要求的是丢弃，不是崩。
+        // 漏斗这一层之外，两仓写侧还各有一层兜底（两层都挡，硬要求①）。
+        List<String> actors = StringUtils.normalizeActorArg(ccUserIds);
+        if (!actors.isEmpty()) {
             // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：同一 (实例, 被抄送人) 已有 cc 行时
             // 跳过——不新增行、不重置未读、不更新原行时间；新建子集才拿去 fire。
             List<String> created = repository.createCcInstanceIfAbsent(instanceId, operator,

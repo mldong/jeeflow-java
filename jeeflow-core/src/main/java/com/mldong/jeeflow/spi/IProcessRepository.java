@@ -44,14 +44,24 @@ public interface IProcessRepository {
     List<ProcessTask> findHistoryTasks(Long instanceId);
 
     /**
-     * 建 cc 行的最底层写入口（{@code wf_process_cc_instance}）。
+     * 抄送人（{@code actor_id}）写侧兜底（issues/141 G10 · spec 06 §2.10）。
      *
-     * <p>issues/141 G10「空不创建行」（spec 06 §2.10）：入参里的<b>空串、纯空白、{@code null}
-     * 一律丢弃</b>，落库值取 trim 后的串。判据要落在这一层而不只落在引擎漏斗里——
-     * 绕过 {@code handleCcActors} 直连仓储的调用方（集成层、第三方仓储消费者）同样不得
-     * 把空归属值灌进 {@code actor_id}，那正是 issues/129 那族"空 operator 读全库"的病根。</p>
+     * <p>入参里的<b>空串、纯空白、{@code null} 一律丢弃</b>，落库值取 trim 后的串。判据要落在这一层
+     * 而不只落在引擎漏斗里——绕过 {@code handleCcActors} 直连仓储的调用方（集成层、第三方仓储消费者）
+     * 同样不得把空归属值灌进 {@code actor_id}，那正是 issues/129 那族"空 operator 读全库"的病根。</p>
      */
     void createCcInstance(Long instanceId, String creator, String... actorIds);
+
+    /**
+     * 把某抄送人的一行标成已读（{@code state} 0→1）。
+     *
+     * <p><b>归属值空值义务</b>（issues/142 B 批 · spec 06 §2.11 第 4 行）：{@code actorId} 也是归属值，
+     * 实现方<b>必须</b>先按 {@code trim()} 归一再比较（{@code " 123 "} 与 {@code "123"} 是同一个人，
+     * 不 trim 就打不中自己那一行）；{@code actorId} 为空串／纯空白／{@code null} 时<b>不得命中任何行</b>
+     * ——否则这条 UPDATE 会把 {@code state=1} 打到历史 {@code actor_id=''} 的脏行上，
+     * 等于替脏数据"洗白"。门面腿（{@code processInstance/updateCCStatus}）已先归一，
+     * 本层是"两层都挡"的第二层（§2.10 硬要求①逐字搬过来）。</p>
+     */
     void updateCcStatus(Long instanceId, String actorId);
 
     /**
@@ -83,9 +93,10 @@ public interface IProcessRepository {
     default List<String> createCcInstanceIfAbsent(Long instanceId, String creator, String... actorIds) {
         List<String> existing = findCcActorIds(instanceId);
         List<String> fresh = new java.util.ArrayList<>();
-        // issues/141 G10「空不创建行」（spec 06 §2.10）：先过归一腿——空串/纯空白/null 丢弃，
-        // 值取 trim 后的串（" 123 " 与 "123" 是同一个人，也才与上面的判重咬合）。
-        for (String actorId : com.mldong.jeeflow.util.StringUtils.normalizeCcActors(actorIds)) {
+        // issues/141 G10「空不创建行」（spec 06 §2.10）＋ issues/142 B 批（§2.11 尾注"复用同一枚单点"）：
+        // 先过归一腿——空串/纯空白/null 丢弃，值取 trim 后的串（" 123 " 与 "123" 是同一个人，
+        // 也才与上面的判重咬合）。判据本体只有 StringUtils.normalizeActors 一枚。
+        for (String actorId : com.mldong.jeeflow.util.StringUtils.normalizeActors(actorIds)) {
             if (existing != null && existing.contains(actorId)) continue;
             if (!fresh.contains(actorId)) fresh.add(actorId);
         }
@@ -96,7 +107,29 @@ public interface IProcessRepository {
     }
 
     List<String> findTaskActors(Long taskId);
+
+    /**
+     * 追加任务参与者（{@code wf_process_task_actor.actor_id}，加签／转办／{@code addCandidate} 都落这一支）。
+     *
+     * <p><b>归属值空值义务</b>（issues/142 B 批 · spec 06 §2.11 第 5 行，与
+     * {@link #createCcInstance} 同一条尺子）：入参集合里的<b>空串、纯空白、{@code null} 一律丢弃</b>，
+     * <b>落库值取 trim 后的串</b>，同一次调用内的重复折叠——
+     * {@code actor_id} 是归属列，空归属值就是 issues/129 那族"空 operator 读全库"的进水口；
+     * 不 trim 还会与写侧判重错开，让 {@code " 123 "} 与 {@code "123"} 同一人落两行。</p>
+     *
+     * <p>判据<b>必须落在仓储这一层</b>而不只落在门面/引擎漏斗里：绕过门面直连仓储的调用方
+     * （集成层、第三方仓储消费者）同样不得灌进空值（§2.10 硬要求①"两层都挡"）。
+     * 判空一律 {@code trim().isEmpty()}，{@code "0"} 这类"看起来像空"的正常 id 是合法参与者，
+     * 不得被丢掉，{@code "0"} 与 {@code "00"} 是两个不同的人。</p>
+     *
+     * <p>参数语义另有一档：{@code taskId} 是<b>主键</b>不是归属值——缺失/空串属调用方写错，
+     * 上层（门面）必须响亮报错，严禁拿 {@code ''}/{@code 0} 当 id 落库（§2.11「主键类参数另判一档」）。</p>
+     *
+     * <p>SQL 仓与内存仓在同一条判据上必须给同一个答案（issues/117 场景 27 那把尺子）。</p>
+     */
     void addTaskActor(Long taskId, List<String> actors);
+
+    /** 移除任务参与者；入参同样按 {@code trim()} 归一后再比（{@code " 123 "} 与 {@code "123"} 同一个人）。 */
     void removeTaskActor(Long taskId, List<String> actors);
 
     // ═══════════════════════════════════════

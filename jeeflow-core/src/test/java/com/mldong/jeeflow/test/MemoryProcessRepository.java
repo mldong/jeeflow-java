@@ -95,8 +95,10 @@ public class MemoryProcessRepository implements IProcessRepository {
             for (ProcessTask task : instance.getTasks()) {
                 if (task.getTaskId() != null) {
                     tasks.put(task.getTaskId(), task);
+                    // 级联覆写与 saveTask 同一条写侧兜底（spec 06 §2.11 第 5 行，两仓同判据）
                     if (task.getActorIds() != null && !task.getActorIds().isEmpty()) {
-                        taskActors.put(task.getTaskId(), new ArrayList<>(task.getActorIds()));
+                        taskActors.put(task.getTaskId(),
+                                new ArrayList<>(normalizeActorValues(task.getActorIds())));
                     }
                 }
             }
@@ -113,8 +115,12 @@ public class MemoryProcessRepository implements IProcessRepository {
     public void saveTask(ProcessTask task) {
         if (task.getTaskId() == null) task.setTaskId(idSeq.getAndIncrement());
         tasks.put(task.getTaskId(), task);
+        // 全量覆写腿（对应 JdbcProcessRepository.saveTaskActors）同样过写侧兜底——只挡 addTaskActor
+        // 就等于留一个后门：委托并入、聚合副本回写都走这一支。
+        // "要不要覆写"仍看<b>原始</b>集合空不空（与 JDBC 的 saveTaskActors 早退同档，两仓同答案），
+        // 覆写进去的值才是归一后的（空串/纯空白/null 丢弃、trim、折叠）。
         if (task.getActorIds() != null && !task.getActorIds().isEmpty()) {
-            taskActors.put(task.getTaskId(), new ArrayList<>(task.getActorIds()));
+            taskActors.put(task.getTaskId(), new ArrayList<>(normalizeActorValues(task.getActorIds())));
         }
     }
 
@@ -154,13 +160,16 @@ public class MemoryProcessRepository implements IProcessRepository {
         // 同一 (实例, 被抄送人) 已有 cc 行 ⇒ 跳过——不新增行、不重置未读（state 保持原值）、
         // 不更新原行时间（createTime/updateTime 逐字不变）。判重在写侧，查询侧不引入去重。
         List<CcRow> rows = ccInstances.computeIfAbsent(instanceId, k -> new ArrayList<>());
-        for (String rawActorId : actorIds) {
-            // issues/141 G10「空不创建行」：与 JdbcProcessRepository 同一条判据——
-            // 空串/纯空白/null 丢弃，落库值取 trim 后的串（两仓必须同答案，issues/117 场景 27）。
-            String actorId = rawActorId == null ? null : rawActorId.trim();
-            if (actorId == null || actorId.isEmpty() || ccRowOf(rows, actorId) != null) continue;
+        // issues/141 G10「空不创建行」＋ issues/142 B 批（spec 06 §2.11 尾注）：判据复用那一枚单点
+        // （StringUtils.normalizeActors），空串/纯空白/null 丢弃、值取 trim 后的串——两仓必须同答案
+        // （issues/117 场景 27），也不在这里留第二份 trim/判空副本。
+        List<String> existing = com.mldong.jeeflow.util.StringUtils.normalizeActors(
+                rows.stream().map(r -> r.actorId).toArray(String[]::new));
+        for (String actorId : com.mldong.jeeflow.util.StringUtils.normalizeActors(actorIds)) {
+            if (existing.contains(actorId)) continue;
             LocalDateTime now = LocalDateTime.now();
             rows.add(new CcRow(actorId, now, now));
+            existing.add(actorId);
         }
     }
 
@@ -175,10 +184,14 @@ public class MemoryProcessRepository implements IProcessRepository {
     public void updateCcStatus(Long instanceId, String actorId) {
         // 已读：state 0→1（对齐 wf_process_cc_instance.state 语义），issues/141 G2 之后
         // 内存仓的 cc 行也带 state/时间，重复抄送"不重置未读"这一档才测得出来。
+        // issues/142 B 批（spec 06 §2.11 第 4 行）：比较取 trim 后的值，空串/纯空白/null 一行都不动
+        // ——与 JdbcProcessRepository 同一条判据（两仓同答案，issues/117 场景 27）。
+        String normalized = com.mldong.jeeflow.util.StringUtils.normalizeActor(actorId);
+        if (normalized == null) return;
         List<CcRow> rows = ccInstances.get(instanceId);
         if (rows == null) return;
         for (CcRow row : rows) {
-            if (row.actorId.equals(actorId)) {
+            if (normalized.equals(row.actorId)) {
                 row.state = 1;
                 row.updateTime = LocalDateTime.now();
             }
@@ -199,13 +212,6 @@ public class MemoryProcessRepository implements IProcessRepository {
     public List<CcRow> ccRowsForTest(Long instanceId) {
         List<CcRow> l = ccInstances.get(instanceId);
         return l == null ? Collections.emptyList() : new ArrayList<>(l);
-    }
-
-    private static CcRow ccRowOf(List<CcRow> rows, String actorId) {
-        for (CcRow row : rows) {
-            if (row.actorId.equals(actorId)) return row;
-        }
-        return null;
     }
 
     /**
@@ -234,8 +240,13 @@ public class MemoryProcessRepository implements IProcessRepository {
     @Override
     public void addTaskActor(Long taskId, List<String> actors) {
         // 追加语义（对齐 boot2/boot3）：去重后追加，不清空原参与者
+        // issues/142 B 批（spec 06 §2.11 第 5 行）：仓储写侧自己再挡一次——空串/纯空白/null 丢弃、
+        // 值取 trim 后的串、同批折叠，判据复用 StringUtils.normalizeActors 那一枚单点。
+        // 旧形状只判重不判空不 trim，绕过门面直连仓储的调用方照样能灌空归属值。
+        List<String> normalized = normalizeActorValues(actors);
+        if (normalized.isEmpty()) return;
         List<String> existing = taskActors.computeIfAbsent(taskId, k -> new ArrayList<>());
-        for (String a : actors) {
+        for (String a : normalized) {
             if (!existing.contains(a)) existing.add(a);
         }
         syncTaskActorIds(taskId, existing);
@@ -248,6 +259,16 @@ public class MemoryProcessRepository implements IProcessRepository {
             existing.removeAll(actors);
             syncTaskActorIds(taskId, existing);
         }
+    }
+
+    /**
+     * 参与者入参归一（issues/142 B 批 · spec 06 §2.11）：判据本体只有一枚
+     * ＝{@code com.mldong.jeeflow.util.StringUtils.normalizeActors}，本方法只做 List→数组的搬运，
+     * <b>不在这里抄第二份 trim/判空</b>（两份判据迟早分叉）。
+     */
+    private static List<String> normalizeActorValues(List<String> actors) {
+        return com.mldong.jeeflow.util.StringUtils.normalizeActors(
+                actors == null ? new String[0] : actors.toArray(new String[0]));
     }
 
     /** issues/114/115：actor 表是权威源，任务聚合副本须同步——JDBC 仓每次加载都从

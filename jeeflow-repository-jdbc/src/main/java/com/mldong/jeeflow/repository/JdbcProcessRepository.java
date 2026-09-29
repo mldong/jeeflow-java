@@ -8,6 +8,7 @@ import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
 import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.spi.IProcessRepository;
+import com.mldong.jeeflow.util.StringUtils;
 import com.mldong.jeeflow.spi.IIdGenerator;
 import com.mldong.jeeflow.spi.PageQuery;
 import com.mldong.jeeflow.spi.PageResult;
@@ -351,16 +352,17 @@ public class JdbcProcessRepository implements IProcessRepository {
         // 直接跳过——不新增行、不重置未读（state 保持原值）、不更新原行时间（不碰 UPDATE，
         // create_time/update_time 逐字不变）。判重放在写侧而不是查询侧：查询保持现状不引入
         // DISTINCT（owner 2026-09-29 拍），历史重复行也不清理。
-        List<String> existing = findCcActorIds(instanceId);
+        // issues/142 B 批（spec 06 §2.11 尾注）：判据复用那一枚单点，不在这里留第二份 trim/判空副本。
+        // 判重两侧都取 trim 后的值（硬要求②），库里万一还有未 trim 的历史行也不会与本次错开成两行。
+        List<String> existing = StringUtils.normalizeActors(findCcActorIds(instanceId).toArray(new String[0]));
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             Timestamp now = new Timestamp(System.currentTimeMillis());
-            for (String rawActorId : actorIds) {
-                // issues/141 G10「空不创建行」（spec 06 §2.10）：空串/纯空白/null 一律丢弃，
+            for (String actorId : StringUtils.normalizeActors(actorIds)) {
+                // issues/141 G10「空不创建行」（spec 06 §2.10）：空串/纯空白/null 一律丢弃、
                 // 落库值取 trim 后的串——绕过引擎漏斗直连仓储的调用方也建不出 actor_id='' 的行，
                 // 且 " 123 " 与 "123" 判为同一人（与上面的写侧判重同一条尺子）。
-                String actorId = rawActorId == null ? null : rawActorId.trim();
-                if (actorId == null || actorId.isEmpty() || existing.contains(actorId)) continue;
+                if (existing.contains(actorId)) continue;
                 ps.setLong(1, nextId());
                 ps.setLong(2, instanceId);
                 ps.setString(3, actorId);
@@ -399,12 +401,17 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     @Override
     public void updateCcStatus(Long instanceId, String actorId) {
+        // issues/142 B 批（spec 06 §2.11 第 4 行）：比较取 trim 后的值（" 123 " 与 "123" 同一个人），
+        // 空串/纯空白/null ⇒ 一行都不动。旧形状直接把入参塞进 WHERE，
+        // 空 operator 会把 state=1 打到历史 actor_id='' 的脏行上（等于替脏数据洗白）。
+        String normalized = StringUtils.normalizeActor(actorId);
+        if (normalized == null) return;
         String sql = "UPDATE wf_process_cc_instance SET state=1, update_time=? WHERE process_instance_id=? AND actor_id=?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setTimestamp(1, new Timestamp(System.currentTimeMillis()));
             ps.setLong(2, instanceId);
-            ps.setString(3, actorId);
+            ps.setString(3, normalized);
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new RuntimeException("更新抄送状态失败", e);
@@ -424,13 +431,22 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     @Override
     public void addTaskActor(Long taskId, List<String> actors) {
-        if (actors == null || actors.isEmpty()) return;
+        // issues/142 B 批（spec 06 §2.11 第 5 行）：仓储写侧自己再挡一次——只修门面腿的话，
+        // 绕过门面/引擎直连仓储的调用方照样能把空归属值灌进 actor_id。旧形状这里只挡 {@code a != null}
+        // ＋判重，空串/纯空白全放行、值也不 trim。判据本体复用 StringUtils.normalizeActors（唯一单点）。
+        List<String> normalized = StringUtils.normalizeActors(
+                actors == null ? new String[0] : actors.toArray(new String[0]));
+        if (normalized.isEmpty()) return;
         try (Connection conn = dataSource.getConnection()) {
-            // 追加语义（对齐 boot2/boot3）：查已有参与者，去重后仅插入新增，不清空原参与者
-            List<String> existing = findTaskActors(conn, taskId);
+            // 追加语义（对齐 boot2/boot3）：查已有参与者，去重后仅插入新增，不清空原参与者。
+            // 比较两侧都取 trim 后的值（硬要求②），" 123 " 与 "123" 判为同一个人，与 §4 写侧判重咬合。
+            List<String> existing = StringUtils.normalizeActors(findTaskActors(conn, taskId).toArray(new String[0]));
             List<String> toAdd = new ArrayList<>();
-            for (String a : actors) {
-                if (a != null && !existing.contains(a)) toAdd.add(a);
+            for (String a : normalized) {
+                if (!existing.contains(a)) {
+                    toAdd.add(a);
+                    existing.add(a);   // 同一次调用内的重复也只落一行
+                }
             }
             insertTaskActors(conn, taskId, toAdd, null);
         } catch (SQLException e) {
@@ -586,11 +602,17 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     /** 纯插入参与者（addTaskActor 追加语义用，不删除已有） */
     private void insertTaskActors(Connection conn, Long taskId, List<String> actors, String createUser) throws SQLException {
-        if (actors == null || actors.isEmpty()) return;
+        // issues/142 B 批（spec 06 §2.11 第 5 行）：真正的插入腿自己再挡一次（trim＋丢空＋同批折叠）。
+        // addTaskActor 与 saveTaskActors（聚合副本/委托并入的全量覆写腿）都汇到这一支，
+        // 只挡 addTaskActor 就等于留一个后门；旧形状在这里无任何值判据，
+        // null 元素撞 actor_id NOT NULL 约束 ⇒ 一人生病、整批停药。
+        List<String> normalized = StringUtils.normalizeActors(
+                actors == null ? new String[0] : actors.toArray(new String[0]));
+        if (normalized.isEmpty()) return;
         String insertSql = "INSERT INTO wf_process_task_actor (id, process_task_id, actor_id, create_time, create_user) VALUES (?,?,?,?,?)";
         try (PreparedStatement ips = conn.prepareStatement(insertSql)) {
             Timestamp now = new Timestamp(System.currentTimeMillis());
-            for (String actorId : actors) {
+            for (String actorId : normalized) {
                 ips.setLong(1, nextId());
                 ips.setLong(2, taskId);
                 ips.setString(3, actorId);
