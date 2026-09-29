@@ -68,6 +68,10 @@ public class EndProcessHandler implements IHandler {
                             newExec.setArgs(execution.getArgs());
                             spm.execute(newExec);
                             execution.addTasks(newExec.getProcessTaskList());
+                            // 父实例这一支流转里若有记录类（custom）节点，它的历史行挂在 newExec 上，
+                            // 同 addTasks 这条腿一起上收（issues/142 · §6.2 第 1 条）——漏一行
+                            // 就是"父实例的那条留痕整支丢掉"，而且 newExec 是局部对象，随即丢弃、无从补写。
+                            execution.addHistoryTasks(newExec.getHistoryTasks());
                             // 父实例若被这一支流转带到终态，**它的**子流程节点会再进一次本处理器，
                             // 登记挂在 newExec 上；newExec 是这里的局部对象，随即丢弃 ⇒ 待播事件
                             // 必须与任务一起上收到外层 execution（同 addTasks 那条腿），漏一行

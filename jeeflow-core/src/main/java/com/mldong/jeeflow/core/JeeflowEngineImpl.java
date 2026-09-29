@@ -110,6 +110,10 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             for (ProcessTask task : exec.getProcessTaskList()) {
                 saveNewTask(task, surrogateProcessName);
             }
+            // 记录类节点历史行落库（§6.2 第 1 条）：发起即命中 custom 的流（start→custom→…）走的是
+            // 这条腿而不是 persistTasks，两条腿都要有 INSERT，漏一条就是"同一条形状在半数路径上又不落库"。
+            // 只 saveTask、不 fire 码 3，判据见 saveHistoryTasks 的方法注释。
+            saveHistoryTasks(exec);
             repository.updateInstance(instance);
             // 实例终态事件（码 2）：发起即办结的短流（start→end、decision 直达结束）与
             // 子流程父实例都从这一支落库后播——顺序判据同 persistTasks 的收口。
@@ -320,12 +324,46 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         for (ProcessTask task : exec.getProcessTaskList()) {
             saveNewTask(task, surrogateProcessName);
         }
+        saveHistoryTasks(exec);
         if (exec.getProcessTask() != null && exec.getProcessTask().getTaskId() != null) {
             repository.updateTask(exec.getProcessTask());
         }
         repository.updateInstance(exec.getProcessInstance());
         // 实例终态事件（码 2）：紧跟上面那次 updateInstance —— 行的 state 已落库才允许播
         flushInstanceEndEvents(exec);
+    }
+
+    /**
+     * 记录类（custom）节点的历史行落库唯一收口（issues/142 · spec 02 §6.2 第 1 条，
+     * owner 2026-09-30 拍：「落历史行＝{@code wf_process_task} 里查得到那一行，
+     * 只在聚合内存对象里 append 一条不算做到」）。
+     *
+     * <p><b>缺陷原形（本方法存在的理由）</b>：{@code CustomModel.exec} 过去把
+     * {@code ProcessInstance.createHistoryTask} 的返回值<b>丢弃</b>，行只进了
+     * {@code instance.tasks}；而这条腿过去只遍历 {@code exec.getProcessTaskList()}，
+     * {@code JdbcProcessRepository.updateInstance} 的级联又只对 {@code taskId != null} 的行发
+     * {@code UPDATE}，{@code ProcessTask.create} 从不赋 taskId ⇒ 那条 {@code task_state=20}
+     * 的行永远没有 INSERT。自家 {@code JeeflowFullTest#test08CustomNode} 对历史行零断言，
+     * 所以测试照不出来。</p>
+     *
+     * <p><b>为什么这里只 {@code saveTask}、不走 {@link #saveNewTask}</b>（"落库"与"fire 码 3"
+     * 的解耦点）：{@code saveNewTask} 是 {@code saveTask} + {@code notifyTaskStart} 的成对腿，
+     * 码 3 {@code PROCESS_TASK_START} 表达的事实是"<b>新待办产生</b>"（spec §11.3）。
+     * 记录类节点按 §6.1 定性"本来就不该有参与者，也不该有待办"，它的行生来是已完成态 ⇒
+     * 落库了也<b>不许</b> fire 码 3，否则待办列表/站内信凭空多一条办不动的单
+     * （§6.1 禁止形状 ②"伪造一条他不该收到的待办"的另一实现形态）。
+     * 委托并入（issues/116）同样跳过——那是给待办收单人用的，历史行不是待办。
+     * 对照实现：python 本轮那条腿 {@code engine.py#_exec_custom_node} 也是
+     * {@code save_task} 而不发码 3。</p>
+     *
+     * <p>排位（{@code updateInstance} 之前）：历史行的 INSERT 要先于实例行的写入与码 2 flush，
+     * 这样"流程已办结"的监听器按 instanceId 反查任务流水时，那条留痕一定查得到
+     * （§11.2 原则 3 的"写在前、播在后"）。</p>
+     */
+    private void saveHistoryTasks(Execution exec) {
+        for (ProcessTask task : exec.drainHistoryTasks()) {
+            repository.saveTask(task);
+        }
     }
 
     /**

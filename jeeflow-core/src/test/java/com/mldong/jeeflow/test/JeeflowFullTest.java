@@ -11,6 +11,9 @@ import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessInstanceStateEnum;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
 import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
+import com.mldong.jeeflow.event.ProcessEvent;
+import com.mldong.jeeflow.event.ProcessEventListener;
+import com.mldong.jeeflow.enums.ProcessEventTypeEnum;
 import com.mldong.jeeflow.spi.IExpressionEvaluator;
 import com.mldong.jeeflow.spi.IUserProvider;
 import com.mldong.jeeflow.spi.IUserProvider.UserInfo;
@@ -21,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.Assert.*;
 
@@ -32,6 +36,15 @@ public class JeeflowFullTest {
     private JeeflowEngine engine;
     private MemoryProcessRepository repo;
     private TestJsonProvider json;
+
+    /**
+     * 码 3（{@code PROCESS_TASK_START}＝"新待办产生"）捕获（issues/142 补的判据用）。
+     *
+     * <p>JUnit 每个 {@code @Test} 新建一枚测试类实例 ⇒ 本列表天然按用例隔离；
+     * 且 {@code new Configuration()} 每次 setUp 都换一枚干净的 {@code SimpleContext}，
+     * 监听器不会串味到别的测试类。</p>
+     */
+    private final List<ProcessEvent> taskStartEvents = new CopyOnWriteArrayList<>();
 
     @Before
     public void setUp() {
@@ -57,6 +70,14 @@ public class JeeflowFullTest {
 
         engine = new JeeflowEngineImpl();
         engine.configure(config);
+
+        // 码 3 捕获（供 test08 判"记录类历史行落库但不 fire 新待办"）：findList 按 isInstance
+        // 扫全部注册项，字符串名注册即可被发现（与集成层 @PostConstruct put 的装配方式一致）
+        ServiceContext.put("taskStartCaptureFull", (ProcessEventListener) event -> {
+            if (event.getEventType() == ProcessEventTypeEnum.PROCESS_TASK_START) {
+                taskStartEvents.add(event);
+            }
+        });
     }
 
     /** 读取 JSON 文件并注册流程定义 */
@@ -555,6 +576,50 @@ public class JeeflowFullTest {
         ProcessInstance updated = repo.findInstanceById(inst.getInstanceId());
         // 流程可能已结束或产生了任务
         assertNotNull(updated);
+
+        // ═══ 以下全是"加"的判据（既有断言一字未改）═══
+        // issues/142 · spec 02 §6.2 第 1 条：这一格原先对历史行**零断言**，所以
+        // "行只进聚合、没有 INSERT 腿"那个洞照不出来。判据打在**仓储读回来的行**上
+        // （内存仓的任务存储只由 saveTask／updateTask／updateInstance 的 taskId!=null 级联写入
+        // ⇒ 把 INSERT 腿摘掉，这一格立刻查不到行）。
+        ProcessTask customRow = null;
+        for (ProcessTask t : repo.findDoneTasks(inst.getInstanceId(), null)) {
+            if ("custom1".equals(t.getTaskName())) {
+                customRow = t;
+            }
+        }
+        assertNotNull("custom 节点的历史行必须落到仓储（§6.2：wf_process_task 里查得到那一行，"
+                + "只在聚合内存对象里 append 一条不算做到）", customRow);
+        assertNotNull("历史行必须经 INSERT 腿分到 taskId"
+                + "（缺陷原形：ProcessTask.create 从不赋 taskId ⇒ updateInstance 级联永远不碰它）",
+                customRow.getTaskId());
+        assertEquals("记录类节点建行即已完成态",
+                ProcessTaskStateEnum.FINISHED.getCode(), customRow.getTaskState());
+
+        // 建单不变量（issues/121 P1）：parent 与行级首节点标记都要带上，改造时不许丢
+        ProcessTask applyRow = repo.findDoneTasks(inst.getInstanceId(), new String[]{"apply"}).get(0);
+        assertEquals("历史行的 task_parent_id＝当前任务（建单不变量）",
+                applyRow.getTaskId(), customRow.getParentTaskId());
+        assertEquals("行级首节点标记按真实拓扑算：custom1 不是 start 的直接后继 ⇒ false",
+                Boolean.FALSE, customRow.getVariables().get(FlowConst.IS_FIRST_TASK_NODE));
+        assertEquals("历史行参与者＝当前操作人（留痕主体，不是待办收单人）",
+                Arrays.asList("applicant"), repo.findTaskActors(customRow.getTaskId()));
+
+        // 令牌继续流转：流程走到结束节点
+        assertEquals("custom 之后必须继续流转到 end",
+                ProcessInstanceStateEnum.FINISHED.getCode(), updated.getState());
+
+        // 记录类不产生待办：待办数不因这条历史行增加
+        assertTrue("记录类节点不许留下待办行（§6.1：它本来就不该有待办）",
+                repo.findDoingTasks(inst.getInstanceId(), null).isEmpty());
+
+        // "落库"与"fire 码 3"解耦（spec §11.3 码 3 表达"新待办产生"）
+        for (ProcessEvent e : taskStartEvents) {
+            assertFalse("历史行落库了也不许 fire 码 3，事件 sourceId=" + e.getSourceId(),
+                    customRow.getTaskId().equals(e.getSourceId()));
+        }
+        assertEquals("本流只该产生一条新待办（apply）⇒ 码 3 只该 fire 一次，多出来的就是给记录类伪造了待办",
+                1, taskStartEvents.size());
     }
 
     // ═══════════════════════════════════════════

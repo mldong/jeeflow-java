@@ -421,7 +421,15 @@ public class ProcessInstance {
         return out;
     }
 
-    /** 创建历史任务记录（自定义节点用） */
+    /**
+     * 创建历史任务记录（自定义节点用）。
+     *
+     * <p><b>返回值必须被调用方拿去落库</b>（issues/142 · spec 02 §6.2 第 1 条）：本方法只把行
+     * append 进聚合的 {@code tasks}，而 {@code updateInstance} 的级联只 {@code UPDATE}
+     * {@code taskId != null} 的行、{@code ProcessTask.create} 又不赋 taskId ⇒ 只 append 不 INSERT
+     * 就等于这一行从没存在过。调用点见 {@code CustomModel.exec} →
+     * {@code Execution#addHistoryTask} → {@code JeeflowEngineImpl#saveHistoryTasks}。</p>
+     */
     public ProcessTask createHistoryTask(CustomModel customModel, String operator,
                                           Long parentTaskId, boolean isFirstTaskNode) {
         ProcessTask task = ProcessTask.create(
