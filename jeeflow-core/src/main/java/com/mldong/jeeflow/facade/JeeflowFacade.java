@@ -700,14 +700,20 @@ public class JeeflowFacade {
         }
         java.util.Collection<?> coll = (java.util.Collection<?>) actorIds;
         String[] ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
-        repository.createCcInstance(instanceId, operator, ccArr);
+        // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：手动腿与引擎腿同一条判据
+        // （spec §11.7「三条入口共用一支」）——已有 cc 行的 (实例, 人) 跳过，不新增行、
+        // 不重置未读、不更新原行时间；只有实际新建的子集拿去 fire。
+        java.util.List<String> created = repository.createCcInstanceIfAbsent(instanceId, operator, ccArr);
         // CC_CREATE（spec §11.3 码 4 ＋ §11.2 原则 1 ＋ §11.6 java 段）：手动抄送腿也必须 fire——
         // 码值表达"新增了一条抄送记录"这个事实，不表达谁触发（引擎 f_ccActors／办理 tf_ccActors／
         // 门面手动共用同一支，逐抄送人一次）。java 此前只在引擎侧 fire、手动支静默，是全联邦
         // "不 fire"那一派，本案按 go/py/node 补齐（issues/132 §5.1 待拍①）。
         // fire 排在 createCcInstance 落库之后（§11.2 原则 3）；集成层严禁再自己补发（§11.1，
         // PHP issues/101 的降级路已作废），否则引擎补齐后重复抄送。
-        ProcessPublisher.notifyCcCreate(instanceId, ccArr);
+        // 入参＝实际新建子集（issues/141 G2）：重复抄送没发生"创建"⇒ 不发码 4，子集为空整支不 fire。
+        if (!created.isEmpty()) {
+            ProcessPublisher.notifyCcCreate(instanceId, created.toArray(new String[0]));
+        }
         return ok();
     }
 

@@ -50,8 +50,19 @@ public interface IProcessRepository {
     // 抄送
     void createCcInstance(Long instanceId, String creator, String... actorIds);
     void updateCcStatus(Long instanceId, String actorId);
+
+    // 抄送写侧判重（issues/141 G2，default 方法：不覆写＝维持旧行为）
+    default List<String> findCcActorIds(Long instanceId);
+    default List<String> createCcInstanceIfAbsent(Long instanceId, String creator, String... actorIds);
 }
 ```
+
+> **抄送写侧判重＝幂等空操作**（issues/141 G2 · spec 06 §4）：同一 `(实例, 被抄送人)` 已有 cc 行时
+> 跳过——不新增行、不重置未读、不更新原行时间，也**不 fire CC_CREATE（码 4）**。建 cc 的三条入口
+> （发起 `f_ccActors`／办理 `tf_ccActors`／手动 `createCCInstance`）统一调
+> `createCcInstanceIfAbsent`，逐人 fire 的入参＝它返回的**实际新建子集**。
+> 查询侧不引入 `DISTINCT`、历史重复行不清理。自带两仓（JDBC / 内存）都覆写 `findCcActorIds`，
+> 集成方自实现仓储时也应覆写，否则判重不生效（default 返回空集＝不判重）。
 
 ### 前端分页查询方法
 
@@ -68,6 +79,11 @@ public interface IProcessRepository {
     int countTodoTasks(Long userId);
 }
 ```
+
+> **`pageCcInstances` 的归属条件必填**（issues/141 G1 · spec 06 §2.5）：查询必须带
+> `cc.actor_id` 的有效条件（非 null、非空串/空白、非空集合）。**条件缺失或为空值 ⇒ 返回空页**，
+> 严禁退化成"这条条件不加"而放出全部实例；SQL 仓与内存仓必须给同一个答案。
+> 门面 `processInstance/ccList` 恒挂这条条件，这里防的是绕过门面直连仓储的调用方。
 
 ### PageQuery
 

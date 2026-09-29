@@ -46,6 +46,48 @@ public interface IProcessRepository {
     void createCcInstance(Long instanceId, String creator, String... actorIds);
     void updateCcStatus(Long instanceId, String actorId);
 
+    /**
+     * issues/141 G2 写侧判重（spec 06 §4「抄送写侧判重＝幂等空操作」）：读某实例<b>已存在</b>的
+     * cc 行 actor id，供建 cc 的三条入口（发起 {@code f_ccActors}／办理 {@code tf_ccActors}／
+     * 门面手动 {@code createCCInstance}）判重用。
+     *
+     * <p>default 返回空集＝不判重，未覆写的第三方仓储维持旧行为（全量建行、全量 fire），
+     * SPI 源码兼容不破。jeeflow 自带的两仓（JDBC 仓 / 内存仓）<b>必须</b>覆写：
+     * 否则 issues/141 G1 那条「同一栈 SQL 仓与内存仓两个答案」的分叉在写侧重演一遍。</p>
+     */
+    default List<String> findCcActorIds(Long instanceId) {
+        return java.util.Collections.emptyList();
+    }
+
+    /**
+     * issues/141 G2：写侧幂等建 cc 行。同一 {@code (instanceId, actorId)} 已有 cc 行时<b>跳过</b>——
+     * ①不新增行、②不重置未读状态（{@code state}）、③不更新原行时间，重复抄送同一个人
+     * 在数据面上是 no-op（owner 2026-09-29 明确「不需要重置」，不产生"再提醒一次"语义）；
+     * 返回<b>实际新建</b>的 actor 子集（顺序与入参一致，同一次调用内的重复也折叠）。
+     *
+     * <p>为什么要返回子集而不是 void：spec 11.2 原则 1「码值表达发生了什么事实」⇒
+     * 没发生"创建"就不得 fire {@code CC_CREATE}（码 4）。逐人 fire 的入参一律换成这个子集，
+     * 子集为空则整支不 fire（见 {@code ProcessPublisher#notifyCcCreate} 的两个调用点）。</p>
+     *
+     * <p>未覆写 {@link #findCcActorIds} 的第三方仓储走本 default ⇒ 与旧
+     * {@code void createCcInstance} 逐字一致（全量插入、全量返回），不静默改变既有集成方行为。</p>
+     */
+    default List<String> createCcInstanceIfAbsent(Long instanceId, String creator, String... actorIds) {
+        List<String> existing = findCcActorIds(instanceId);
+        List<String> fresh = new java.util.ArrayList<>();
+        if (actorIds != null) {
+            for (String actorId : actorIds) {
+                if (actorId == null) continue;
+                if (existing != null && existing.contains(actorId)) continue;
+                if (!fresh.contains(actorId)) fresh.add(actorId);
+            }
+        }
+        if (!fresh.isEmpty()) {
+            createCcInstance(instanceId, creator, fresh.toArray(new String[0]));
+        }
+        return fresh;
+    }
+
     List<String> findTaskActors(Long taskId);
     void addTaskActor(Long taskId, List<String> actors);
     void removeTaskActor(Long taskId, List<String> actors);
@@ -63,7 +105,13 @@ public interface IProcessRepository {
     /** 我发起的流程实例 */
     PageResult<InstanceRow> pageInstances(PageQuery query);
 
-    /** 我的抄送 */
+    /**
+     * 我的抄送。
+     *
+     * <p><b>归属条件必填</b>（issues/141 G1 · spec 06 §2.5）：查询必须带 {@code cc.actor_id} 的
+     * 有效归属条件；<b>条件缺失或为空值时返回空页</b>，严禁退化成"这条条件不加"而返回全部实例。
+     * SQL 仓与内存仓在同一条判据上必须给同一个答案（issues/117 场景 27 那把尺子扩到 ccList）。</p>
+     */
     PageResult<InstanceRow> pageCcInstances(PageQuery query);
 
     /** 流程定义分页 */

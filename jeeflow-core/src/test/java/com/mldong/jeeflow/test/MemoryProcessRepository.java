@@ -31,7 +31,7 @@ public class MemoryProcessRepository implements IProcessRepository {
     private final Map<Long, ProcessInstance> instances = new ConcurrentHashMap<>();
     private final Map<Long, ProcessTask> tasks = new ConcurrentHashMap<>();
     private final Map<Long, List<String>> taskActors = new ConcurrentHashMap<>();
-    private final Map<Long, List<String>> ccInstances = new ConcurrentHashMap<>();
+    private final Map<Long, List<CcRow>> ccInstances = new ConcurrentHashMap<>();
 
     // ---- 流程定义 ----
     @Override
@@ -150,20 +150,77 @@ public class MemoryProcessRepository implements IProcessRepository {
 
     @Override
     public void createCcInstance(Long instanceId, String creator, String... actorIds) {
+        // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4），与 JdbcProcessRepository 同一条判据：
+        // 同一 (实例, 被抄送人) 已有 cc 行 ⇒ 跳过——不新增行、不重置未读（state 保持原值）、
+        // 不更新原行时间（createTime/updateTime 逐字不变）。判重在写侧，查询侧不引入去重。
+        List<CcRow> rows = ccInstances.computeIfAbsent(instanceId, k -> new ArrayList<>());
         for (String actorId : actorIds) {
-            ccInstances.computeIfAbsent(instanceId, k -> new ArrayList<>()).add(actorId);
+            if (actorId == null || ccRowOf(rows, actorId) != null) continue;
+            LocalDateTime now = LocalDateTime.now();
+            rows.add(new CcRow(actorId, now, now));
         }
     }
 
     @Override
+    public List<String> findCcActorIds(Long instanceId) {
+        List<CcRow> rows = ccInstances.get(instanceId);
+        if (rows == null) return new ArrayList<>();
+        return rows.stream().map(r -> r.actorId).collect(Collectors.toList());
+    }
+
+    @Override
     public void updateCcStatus(Long instanceId, String actorId) {
-        // no-op for memory
+        // 已读：state 0→1（对齐 wf_process_cc_instance.state 语义），issues/141 G2 之后
+        // 内存仓的 cc 行也带 state/时间，重复抄送"不重置未读"这一档才测得出来。
+        List<CcRow> rows = ccInstances.get(instanceId);
+        if (rows == null) return;
+        for (CcRow row : rows) {
+            if (row.actorId.equals(actorId)) {
+                row.state = 1;
+                row.updateTime = LocalDateTime.now();
+            }
+        }
     }
 
     /** 测试访问器：读回某实例已落库的抄送人（issues/102 CC_CREATE 单测断言 cc 实例持久化）。 */
     public List<String> ccActorsForTest(Long instanceId) {
-        List<String> l = ccInstances.get(instanceId);
-        return l == null ? Collections.emptyList() : l;
+        List<CcRow> l = ccInstances.get(instanceId);
+        return l == null ? Collections.emptyList()
+                : l.stream().map(r -> r.actorId).collect(Collectors.toList());
+    }
+
+    /**
+     * 测试访问器：读回某实例的 cc <b>行</b>（issues/141 G2 的②③档要看未读状态与原行时间，
+     * 只看 actor id 集合照不出"重复抄送把 state 抹回未读 / 把时间刷成 now"这两种假修）。
+     */
+    public List<CcRow> ccRowsForTest(Long instanceId) {
+        List<CcRow> l = ccInstances.get(instanceId);
+        return l == null ? Collections.emptyList() : new ArrayList<>(l);
+    }
+
+    private static CcRow ccRowOf(List<CcRow> rows, String actorId) {
+        for (CcRow row : rows) {
+            if (row.actorId.equals(actorId)) return row;
+        }
+        return null;
+    }
+
+    /**
+     * 内存仓的 cc 行（issues/141 G2）——形状对齐 {@code wf_process_cc_instance} 表：
+     * actor id ＋ 未读状态（0 未读 / 1 已读）＋ 建行时间与更新时间。
+     */
+    public static final class CcRow {
+        public final String actorId;
+        public final LocalDateTime createTime;
+        public LocalDateTime updateTime;
+        public int state;
+
+        CcRow(String actorId, LocalDateTime createTime, LocalDateTime updateTime) {
+            this.actorId = actorId;
+            this.createTime = createTime;
+            this.updateTime = updateTime;
+            this.state = 0;
+        }
     }
 
     @Override
@@ -421,18 +478,39 @@ public class MemoryProcessRepository implements IProcessRepository {
 
     @Override
     public PageResult<InstanceRow> pageCcInstances(PageQuery query) {
+        // issues/141 G1 归属条件必填（spec 06 §2.5）：cc.actor_id 缺失或为空值 ⇒ 空页。
+        // 判据与 JdbcProcessRepository.pageCcInstances 逐字同一条——旧形状是本仓只放"有 cc 行的
+        // 实例"、SQL 仓的 LEFT JOIN 不带条件时返全部实例，同一份数据两仓两个答案（场景 27 那把尺子）。
+        if (!hasEffectiveCondition(query, "cc.actor_id")) {
+            return PageResult.of(query.getPageNum(), query.getPageSize(), 0, new ArrayList<InstanceRow>());
+        }
         // 通用条件过滤（含 cc.actor_id EQ，Facade ccList 依赖）
         List<InstanceRow> rows = new ArrayList<>();
-        for (Map.Entry<Long, List<String>> e : ccInstances.entrySet()) {
+        for (Map.Entry<Long, List<CcRow>> e : ccInstances.entrySet()) {
             if (e.getValue().isEmpty()) continue;
             ProcessInstance inst = instances.get(e.getKey());
             if (inst == null) continue;
             InstanceRow r = toInstanceRow(inst);
             Map<String, Object> fields = instanceFields(r);
-            fields.put("cc.actor_id", new ArrayList<>(e.getValue()));
+            fields.put("cc.actor_id", e.getValue().stream().map(row -> row.actorId)
+                    .collect(Collectors.toCollection(ArrayList::new)));
             if (matches(query.getConditions(), fields)) rows.add(r);
         }
         return PageResult.of(query.getPageNum(), query.getPageSize(), rows.size(), rows);
+    }
+
+    /** 某一列是否给了<b>有效</b>条件（值非 null、字符串非全空白、集合非空）——与 JDBC 仓同名同判据。 */
+    private static boolean hasEffectiveCondition(PageQuery query, String column) {
+        if (query == null) return false;
+        for (PageQuery.Condition cond : query.getConditions()) {
+            if (!column.equals(cond.getColumn())) continue;
+            Object val = cond.getValue();
+            if (val == null) continue;
+            if (val instanceof String && ((String) val).trim().isEmpty()) continue;
+            if (val instanceof Collection && ((Collection<?>) val).isEmpty()) continue;
+            return true;
+        }
+        return false;
     }
 
     @Override

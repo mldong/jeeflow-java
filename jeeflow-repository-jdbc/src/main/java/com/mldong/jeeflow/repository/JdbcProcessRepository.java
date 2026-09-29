@@ -347,10 +347,16 @@ public class JdbcProcessRepository implements IProcessRepository {
         String sql = "INSERT INTO wf_process_cc_instance " +
                 "(id, process_instance_id, actor_id, state, create_time, create_user, update_time, update_user) " +
                 "VALUES (?,?,?,0,?,?,?,?)";
+        // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：同一 (实例, 被抄送人) 已有 cc 行时
+        // 直接跳过——不新增行、不重置未读（state 保持原值）、不更新原行时间（不碰 UPDATE，
+        // create_time/update_time 逐字不变）。判重放在写侧而不是查询侧：查询保持现状不引入
+        // DISTINCT（owner 2026-09-29 拍），历史重复行也不清理。
+        List<String> existing = findCcActorIds(instanceId);
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             Timestamp now = new Timestamp(System.currentTimeMillis());
             for (String actorId : actorIds) {
+                if (actorId == null || existing.contains(actorId)) continue;
                 ps.setLong(1, nextId());
                 ps.setLong(2, instanceId);
                 ps.setString(3, actorId);
@@ -359,10 +365,32 @@ public class JdbcProcessRepository implements IProcessRepository {
                 ps.setTimestamp(6, now);
                 ps.setString(7, creator);
                 ps.executeUpdate();
+                // 同一次调用内的重复也算"已存在"，只落一行
+                existing.add(actorId);
             }
         } catch (SQLException e) {
             throw new RuntimeException("创建抄送失败", e);
         }
+    }
+
+    /**
+     * issues/141 G2：某实例已有的 cc 行 actor id（写侧判重的读侧）。
+     * 返回<b>可修改</b>的 List——{@link #createCcInstance} 要在插入过程中往里追加。
+     */
+    @Override
+    public List<String> findCcActorIds(Long instanceId) {
+        String sql = "SELECT actor_id FROM wf_process_cc_instance WHERE process_instance_id = ?";
+        List<String> actorIds = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, instanceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) actorIds.add(rs.getString("actor_id"));
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("查询抄送参与人失败", e);
+        }
+        return actorIds;
     }
 
     @Override
@@ -632,7 +660,33 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     @Override
     public PageResult<InstanceRow> pageCcInstances(PageQuery query) {
+        // issues/141 G1 归属条件必填（spec 06 §2.5「抄送分页同一条尺子」）：cc.actor_id 缺失或为空值
+        // ⇒ 空页。旧形状是 LEFT JOIN 不带条件返回**全部实例**（php PDO 那面反面教材），而本栈内存仓
+        // 只放"有 cc 行的实例"——同一栈两个仓储两个答案正是 issues/117 场景 27 立过法的那一类，
+        // 所以 SQL 仓与内存仓必须钉在同一条判据上。空值档另由 OWNERSHIP_COLUMNS（issues/129）兜，
+        // 这一格补的是"条件整条没给"。
+        if (!hasEffectiveCondition(query, "cc.actor_id")) {
+            return PageResult.of(query.getPageNum(), query.getPageSize(), 0, new ArrayList<InstanceRow>());
+        }
         return pageInstances(query, true, CC_INSTANCE_WHITELIST);
+    }
+
+    /**
+     * 是否给了某一列的<b>有效</b>条件（值非 null、字符串非全空白、集合非空）。
+     * issues/141 G1：归属谓词"必填"的判据；空串/全空白/null 都算没填，与
+     * {@link #buildWhere} 的 OWNERSHIP_COLUMNS 空值档同一口径。
+     */
+    private static boolean hasEffectiveCondition(PageQuery query, String column) {
+        if (query == null) return false;
+        for (PageQuery.Condition cond : query.getConditions()) {
+            if (!column.equals(cond.getColumn())) continue;
+            Object val = cond.getValue();
+            if (val == null) continue;
+            if (val instanceof String && ((String) val).trim().isEmpty()) continue;
+            if (val instanceof java.util.Collection && ((java.util.Collection<?>) val).isEmpty()) continue;
+            return true;
+        }
+        return false;
     }
 
     @Override

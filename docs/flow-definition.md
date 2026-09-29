@@ -144,14 +144,20 @@
 { "id": "join1", "type": "snaker:join", "x": 600, "y": 200, "properties": {}, "text": { "value": "合并" } }
 ```
 
-### 子流程节点 `snaker:subProcess`
+### 子流程节点 `snaker:subprocess`
 
 启动子流程实例。
+
+> **类型键的写法（issues/141 G4 · spec 02「类型键的三条义务」）**：规范名是小写 `snaker:subprocess`
+> （与 spec 02 的表一致）；大写 `snaker:subProcess` 与内部变体 `snaker:wfSubProcess` 是
+> **同值别名，保留一代并视为 deprecated**，下个代次删除。查表本身仍是大小写敏感
+> （`SimpleContext` 的 HashMap get），spec 02 义务 1 的"查表前大小写归一"在 java 还没落地。
+> 类型表查不到解析器时，节点会被跳过并**记一条 WARNING 日志**（带节点 id 与实得类型串），不再无声丢节点。
 
 ```json
 {
   "id": "sub1",
-  "type": "snaker:subProcess",
+  "type": "snaker:subprocess",
   "properties": { "form": "sub-form", "version": 1 },
   "text": { "value": "子流程" }
 }

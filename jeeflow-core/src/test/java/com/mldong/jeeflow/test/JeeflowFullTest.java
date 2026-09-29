@@ -503,8 +503,12 @@ public class JeeflowFullTest {
                         .set(FlowConst.CC_ACTORS, "wangqiang,zhaomin"));
 
         // 抄送已创建（内存仓储 ccInstances 查询）
+        // ⚠️ 这里**必须带归属条件**（issues/141 G1 · spec 06 §2.5）：`pageCcInstances` 在归属列无有效
+        // 条件时按契约返回空页。本格原先用 `new PageQuery()` 零条件读回，等于把"不带条件也返行"
+        // 这个正被 G1 关掉的非法形状当成了依赖——断言（cc 行确实建了）一字未改，只把读法改成合法形状。
         com.mldong.jeeflow.spi.PageResult<com.mldong.jeeflow.spi.IProcessRepository.InstanceRow> cc =
-                repo.pageCcInstances(new com.mldong.jeeflow.spi.PageQuery());
+                repo.pageCcInstances(new com.mldong.jeeflow.spi.PageQuery(1, 50)
+                        .add("cc.actor_id", "EQ", "wangqiang"));
         List<com.mldong.jeeflow.spi.IProcessRepository.InstanceRow> hit = cc.getRows().stream()
                 .filter(r -> r.getId() != null && r.getId().equals(inst.getInstanceId())).collect(java.util.stream.Collectors.toList());
         assertFalse("办理时抄送应创建 cc 实例: " + cc.getRows(), hit.isEmpty());

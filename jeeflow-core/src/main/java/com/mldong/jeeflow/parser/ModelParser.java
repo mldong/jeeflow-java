@@ -15,6 +15,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.logging.Logger;
 
 /**
  * 模型解析器——将 JSON 流程定义解析为 ProcessModel
@@ -22,6 +23,9 @@ import java.util.List;
  * @author mldong
  */
 public final class ModelParser {
+
+    /** JUL 而非 slf4j：core 零外部运行时依赖（同 {@code ProcessPublisher} 的口径）。 */
+    private static final Logger log = Logger.getLogger(ModelParser.class.getName());
 
     private ModelParser() {
     }
@@ -72,13 +76,23 @@ public final class ModelParser {
         for (LfNode node : nodes) {
             String type = node.getType().replace(NodeParser.NODE_NAME_PREFIX, "");
             NodeParser parser = ServiceContext.findByName(type, NodeParser.class);
-            if (parser != null) {
-                parser.parse(node, edges);
-                NodeModel nodeModel = parser.getModel();
-                processModel.getNodes().add(nodeModel);
-                if (nodeModel instanceof TaskModel) {
-                    processModel.getTasks().add((TaskModel) nodeModel);
-                }
+            if (parser == null) {
+                // issues/141 G4 义务 2（spec 02「未知档不得静默丢节点」）：类型表查不到解析器时，
+                // 先留一条可诊断记录（节点 id ＋ 实得类型串，前缀原样一并带上）再跳过。
+                // 旧形状是无声丢节点＋连带丢它的出边——php 的 `snaker:custom` 缺档就是这么被吞掉的，
+                // 照 spec 写小写 `snaker:subprocess` 而在只认大写的栈里拿不到子流程节点也是同一形状。
+                // 注：本仓查表是 SimpleContext 的 HashMap get（大小写敏感），spec 02 义务 1 的
+                // 「查表前大小写归一」还没落地（要先补别名再谈归一化，见 Configuration 注释）。
+                log.warning(String.format(
+                        "流程定义里的节点类型没有对应解析器，该节点及其出边将被跳过: nodeId=%s, type=%s, lookupKey=%s",
+                        node.getId(), node.getType(), type));
+                continue;
+            }
+            parser.parse(node, edges);
+            NodeModel nodeModel = parser.getModel();
+            processModel.getNodes().add(nodeModel);
+            if (nodeModel instanceof TaskModel) {
+                processModel.getTasks().add((TaskModel) nodeModel);
             }
         }
 

@@ -76,6 +76,10 @@ public final class ProcessPublisher {
      *
      * <p>调用前提（§11.2 原则 3）：cc 行已由 {@code IProcessRepository#createCcInstance} 落库。
      * 接收人过滤（trim / 非空 / 纯数字 / 去重）由集成层监听器负责，引擎只按 cc 行粒度 fire。</p>
+     *
+     * <p><b>入参一律是"实际新建的 actor 子集"</b>（issues/141 G2 · spec 06 §4）：调用点先走
+     * {@code IProcessRepository#createCcInstanceIfAbsent} 拿到子集，子集为空整支不 fire——
+     * §11.2 原则 1「码=事实」，重复抄送没发生"创建"就不该发码 4，严禁照旧按原始请求全量 fire。</p>
      */
     public static void notifyCcCreate(Long instanceId, String[] ccActorIds) {
         if (instanceId == null || ccActorIds == null) {

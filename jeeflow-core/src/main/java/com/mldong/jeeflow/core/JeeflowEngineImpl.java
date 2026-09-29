@@ -152,14 +152,20 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             ccArr = coll.stream().map(Object::toString).toArray(String[]::new);
         }
         if (ccArr != null && ccArr.length > 0) {
-            repository.createCcInstance(instanceId, operator, ccArr);
+            // issues/141 G2 写侧判重＝幂等空操作（spec 06 §4）：同一 (实例, 被抄送人) 已有 cc 行时
+            // 跳过——不新增行、不重置未读、不更新原行时间；新建子集才拿去 fire。
+            List<String> created = repository.createCcInstanceIfAbsent(instanceId, operator, ccArr);
             // CC_CREATE（issues/102 新增，六语言统一；spec §11.3 码 4）：逐抄送人 fire，与
             // createCcInstance 逐行 INSERT 的粒度一一对应（对齐 PHP 参考实现 v1.3.8）。
             // sourceId=instanceId，ccActorId=抄送人 id（直传事件体，监听器免反查 cc 表）。
             // fire 在 runInTx 事务内（与 PHP/Java 同事务一致）；监听器侧用 afterCommit 延迟反查
             // （见集成层监听器注释）。收口在 ProcessPublisher.notifyCcCreate——门面手动
             // createCCInstance 与本方法是同一条腿（spec §11.2 原则 1／§11.7）。
-            ProcessPublisher.notifyCcCreate(instanceId, ccArr);
+            // 入参＝实际新建的子集而不是原始 ccArr（issues/141 G2）：spec §11.2 原则 1「码=事实」
+            // ⇒ 重复抄送没发生"创建"，就不该发这个事件；子集为空整支不 fire（不空转、也不照旧全量 fire）。
+            if (!created.isEmpty()) {
+                ProcessPublisher.notifyCcCreate(instanceId, created.toArray(new String[0]));
+            }
         }
     }
 
