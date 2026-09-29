@@ -173,6 +173,12 @@ public class JdbcCustomNodeHistoryTest {
                 row.get("ID"));
         assertEquals("历史行参与者＝当前操作人（留痕主体，不是待办收单人）",
                 Arrays.asList("applicant"), actors);
+        // spec 02 §6.2 第 1bis 条：留痕行的 operator（＝actorId 列）与 finish_time 必须写——
+        // doneList 走 `state<>10 AND operator=?`、审批记录也按这两列取数，
+        // 只写 task_state=20 的留痕在用户面上等于没落过。
+        assertEquals("留痕行的 operator 列必须＝触发这次流转的当前操作人",
+                "applicant", String.valueOf(row.get("OPERATOR")));
+        assertNotNull("留痕行必须写 finish_time（已完成却没有完成时间＝半条留痕）", row.get("FINISH_TIME"));
 
         assertEquals("记录类节点不产生待办：task_state=10 的行数必须为 0",
                 Integer.valueOf(0), count(
@@ -235,6 +241,9 @@ public class JdbcCustomNodeHistoryTest {
         assertNotNull(row);
         assertNull("记录类历史行的 expire_time 必须是 NULL：这一支没有节点级到期表达式可取，"
                 + "且 126 已拍\"未配⇒留空、不造默认值\"", row.get("EXPIRE_TIME"));
+        // 同一条判据的另一半：**该写的两列写了、不该写的一列不写**——
+        // 补 expire_time 是造默认值（126 当初的红样），漏 operator/finish_time 是半条留痕，
+        // 两个方向都要钉住，否则后人"顺手对齐"只会往一边倒。
     }
 
     // ═══ 处理器夹具（public static 嵌套类，Class.forName 按二元名可达）═══

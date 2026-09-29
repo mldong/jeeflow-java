@@ -445,6 +445,18 @@ public class ProcessInstance {
                 isFirstTaskNode
         );
         task.setTaskState(ProcessTaskStateEnum.FINISHED.getCode());
+        // spec 02 §6.2 第 1bis 条（A 批收口补，owner 09-30）：这条 DONE 行必须写处理人与完成时间。
+        // 落库时 `operator` 列绑的是 actorId、`finish_time` 列绑的是 finishTime（见
+        // JdbcProcessRepository.setTaskParams），而 ProcessTask.create 两个都不赋 ⇒ 只写 task_state=20
+        // 的留痕在 `processTask/doneList`（state<>10 AND operator=?）与审批记录里根本查不到，
+        // 用户面上等于"这条留痕没落过"——与第 1 条"查不到的留痕＝没留痕"是同一把尺子。
+        // 反过来 expire_time 保持 NULL：记录类没有到期表达式可算（expireTime 是 task 节点专属属性，
+        // CustomParser 只映射 clazz/methodName/args/val），写它就得臆造属性，
+        // 也与 issues/126 owner 口径"节点没配就保持 NULL、不许赋建单时刻"同向。
+        // 参与者列同值但语义不同：那是**留痕主体**，不是待办收单人（本行生来已完成，谁也办不动）。
+        LocalDateTime finishedAt = LocalDateTime.now();
+        task.setActorId(operator);
+        task.setFinishTime(finishedAt);
         this.tasks.add(task);
         return task;
     }
