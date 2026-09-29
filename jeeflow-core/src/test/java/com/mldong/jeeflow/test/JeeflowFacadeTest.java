@@ -2532,4 +2532,55 @@ public class JeeflowFacadeTest {
         assertNull("当前节点未配到期表达式 ⇒ 该行 expire_time 必须留空（落地节点配的 1d 不该被拿来用）",
                 revived.getExpireTime());
     }
+
+    // ═══ issues/137 C（2026-09-29 owner 拍 · spec 04 §任务行 expire_time）：节点把到期表达式**写坏**
+    //     （`xh` 前缀非整数 / `2.5h` 小数 / `3hh` 前缀带字母）时，引擎不得抛异常打断建单——
+    //     误配档一律落穿到绝对时刻档、解析不出即 NULL。改前 java 参考实现在 FlowUtil.processTime
+    //     里 Integer.parseInt 直抛 NumberFormatException（其余七栈落穿），于是"节点属性配错＝流程炸掉"。
+    //     夹具放 flows-local/（同 126 那两支，不进共享 flows/，免得牵动七仓镜像副本与漂移门禁的流程计数）。═══
+
+    /**
+     * 引擎级三档误配：发起 → 推进两级 → 从第三级退回，四张任务行（写点①×3 ＋ 写点④×1）
+     * 全部 expire_time=NULL，且每一步 call 都 code=0（建单/推进/退回都不失败）。
+     *
+     * <p>每格都带"行必须读得到 ＋ createTime 有值"的内部对照：否则"建单炸了所以没行"
+     * 会被读成"值为 NULL 所以符合预期"，这格就没牙了。
+     */
+    @Test
+    public void test137MisconfiguredExpireExpressionsFallToNullWithoutBreakingFlow() throws Exception {
+        ProcessInstance.ProcessDefine def = registerLocalFlow("137-misconfigured-expire.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long inst = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        assertMisconfiguredRow(inst, "task1", "xh", "发起推进到的首任务（写点①）");
+
+        Long t1 = doingTaskId(inst, "task1");
+        rawRepo.addTaskActor(t1, Arrays.asList("leader"));
+        assertOk(call("processTask/execute",
+                args("processTaskId", t1, "operator", "leader", "submitType", 1)));
+        assertMisconfiguredRow(inst, "task2", "2.5h", "推进新建的第二任务（写点①）");
+
+        Long t2 = doingTaskId(inst, "task2");
+        rawRepo.addTaskActor(t2, Arrays.asList("manager"));
+        assertOk(call("processTask/execute",
+                args("processTaskId", t2, "operator", "manager", "submitType", 1)));
+        assertMisconfiguredRow(inst, "task3", "3hh", "推进新建的第三任务（写点①）");
+
+        Long t3 = doingTaskId(inst, "task3");
+        rawRepo.addTaskActor(t3, Arrays.asList("boss"));
+        assertOk(call("processTask/execute",
+                args("processTaskId", t3, "operator", "boss", "submitType", 3)));
+        assertMisconfiguredRow(inst, "task2", "2.5h", "退回上一步复活的那行（写点④，取被退掉的 task3 表达式 3hh）");
+    }
+
+    /** 误配档单格读数：行要建出来（createTime 有值），expire_time 必须是 NULL */
+    private void assertMisconfiguredRow(Long instanceId, String taskName, String expr, String who) {
+        ProcessTask row = firstDoingRow(instanceId, taskName);
+        assertNotNull(who + " 应照常建出 " + taskName + " 行（建单/推进不得因表达式 " + expr + " 失败）", row);
+        assertNotNull(who + " 的 createTime 应有值（内部对照：区分「没建行」与「值为空」）", row.getCreateTime());
+        assertNull(who + " 配的 " + expr + " 属误配相对档 ⇒ 落穿成 NULL，不得抛错、"
+                + "不得退化成当前时间、不得写 0", row.getExpireTime());
+    }
 }

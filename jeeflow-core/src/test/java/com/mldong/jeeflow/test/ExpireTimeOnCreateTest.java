@@ -4,6 +4,7 @@ import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.model.TaskModel;
+import com.mldong.jeeflow.util.FlowUtil;
 import org.junit.Test;
 
 import java.time.Duration;
@@ -137,5 +138,81 @@ public class ExpireTimeOnCreateTest {
             assertNotNull("行本身要读到，且 createTime 有值（内部对照）", task.getCreateTime());
             assertNull("并行会签未配到期表达式的成员行不该有到期时间", task.getExpireTime());
         }
+    }
+
+    // ═══ issues/137 C（2026-09-29 owner 拍 · spec 04 §任务行 expire_time）：
+    //     **误配**的相对档（写坏的前缀/后缀）不得抛异常打断建单——落穿到绝对时刻档、
+    //     解析不出即 NULL。改前 java 参考实现在 FlowUtil.processTime 里 Integer.parseInt 直抛
+    //     NumberFormatException（其余七栈一律落穿），于是"节点属性配错＝流程炸掉"。
+    //     两格负向各自带"行必须建出来"的对照，防止把"建单失败"读成"值为空"；
+    //     正向回归钉四个后缀都还算得出来，防止把求值器改成恒 NULL 的哑器。═══
+
+    /**
+     * 误配档①②③（行级）：`xh`（前缀非整数）/ `2.5h`（小数）/ `3hh`（前缀还带字母）
+     * ⇒ 建单照常成功，那一列落穿成 NULL。
+     *
+     * <p>改前这里三条全都抛 NumberFormatException（createTask 直接炸，测试以异常红）；
+     * 不许退化成取当前时间（那等于建单即逾期，比不写更难发现），也不许写 0。
+     */
+    @Test
+    public void misconfiguredRelativeExpressionFallsThroughToNull() {
+        for (String expr : new String[]{"xh", "2.5h", "3hh"}) {
+            ProcessTask task = instance().createTask(node("approve", expr), "审批", one(), "op", 0L, true);
+            assertNotNull("误配表达式 " + expr + " 也要照常建出任务行（建单不得失败）", task.getCreateTime());
+            assertNull("误配表达式 " + expr + " 应落穿成 NULL，不得抛错、不得取当前时间、不得取 0",
+                    task.getExpireTime());
+        }
+    }
+
+    /**
+     * 误配档①②③（求值器级）：直调 {@link FlowUtil#processTime} 不得抛，三档全 NULL。
+     *
+     * <p>和上一格分开钉：上一格走建单腿（ProcessInstance.applyExpireTime 会把 null/空串短路掉），
+     * 这一格证明抛点就在求值器本身——实例级到期时间（JeeflowEngineImpl 的 processTime 调用）
+     * 与任务行共用同一把尺子，那条腿同样不得炸。
+     */
+    @Test
+    public void evaluatorDoesNotThrowOnMisconfiguredRelativeExpression() {
+        for (String expr : new String[]{"xh", "2.5h", "3hh"}) {
+            assertNull("求值器对误配表达式 " + expr + " 应返回 null（不抛）",
+                    FlowUtil.processTime(expr, FlowData.create()));
+        }
+    }
+
+    /**
+     * 正向回归：四个合法相对档后缀（s/m/h/d）依然各算各的偏移——误配落穿不是把求值器改哑。
+     *
+     * <p>{@code 2h} 就是本栈 spec 的基准样例（create + 7200s）；四档全钉是因为修复动了四个分支，
+     * 任何一支的守卫写错（比如把 null 判成 0）都会让对应后缀算成 0s 或 NULL 而红。
+     */
+    @Test
+    public void everyValidRelativeSuffixStillComputesItsOffset() {
+        assertEvaluatorOffset("2h", 2 * 3600L);
+        assertEvaluatorOffset("90m", 90 * 60L);
+        assertEvaluatorOffset("45s", 45L);
+        assertEvaluatorOffset("3d", 3 * 24 * 3600L);
+    }
+
+    /**
+     * 边界档（同一处病灶的第四种写法）：只有后缀、前缀是空串（`h`）——改前 parseInt("") 同样抛。
+     * 裁定口径一致：落穿 → 绝对档解析不出 → NULL。
+     */
+    @Test
+    public void suffixOnlyExpressionFallsThroughToNull() {
+        for (String expr : new String[]{"h", "s", "m", "d"}) {
+            assertNull("光有后缀的表达式 " + expr + " 属误配，应落穿成 NULL 且不抛",
+                    FlowUtil.processTime(expr, FlowData.create()));
+        }
+    }
+
+    private static void assertEvaluatorOffset(String expr, long expectedSeconds) {
+        LocalDateTime before = LocalDateTime.now();
+        LocalDateTime expire = FlowUtil.processTime(expr, FlowData.create());
+        assertNotNull(expr + " 是合法相对档，必须算出到期时间（算成 NULL 就是把求值器改哑了）", expire);
+        long delta = Duration.between(before, expire).getSeconds();
+        // 带宽 −5/+60：toLocalDateTime(Date) 落在秒级（毫秒被抹平）而 before 取在求值之前，
+        // 差值天然少 0~1s；合法档算成 0 或 NULL 才是病灶。
+        assertTrue(expr + " 的偏移应≈" + expectedSeconds + "s（实得 " + delta + "s）",
+                delta >= expectedSeconds - 5L && delta <= expectedSeconds + 60L);
     }
 }

@@ -78,21 +78,33 @@ public final class FlowUtil {
         }
         if (StringUtils.isNotBlank(expireTime)) {
             Date now = new Date();
+            // issues/137 C（2026-09-29 owner 拍 · spec 04 §任务行 expire_time）：误配的相对档
+            // （`xh` 前缀非整数 / `2.5h` 小数 / `3hh` 前缀还带字母 / 光秃秃一个后缀字母）一律**落穿**到
+            // 下面的绝对时刻档，解析不出即 NULL——不抛 NumberFormatException 打断建单
+            // （"节点属性配错了不该把流程炸掉"），也不退化成"取当前时间"（那等于建单即逾期，比不写更难发现）。
             if (expireTime.endsWith("s")) {
-                int seconds = Integer.parseInt(expireTime.substring(0, expireTime.length() - 1));
-                return toLocalDateTime(new Date(now.getTime() + seconds * 1000L));
+                Integer seconds = parseIntOrNull(expireTime.substring(0, expireTime.length() - 1));
+                if (seconds != null) {
+                    return toLocalDateTime(new Date(now.getTime() + seconds * 1000L));
+                }
             } else if (expireTime.endsWith("m")) {
-                int minutes = Integer.parseInt(expireTime.substring(0, expireTime.length() - 1));
-                return toLocalDateTime(new Date(now.getTime() + minutes * 60000L));
+                Integer minutes = parseIntOrNull(expireTime.substring(0, expireTime.length() - 1));
+                if (minutes != null) {
+                    return toLocalDateTime(new Date(now.getTime() + minutes * 60000L));
+                }
             } else if (expireTime.endsWith("h")) {
-                int hours = Integer.parseInt(expireTime.substring(0, expireTime.length() - 1));
-                return toLocalDateTime(new Date(now.getTime() + hours * 3600000L));
+                Integer hours = parseIntOrNull(expireTime.substring(0, expireTime.length() - 1));
+                if (hours != null) {
+                    return toLocalDateTime(new Date(now.getTime() + hours * 3600000L));
+                }
             } else if (expireTime.endsWith("d")) {
-                int days = Integer.parseInt(expireTime.substring(0, expireTime.length() - 1));
-                Calendar cal = Calendar.getInstance();
-                cal.setTime(now);
-                cal.add(Calendar.DAY_OF_MONTH, days);
-                return toLocalDateTime(cal.getTime());
+                Integer days = parseIntOrNull(expireTime.substring(0, expireTime.length() - 1));
+                if (days != null) {
+                    Calendar cal = Calendar.getInstance();
+                    cal.setTime(now);
+                    cal.add(Calendar.DAY_OF_MONTH, days);
+                    return toLocalDateTime(cal.getTime());
+                }
             }
             try {
                 return toLocalDateTime(DATE_FORMAT.parse(expireTime));
@@ -101,6 +113,21 @@ public final class FlowUtil {
             }
         }
         return null;
+    }
+
+    /**
+     * 相对档前缀取整数：非整数（{@code x}/{@code 2.5}/{@code 3h}）返回 null 交调用方**落穿**，不抛。
+     *
+     * <p>issues/137 C：这一档原本是 {@code Integer.parseInt} 直抛 NumberFormatException，
+     * 于是节点把到期表达式写坏时 java 参考实现会打断建单，而其余七栈（无异常/已 try 住）落穿成 NULL——
+     * 跨栈口径分叉。按 owner 裁定统一成"误配按未配置处理"：算不出就是 NULL。
+     */
+    private static Integer parseIntOrNull(String text) {
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static java.time.LocalDateTime toLocalDateTime(Date date) {
