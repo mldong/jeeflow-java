@@ -241,6 +241,7 @@ public class JeeflowFacade {
                 case "processTask/surrogate": return taskSurrogate(args);
                 case "processTask/addCandidate": return taskAddCandidate(args);
                 case "processTask/transfer": return taskTransfer(args);          // issues/115
+                case "processTask/removeTaskActor": return taskRemoveActor(args); // issues/115 第 47 个 action
                 case "processTask/latest": return taskLatest(args);
                 // ── 委托代理（需扩展仓储）──
                 case "processSurrogate/page": return surrogatePage(args);
@@ -1115,6 +1116,64 @@ public class JeeflowFacade {
                         .set(ProcessPublisher.KEY_TO_ACTOR, toActor)
                         .set(ProcessPublisher.KEY_OPERATOR, operator))
                 .build());
+        return ok();
+    }
+
+    /**
+     * 摘除参与人（issues/115 残留 · 门面第 <b>47</b> 个 action，spec 06
+     * §processTask/removeTaskActor）。SPI 侧 {@code removeTaskActor} 早就是必选方法，
+     * 只是没上门面；本 action 补的就是这一段（八栈同批）。
+     *
+     * <p>与两个兄弟 action 的分工写清楚，免得后来人把三条混用：
+     * <ul>
+     *   <li>{@code processTask/surrogate}＝<b>只加</b>（加签，原人保留可办）；</li>
+     *   <li>{@code processTask/transfer}＝<b>换人</b>（摘 A 加 B，写 submitType=7＋tf_transferHistory 留痕）；</li>
+     *   <li>本 action＝<b>只摘不加、零留痕</b>：删掉 {@code actorIds} 在本任务的参与者行，
+     *       不新建任务、不写任何任务变量、不覆写任务 {@code actor_id}/{@code operator} 列、
+     *       <b>不 fire 事件</b>（[issues/132 §11.3] 定稿的事件集没有"摘人"这一码，
+     *       码 7 的语义是"参与者被替换"，只摘不加套它就是凭空造出一条转办事实）。</li>
+     * </ul></p>
+     *
+     * <p>四道守卫（次序逐栈一致，spec 同节钉死）：operator 硬必填 → 主键/集合缺失 →
+     * 任务存在 → 归属判据 → 仅 DOING → 不得摘空。归属判据沿用 {@code transfer} 的口径
+     * （只能摘自己那一票，{@code flow.auto}/{@code flow.admin} 例外）：{@code transfer} 之所以
+     * 能"摘 A 加 B"是因为 A 就是操作人本人，本 action 不得成为借道摘他人的口子。
+     * "不得摘空"这一条是本 action 独有的下限——摘空会造出<b>无人可办又无法撤回重派的死单</b>，
+     * 比"配错表达式落 NULL"更难恢复，判据取<b>集合差</b>（当前参与者 − 归一后入参），
+     * 不能用"入参条数"，否则混入非参与者 id 就能绕过。</p>
+     *
+     * <p>幂等：{@code actorIds} 里不属于本任务参与者的 id 静默忽略（前端双点、集成层重放
+     * 第二次应得成功信封）；需要"人不在任务里就报错"请用 {@code transfer}。</p>
+     */
+    private Map<String, Object> taskRemoveActor(Map<String, Object> args) {
+        // operator 先判必填：参数全缺时若先报主键缺失，会把鉴权缺口藏进"缺参数"报错里。
+        // 归一（trim）在入口就做，不沿用 transfer 现状那支未 trim 的形状——新增代码不该重犯
+        // issues/142 §2.11 已立法的毛病（transfer 的 operator trim 随批二 §3-6 单独收）。
+        String operator = StringUtils.normalizeActor(toStr(args.get("operator")));
+        if (operator == null) return error("operator 必填");
+        // 主键档与归属值档分得很清楚（spec 06 §2.11「主键类参数另判一档」）：
+        // processTaskId 缺失/空串 ⇒ 响亮报错；actorIds 归一后为空 ⇒ 与 surrogate 同一逐字文案，
+        // 两条都不落库，空串元素也绝不会被喂进 DELETE（历史 actor_id='' 脏行因此安全）。
+        Long taskId = toLong(args.get(FlowConst.PROCESS_TASK_ID_KEY));
+        java.util.List<String> actors = toStringList(args.get("actorIds"));
+        if (taskId == null || actors.isEmpty()) return error("processTaskId/actorIds 缺失");
+        ProcessTask task = repository.findTaskById(taskId);
+        if (task == null) return error("任务不存在");
+        // 归属判据同 transfer：被摘集合必须含操作人本人（入参与库里值都取归一后的串，比较才咬得上）
+        if (!isPrivilegedOperator(operator) && !actors.contains(operator)) {
+            return error("无权限摘除该任务参与人");
+        }
+        // 前置态：仅进行中（DOING=10）任务可摘人。已办结/撤回/废弃任务的历史参与人行是
+        // approvalRecord 的取证依据（它读全状态任务行），摘它等于改写审批历史。
+        if (!task.isDoing()) return error("任务非进行中，不可摘除参与人");
+        // 以参与者表为判据（聚合副本可能滞后于加签/转办的增量写入，与 transfer 同源）
+        List<String> current = repository.findTaskActors(taskId);
+        List<String> remaining = new ArrayList<>();
+        for (String actor : current) {
+            if (!actors.contains(actor)) remaining.add(actor);
+        }
+        if (remaining.isEmpty()) return error("至少需保留一名参与人");
+        repository.removeTaskActor(taskId, actors);
         return ok();
     }
 

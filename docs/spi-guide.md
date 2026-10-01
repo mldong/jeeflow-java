@@ -304,6 +304,6 @@ public Map<String, Object> flow(HttpServletRequest req, @RequestBody Map<String,
 }
 ```
 
-`JeeflowFacade.flow(action, map)` 路由全部 27 个 action（spec §11.2 清单），
+`JeeflowFacade.flow(action, map)` 路由全部 action（清单以 `jeeflow-doc/docs/spec/06-facade.md` 为准，不在本文写死条数免漂移），
 返回 `{code, msg, data}`；deploy 自动做版本管理，execute 按 submitType 全分发。
 操作人约定：`args.operator` 显式传入（集成方可替换为登录上下文注入）。
