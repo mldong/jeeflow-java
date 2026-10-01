@@ -52,6 +52,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -67,6 +69,86 @@ import java.util.stream.Collectors;
  * @author mldong
  */
 public class JeeflowFacade {
+
+    /**
+     * issues/137-G：门面是所有内部异常的共性通道。旧形状在顶层 {@code catch (Exception e)} 里把
+     * {@code e.getMessage()} 原样拼进出口 msg，于是 JVM 运行时异常、反射、驱动、集成方 JSON provider
+     * 的内部文案直接进用户面（137 案实测出口 {@code code=99999999, msg=For input string: "x"}）。
+     * 现在：内部异常一律换成 {@link #INTERNAL_FAILURE_MSG}，原文只进日志（cause 分离，
+     * 与 issues/139「内部码不进 msg」同一条尺子）。
+     */
+    private static final Logger log = Logger.getLogger(JeeflowFacade.class.getName());
+
+    /** 内部异常对外只说这一句（固定文案，其余七栈逐字复刻） */
+    static final String INTERNAL_FAILURE_MSG = "流程处理失败";
+
+    /**
+     * 判「这条异常的 message 能不能原样进 msg」——抽成纯函数（rust {@code parse_error_message}／
+     * moon {@code unknown_node_warning} 同姿势），文案判据与副作用（日志）各自可测。
+     *
+     * <p><b>不能简单收窄成「只透 {@link com.mldong.jeeflow.JeeflowException}」</b>：引擎另有约十处直接
+     * 用 {@code RuntimeException}/{@code IllegalStateException}/{@code IllegalArgumentException} 携带中文
+     * 契约文案（{@code ModelParser.java:39/51}「未注册 IJsonProvider…」/「读取流程定义 JSON 失败」、
+     * {@code ProcessTask.java:79/82/97}、{@code ProcessInstance.java:506/511}、{@code CustomModel.java:152}、
+     * {@code JeeflowFacade.java} 的扩展仓/精度档等），其余七栈、十三个集成壳与前端 toast 都按这些原文
+     * <b>逐字</b>对齐，而 java 测试一处都没钉 ⇒ 收窄会静默改写契约面且没人报警。所以按「这段文案是谁写的」判：</p>
+     * <ol>
+     *   <li>{@code message == null} ⇒ 内部（兜底会吐类名）；</li>
+     *   <li>契约异常族（{@code JeeflowException} 及其子类）⇒ 逐字透出；</li>
+     *   <li>{@code message} 恰等于 {@code String.valueOf(cause)} ⇒ 内部（裸包装 {@code new RuntimeException(e)}，
+     *       典型是 {@code JeeflowEngineImpl.runInTx} 那两处）；</li>
+     *   <li>JVM／反射／IO／驱动自己抛的族（NPE、NumberFormatException、CCE、越界、算术错、
+     *       StackOverflow、LinkageError、ReflectiveOperationException、IOException、SQLException）⇒ 内部；
+     *       注意引擎拿来当契约载体的 {@code RuntimeException}/{@code IAE}/{@code ISE} <b>不在</b>这一族；</li>
+     *   <li>抛出点不在引擎主包（JDK、集成方 provider、测试桩）⇒ 内部。</li>
+     * </ol>
+     *
+     * @param type    异常类型
+     * @param message 异常文案（可为 null）
+     * @param cause   异常原因（可为 null）
+     * @param trace   栈帧（可为 null 或空）
+     * @return true ⇒ 属内部信息，出口只给固定文案
+     */
+    static boolean isForeignDetail(Class<?> type, String message, Throwable cause, StackTraceElement[] trace) {
+        if (message == null) {
+            return true;
+        }
+        if (com.mldong.jeeflow.JeeflowException.class.isAssignableFrom(type)) {
+            return false;
+        }
+        if (message.equals(String.valueOf(cause))) {
+            return true;
+        }
+        if (jvmInternal(type)) {
+            return true;
+        }
+        return !thrownInsideEngine(trace);
+    }
+
+    /** 由 JVM/反射层/IO 层构造的异常族（其 message 一律是内部信息） */
+    private static boolean jvmInternal(Class<?> type) {
+        return NullPointerException.class.isAssignableFrom(type)
+                || NumberFormatException.class.isAssignableFrom(type)
+                || ClassCastException.class.isAssignableFrom(type)
+                || IndexOutOfBoundsException.class.isAssignableFrom(type)
+                || ArithmeticException.class.isAssignableFrom(type)
+                || StackOverflowError.class.isAssignableFrom(type)
+                || VirtualMachineError.class.isAssignableFrom(type)
+                || LinkageError.class.isAssignableFrom(type)
+                || ReflectiveOperationException.class.isAssignableFrom(type)
+                || java.lang.reflect.UndeclaredThrowableException.class.isAssignableFrom(type)
+                || java.io.IOException.class.isAssignableFrom(type)
+                || java.sql.SQLException.class.isAssignableFrom(type);
+    }
+
+    /** 栈顶帧是否落在引擎主包（排除测试包：测试桩抛的不算引擎契约文案） */
+    private static boolean thrownInsideEngine(StackTraceElement[] trace) {
+        if (trace == null || trace.length == 0) {
+            return false;
+        }
+        String cls = trace[0].getClassName();
+        return cls.startsWith("com.mldong.jeeflow.") && !cls.startsWith("com.mldong.jeeflow.test.");
+    }
 
     private final JeeflowEngine engine;
     private final IProcessRepository repository;
@@ -174,7 +256,14 @@ public class JeeflowFacade {
                     return error("未知 action: " + action);
             }
         } catch (Exception e) {
-            return error(e.getMessage() != null ? e.getMessage() : e.toString());
+            // issues/137-G：判别规则与理由见 isForeignDetail——引擎写的中文契约文案照旧逐字透出
+            // （七栈＋十三壳＋前端 toast 都按原文对齐，不能在这条上收窄），只把**外来/内部异常**
+            // 的原文换成固定文案，原文连同栈一起进日志（cause 分离）。
+            if (isForeignDetail(e.getClass(), e.getMessage(), e.getCause(), e.getStackTrace())) {
+                log.log(Level.SEVERE, "jeeflow action 执行失败: action=" + action, e);
+                return error(INTERNAL_FAILURE_MSG);
+            }
+            return error(e.getMessage());
         }
     }
 
@@ -1300,7 +1389,11 @@ public class JeeflowFacade {
             Object result = m.invoke(reader, tableName, processInstanceId);
             return result == null ? ok() : ok(result);
         } catch (Exception e) {
-            return error("业务数据读取失败: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
+            // issues/137-G：固定文案，反射/驱动原文只进日志。旧形状把 cause.getMessage() 拼进 msg
+            // （"业务数据读取失败: <内部原文>"），与 issues/139「内部码不进 msg」口径相反。
+            log.log(Level.SEVERE, "jeeflow bizData 读取失败: tableName=" + tableName
+                    + ", processInstanceId=" + processInstanceId, e);
+            return error("业务数据读取失败");
         }
     }
 
