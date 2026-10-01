@@ -414,7 +414,45 @@ public class RemoveTaskActorActionTest {
         }
     }
 
-    // ═══ 兄弟 action 不受影响（回归）═══
+    // ═══ 语义 6「匹配取归一值、DELETE 取行上的原值」＋语义 5「脏行不算一个人」═══
+
+    /**
+     * 库里的行是修复前落下的未 trim 原值 {@code " 9101 "}，入参给 {@code "9101"}：
+     * 判据必须把它当成同一个人<b>并真删掉</b>，且喂进 DELETE 的实参是<b>那一行的原值</b>。
+     * 反面形状＝拿归一值去删：判成同一人却一条没删，门面报成功而被摘的人待办还在（假成功）。
+     */
+    @Test
+    public void untrimmedHistoricalRowIsMatchedAndDeletedByRowValue() {
+        Long instanceId = startInstance();
+        Long taskId = task(instanceId, "apply").getTaskId();
+        repo.seedDirtyRow(taskId, " 9101 ");          // 历史未 trim 行（写侧归一后正常路径造不出来）
+
+        assertOk(remove(taskId, Arrays.asList("9101"), "flow.admin"));
+
+        assertEquals("未 trim 的历史行被归一匹配命中并删除", Arrays.asList("zhangsan"),
+                repo.findRealActors(taskId));
+        assertEquals("脏行清单里那一行确实没了", Arrays.asList(), repo.dirtyRemaining(taskId));
+        List<String> last = repo.removeCalls.get(repo.removeCalls.size() - 1);
+        assertEquals("DELETE 的实参是行上的原值，不是归一后的值（否则删不掉）: " + last,
+                Arrays.asList(" 9101 "), last);
+    }
+
+    /**
+     * 「至少剩一人」的下限按<b>能办单的人数</b>算：库里只剩 {@code actor_id=''} 脏行时，
+     * 摘走最后一个真人必须报错——脏行谁也办不了，拿它撑住下限等于让"摘空"伪装成成功。
+     */
+    @Test
+    public void dirtyRowsDoNotPropUpTheKeepOneFloor() {
+        Long instanceId = startInstance();
+        Long taskId = task(instanceId, "apply").getTaskId();
+        repo.seedDirtyRow(taskId, "");
+        repo.seedDirtyRow(taskId, "   ");
+
+        Map<String, Object> resp = remove(taskId, Arrays.asList("zhangsan"), "flow.admin");
+
+        assertEquals("脏行不算一个人", "至少需保留一名参与人", resp.get("msg"));
+        assertEquals("报错后真人那行还在", Arrays.asList("zhangsan"), repo.findRealActors(taskId));
+    }
 
     @Test
     public void siblingActionsKeepTheirOwnSemantics() {

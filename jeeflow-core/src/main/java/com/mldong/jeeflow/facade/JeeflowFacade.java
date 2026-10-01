@@ -1168,12 +1168,24 @@ public class JeeflowFacade {
         if (!task.isDoing()) return error("任务非进行中，不可摘除参与人");
         // 以参与者表为判据（聚合副本可能滞后于加签/转办的增量写入，与 transfer 同源）
         List<String> current = repository.findTaskActors(taskId);
-        List<String> remaining = new ArrayList<>();
-        for (String actor : current) {
-            if (!actors.contains(actor)) remaining.add(actor);
+        java.util.Set<String> targets = new java.util.HashSet<String>(actors);
+        // 语义 6「匹配取归一值、DELETE 取行上的原值」（§2.11 硬要求②的删除腿）：库里的历史行可能是
+        // 修复前落下的未 trim 原值 " leader "，入参 "leader" 必须判成同一个人并真删掉它。只拿归一值
+        // 去 DELETE 会"判成同一人却一条没删"——门面报成功而被摘的人待办还在，是假成功（go 栈实测形状）。
+        List<String> toDelete = new ArrayList<>();
+        int remaining = 0;
+        for (String row : current) {
+            String normalized = StringUtils.normalizeActor(row);
+            if (normalized == null) {
+                continue;   // 归一后为空的历史脏行（actor_id=''/纯空白）既不匹配也不算"一个人"
+            }
+            if (targets.contains(normalized)) toDelete.add(row);
+            else remaining++;
         }
-        if (remaining.isEmpty()) return error("至少需保留一名参与人");
-        repository.removeTaskActor(taskId, actors);
+        // 语义 5「不得摘空」按**能办单的人数**判：脏行撑不起这条下限，否则"摘空"会伪装成成功
+        if (!toDelete.isEmpty() && remaining == 0) return error("至少需保留一名参与人");
+        // 语义 7「幂等」：一个都没命中 ⇒ 空操作、成功信封（前端双点/集成层重放第二次不再报错）
+        if (!toDelete.isEmpty()) repository.removeTaskActor(taskId, toDelete);
         return ok();
     }
 
