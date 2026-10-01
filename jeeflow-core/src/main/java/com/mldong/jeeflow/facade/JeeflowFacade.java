@@ -1156,7 +1156,9 @@ public class JeeflowFacade {
         // 两条都不落库，空串元素也绝不会被喂进 DELETE（历史 actor_id='' 脏行因此安全）。
         Long taskId = toLong(args.get(FlowConst.PROCESS_TASK_ID_KEY));
         java.util.List<String> actors = toStringList(args.get("actorIds"));
-        if (taskId == null || actors.isEmpty()) return error("processTaskId/actorIds 缺失");
+        // 0 与负数走**缺参数**档而不是"任务不存在"（spec 语义 8）：拿 0 当 id 查不到、和没传 id
+        // 是同一种调用方错误；本栈 toLong 对空串/非数字都返回 null，天然落同一档。
+        if (taskId == null || taskId <= 0L || actors.isEmpty()) return error("processTaskId/actorIds 缺失");
         ProcessTask task = repository.findTaskById(taskId);
         if (task == null) return error("任务不存在");
         // 归属判据同 transfer：被摘集合必须含操作人本人（入参与库里值都取归一后的串，比较才咬得上）

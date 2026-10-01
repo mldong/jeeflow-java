@@ -362,8 +362,12 @@ public class RemoveTaskActorActionTest {
                 remove(taskId, Arrays.asList("", "  ", null), "flow.admin").get("msg"));
         assertEquals("任务不存在",
                 "任务不存在", remove(424242L, Arrays.asList("9001"), "flow.admin").get("msg"));
+        assertEquals("主键 0 ⇒ 缺参数档（不拿 0 当 id 去查、去落库）",
+                "processTaskId/actorIds 缺失", remove(0L, Arrays.asList("9001"), "flow.admin").get("msg"));
+        assertEquals("主键负数 ⇒ 缺参数档（spec 语义 8：0/负数与缺键同判）",
+                "processTaskId/actorIds 缺失", remove(-1L, Arrays.asList("9001"), "flow.admin").get("msg"));
 
-        assertEquals("五个报错档一条都不许删", before, actors(taskId));
+        assertEquals("七个报错档一条都不许删", before, actors(taskId));
     }
 
     /**
