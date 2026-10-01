@@ -84,8 +84,15 @@ public class MemoryRepo implements IProcessRepository {
         for (String a : actors) if (!existing.contains(a)) existing.add(a);
     }
     @Override public void removeTaskActor(Long taskId, List<String> actors) {
+        // issues/137 §3-6（spec 06 §processTask/removeTaskActor 语义 6 · owner 2026-10-02 拍「两形并集」）：
+        // 删除值先过 StringUtils.actorDeleteForms——① 空值不参与匹配（历史 actor_id='' 脏行不被误删）；
+        // ② 非空值以「原值 ∪ trim 值」两形命中（未 trim 的脏行按原值删得掉、写侧归一后的规范行按 trim 形
+        // 删得掉）；③ 展开后为空 ⇒ 什么都不删。与 JdbcProcessRepository 同一条判据、两仓必须同答案
+        // （issues/117 场景 27）。
         List<String> existing = taskActors.get(taskId);
-        if (existing != null) existing.removeAll(actors);
+        if (existing == null) return;
+        existing.removeAll(com.mldong.jeeflow.util.StringUtils.actorDeleteForms(
+                actors == null ? null : actors.toArray(new String[0])));
     }
 
     private <T> PageResult<T> unsupported() { throw new UnsupportedOperationException("persist 测试不涉及分页"); }

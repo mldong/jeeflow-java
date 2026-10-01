@@ -215,6 +215,19 @@ public class MemoryProcessRepository implements IProcessRepository {
     }
 
     /**
+     * 测试访问器：<b>绕开写侧归一</b>直接种下参与者行（issues/137 §3-6 删除腿专用）。
+     *
+     * <p>{@link #addTaskActor} 会 trim＋丢空，因此正常路径<b>建不出</b>未 trim 的历史脏行
+     * （{@code " 9101 "}）也建不出 {@code actor_id=''} 行——而删除腿的两档判据恰恰要照这两种行：
+     * ① 未 trim 脏行必须删得掉（只取 trim 形则删不掉，门面报成功＝假成功）；
+     * ② {@code actor_id=''} 脏行不得被空值入参误删（那是替脏数据做掉唯一痕迹）。
+     * 所以这一支逐字照搬入参、一个字符都不改，模拟"修复前落库的历史数据"。</p>
+     */
+    public void seedTaskActorsForTest(Long taskId, List<String> rawRows) {
+        taskActors.put(taskId, new ArrayList<>(rawRows));
+    }
+
+    /**
      * 内存仓的 cc 行（issues/141 G2）——形状对齐 {@code wf_process_cc_instance} 表：
      * actor id ＋ 未读状态（0 未读 / 1 已读）＋ 建行时间与更新时间。
      */
@@ -254,9 +267,12 @@ public class MemoryProcessRepository implements IProcessRepository {
 
     @Override
     public void removeTaskActor(Long taskId, List<String> actors) {
+        // issues/137 §3-6（spec 06 §processTask/removeTaskActor 语义 6 · owner 2026-10-02 拍「两形并集」）：
+        // 删除值先过删除腿单点——空值不参与匹配（历史 actor_id='' 脏行不被误删）、非空值以
+        // 「原值 ∪ trim 值」两形命中。改前这里是裸 removeAll(actors)，两头都不成立。
         List<String> existing = taskActors.get(taskId);
         if (existing != null) {
-            existing.removeAll(actors);
+            existing.removeAll(actorDeleteForms(actors));
             syncTaskActorIds(taskId, existing);
         }
     }
@@ -268,6 +284,17 @@ public class MemoryProcessRepository implements IProcessRepository {
      */
     private static List<String> normalizeActorValues(List<String> actors) {
         return com.mldong.jeeflow.util.StringUtils.normalizeActors(
+                actors == null ? new String[0] : actors.toArray(new String[0]));
+    }
+
+    /**
+     * 参与者<b>删除腿</b>展开（issues/137 §3-6 · spec 06 §processTask/removeTaskActor 语义 6）：
+     * 判据本体同样只有一枚＝{@code com.mldong.jeeflow.util.StringUtils.actorDeleteForms}，
+     * 本方法只做 List→数组的搬运，<b>不在这里抄第二份 trim/判空</b>。
+     * 与 {@link #normalizeActorValues} 的差别就是"原值也进集合"这一层——见那枚单点的 javadoc。
+     */
+    private static List<String> actorDeleteForms(List<String> actors) {
+        return com.mldong.jeeflow.util.StringUtils.actorDeleteForms(
                 actors == null ? new String[0] : actors.toArray(new String[0]));
     }
 

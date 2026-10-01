@@ -456,14 +456,22 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     @Override
     public void removeTaskActor(Long taskId, List<String> actors) {
-        if (actors == null || actors.isEmpty()) return;
+        // issues/137 §3-6（spec 06 §processTask/removeTaskActor 语义 6 · owner 2026-10-02 拍「两形并集」）：
+        // 删除值先过 StringUtils.actorDeleteForms —— ① 空值一律不喂 DELETE（否则历史 actor_id='' 脏行被
+        // 批量误删）；② 非空值同时以「原值」与「trim 值」两形进 IN：只取 trim 形 ⇒ 门面按语义 6 交出的
+        // 脏行原值 " 9101 " 在真库 NO PAD 排序规则下删不掉而门面报成功（假成功）；只取原值 ⇒ 绕过门面
+        // 直连仓储的调用方传 " 8601 " 删不掉写侧归一后的规范行（issues/142 §9.2）。
+        // ③ 展开后为空 ⇒ 早退，一条 DELETE 都不发（不得退化成"清空该任务全部参与者"）。
+        List<String> forms = StringUtils.actorDeleteForms(
+                actors == null ? null : actors.toArray(new String[0]));
+        if (forms.isEmpty()) return;
         StringBuilder sql = new StringBuilder("DELETE FROM wf_process_task_actor WHERE process_task_id = ? AND actor_id IN (");
-        for (int i = 0; i < actors.size(); i++) sql.append(i == 0 ? "?" : ",?");
+        for (int i = 0; i < forms.size(); i++) sql.append(i == 0 ? "?" : ",?");
         sql.append(")");
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql.toString())) {
             ps.setLong(1, taskId);
-            for (int i = 0; i < actors.size(); i++) ps.setString(i + 2, actors.get(i));
+            for (int i = 0; i < forms.size(); i++) ps.setString(i + 2, forms.get(i));
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new RuntimeException("移除任务参与者失败", e);

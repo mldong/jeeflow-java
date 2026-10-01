@@ -129,7 +129,31 @@ public interface IProcessRepository {
      */
     void addTaskActor(Long taskId, List<String> actors);
 
-    /** 移除任务参与者；入参同样按 {@code trim()} 归一后再比（{@code " 123 "} 与 {@code "123"} 同一个人）。 */
+    /**
+     * 移除任务参与者（摘人／转办摘原人／{@code processTask/removeTaskActor} 都落这一支）。
+     *
+     * <p><b>归属值删除腿义务</b>（issues/137 §3-6 · spec 06 §processTask/removeTaskActor 语义 6，
+     * owner 2026-10-02 拍「两形并集」）——<b>与 {@link #addTaskActor} 的写侧义务不同，别照抄</b>：</p>
+     * <ol>
+     *   <li><b>空值一律丢弃、不参与匹配</b>：{@code null}／{@code ''}／纯空白都不得进 {@code DELETE}，
+     *       否则历史 {@code actor_id=''} 脏行会被批量误删（那是替脏数据做掉唯一痕迹）；</li>
+     *   <li><b>非空值同时以「原值」与「trim 值」两形匹配</b>（去重保序）。只取 trim 形 ⇒ 门面按语义 6
+     *       交出的历史脏行原值 {@code " 9101 "} 被削成 {@code 9101}，真库 NO PAD 排序规则下那一行删不掉
+     *       而门面报成功（<b>假成功</b>：被摘的人待办还在）；只取原值 ⇒ 绕过门面直连仓储的调用方传
+     *       {@code " 8601 "} 时删不掉写侧归一后落库的规范行 {@code 8601}（issues/142 §9.2 那一路）。
+     *       两形并集同时满足两侧，且按 §2.11 归一口径 {@code " 9101 "} 与 {@code 9101} 本就是同一个人，
+     *       两行都删才是"摘掉这个人"的正确结果，不构成误删；</li>
+     *   <li><b>展开后为空 ⇒ 早退，一条 {@code DELETE} 都不发</b>——空列表不得退化成
+     *       "清空该任务全部参与者"。</li>
+     * </ol>
+     *
+     * <p>判据本体只有一枚＝{@code com.mldong.jeeflow.util.StringUtils.actorDeleteForms}（各语言栈有同名
+     * 对应件），trim 与判空规则仍复用 {@code normalizeActors} 那一枚，<b>不要在仓储里抄第二份</b>。
+     * 判空一律 {@code trim().isEmpty()}：{@code "0"} 是合法 id 必须留下，{@code "0"} 与 {@code "00"}
+     * 是两个人。SQL 仓与内存仓在同一条判据上必须给同一个答案（issues/117 场景 27 那把尺子）。</p>
+     *
+     * <p>{@code taskId} 仍是<b>主键</b>不是归属值，同 {@link #addTaskActor} 末段那一档。</p>
+     */
     void removeTaskActor(Long taskId, List<String> actors);
 
     // ═══════════════════════════════════════

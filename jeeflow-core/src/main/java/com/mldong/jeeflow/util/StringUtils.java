@@ -117,6 +117,47 @@ public final class StringUtils {
     }
 
     /**
+     * 归属值<b>删除腿</b>展开（issues/137 §3-6 · spec 06 §processTask/removeTaskActor 语义 6，
+     * owner 2026-10-02 拍「两形并集」）：把待删列表展开成 {@code DELETE ... IN (...)} 真正要绑的值——
+     * <b>空值一律丢弃，非空值同时保留「原值」与「trim 值」两形</b>（去重、保序）。
+     *
+     * <p>为什么必须两形、只取一头各有一种假成功（1.8.36 之前八栈正好分成这两派，没有一处两全）：</p>
+     * <ul>
+     *   <li>只取 <b>trim 值</b>（php/csharp/rust/moon 四栈八处的旧形状）⇒ 门面按语义 6 交出的历史脏行
+     *       原值 {@code " 9101 "} 被削成 {@code 9101}，真库 NO PAD 排序规则下那一行删不掉，
+     *       门面却报成功——被摘的人待办还在；</li>
+     *   <li>只取 <b>原值</b>（go/node/python/java 四栈九处的旧形状）⇒ 第三方绕过门面直连仓储传
+     *       {@code " 8601 "} 时删不掉写侧归一后落库的规范行 {@code 8601}（issues/142 §9.2 那一路）；
+     *       且空值照喂 {@code DELETE}，会把历史 {@code actor_id=''} 脏行批量误删
+     *       （那是替脏数据做掉唯一痕迹）。</li>
+     * </ul>
+     *
+     * <p>两形并集同时满足两侧：脏行按原值命中、规范行按 trim 形命中。按 §2.11 归一口径
+     * {@code " 9101 "} 与 {@code 9101} 本就是<b>同一个人</b>，两行都删掉才是"摘掉这个人"的正确结果，
+     * 不构成误删。</p>
+     *
+     * <p>判空<b>一律</b> {@code trim().isEmpty()}（与 {@link #normalizeActors} 同一枚尺子；本方法只加
+     * "原值也进集合"这一层，<b>不抄第二份 trim/判空判据</b>）：{@code "0"} 是合法 id 必须留下，
+     * 且 {@code "0"} 与 {@code "00"} 是两个人。</p>
+     *
+     * @param raw 待删归属值数组，元素可为 {@code null}（{@code null} 丢弃，<b>不得</b>串化成 {@code "null"}）
+     * @return 展开后的删除值列表（保序、去重、无空值）；入参为 {@code null} 或全为空值时返回<b>空列表</b>
+     *         ——调用方据此早退，<b>一条 {@code DELETE} 都不发</b>（空列表不得退化成"清空该任务全部参与者"）
+     */
+    public static java.util.List<String> actorDeleteForms(String... raw) {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        if (raw == null) return out;
+        for (String actorId : raw) {
+            if (actorId == null) continue;
+            String trimmed = actorId.trim();
+            if (trimmed.isEmpty()) continue;                  // ① 空值丢弃，不喂 DELETE
+            if (!out.contains(actorId)) out.add(actorId);      // ② 原值形：保住未 trim 的历史脏行
+            if (!out.contains(trimmed)) out.add(trimmed);      // ② trim 形：保住写侧归一后的规范行
+        }
+        return out;
+    }
+
+    /**
      * 抄送人集合归一（issues/141 G10 已落地的公开入口，<b>保留原名转发到 {@link #normalizeActors}</b>）。
      *
      * <p>spec 06 §2.11 要求任务侧复用同一枚单点、不要再抄第二份；名字里的 "Cc" 已不贴合
