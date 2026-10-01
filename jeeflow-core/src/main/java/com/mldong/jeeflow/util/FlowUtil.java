@@ -121,10 +121,17 @@ public final class FlowUtil {
      * <p>issues/137 C：这一档原本是 {@code Integer.parseInt} 直抛 NumberFormatException，
      * 于是节点把到期表达式写坏时 java 参考实现会打断建单，而其余七栈（无异常/已 try 住）落穿成 NULL——
      * 跨栈口径分叉。按 owner 裁定统一成"误配按未配置处理"：算不出就是 NULL。
+     *
+     * <p>issues/137 D（owner 2026-10-01 拍"判非负"）：**负数同样算不合法**。放行 {@code -5h} 会算出
+     * 一个**过去**的时刻 ⇒ 新建的行当场就是逾期，比"没配到期时间"更难发现，也和上面那条
+     * "不许退化成取当前时间"的精神冲突（那正是 126 的病灶形状）。返回 null ⇒ 落穿绝对档 ⇒ NULL。
+     * 只裁负、不裁加号：各栈整数解析（python {@code [+-]?}、node {@code [-+]?\d+}、php
+     * {@code [+-]?\d{1,18}}）都收 '+'，裁掉加号反而新造一处跨栈分叉。
      */
     private static Integer parseIntOrNull(String text) {
         try {
-            return Integer.parseInt(text);
+            int parsed = Integer.parseInt(text);
+            return parsed < 0 ? null : parsed;
         } catch (NumberFormatException e) {
             return null;
         }

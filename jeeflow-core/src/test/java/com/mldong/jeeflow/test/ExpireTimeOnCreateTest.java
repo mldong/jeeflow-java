@@ -95,6 +95,30 @@ public class ExpireTimeOnCreateTest {
     }
 
     /**
+     * 负向③（issues/137 D，owner 2026-10-01 拍"判非负"）：负数相对档不是合法偏移。
+     *
+     * <p>放行 {@code -5h} 会算出一个<b>过去</b>的时刻 ⇒ 新建的行当场即逾期，比"没配到期时间"更难发现；
+     * 与本卡"算不出就 NULL、绝不退化成 now"的精神同向。{@code d} 档同病（走
+     * {@code Calendar.add(DAY_OF_MONTH, -5)}，是历日倒退不是乘 86400）⇒ 两档各自钉一格。
+     * 加号档保持合法：各栈整数解析（python {@code [+-]?}、node {@code [-+]?\d+}、php
+     * {@code [+-]?\d{1,18}}）都收 '+'，只裁负不裁加，免得新造一处跨栈分叉。</p>
+     */
+    @Test
+    public void negativeRelativeExpressionStaysNull() {
+        ProcessTask minusHours = instance().createTask(node("approve", "-5h"), "审批", one(), "op", 0L, true);
+        assertNull("负数时档必须落穿 ⇒ NULL（放行即建单即逾期）", minusHours.getExpireTime());
+
+        ProcessTask minusDays = instance().createTask(node("approve", "-5d"), "审批", one(), "op", 0L, true);
+        assertNull("负数天档同样落穿（日历加天会倒退五天）", minusDays.getExpireTime());
+
+        ProcessTask minusSeconds = instance().createTask(node("approve", "-30s"), "审批", one(), "op", 0L, true);
+        assertNull("负数秒档同样落穿", minusSeconds.getExpireTime());
+
+        ProcessTask plusHours = instance().createTask(node("approve", "+2h"), "审批", one(), "op", 0L, true);
+        assertNotNull("正向对照：加号档仍合法（本格保证上面三判不是恒真）", plusHours.getExpireTime());
+    }
+
+    /**
      * 并行会签全员（案文 §1.8 写点③）：每个成员行都必须带到期时间。
      *
      * <p>这一格是补 csharp 执行者报出的缺口——它说本栈"并行全员"无专测格，摘掉那处没有格会红；
