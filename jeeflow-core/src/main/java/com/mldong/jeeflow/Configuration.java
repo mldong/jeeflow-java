@@ -38,16 +38,18 @@ public class Configuration {
         ServiceContext.put("fork", ForkParser.class);
         ServiceContext.put("join", JoinParser.class);
         ServiceContext.put("custom", CustomParser.class);
-        // 子流程档：spec 02-flow-definition.md「类型键的三条义务」第 3 条（issues/141 G4 · C 步）
-        // 立的是<b>小写</b> `snaker:subprocess`，而 java 参考实现历史上只认大写 `subProcess`
-        // ＋ 内部变体 `wfSubProcess` ⇒ 照 spec 写的定义在本栈拿不到子流程节点（查表是
-        // SimpleContext 的 HashMap get，大小写敏感，未命中即静默丢节点）。
-        // 姿势与 spec 11 §11.6 事件成员名同一条尺子：新写法（小写 subprocess，规范名）＋
-        // 旧写法 wfSubProcess / subProcess 作为<b>同值别名保留一代并标 deprecate</b>，下个代次再删。
-        // ⚠️ 待办（本轮 owner 明确不做）：spec 02 义务 1「查表前必须大小写归一」还没落地——
-        // 归一化要改 SimpleContext.findByName 的查表口径，会影响档位表全部条目，需一次全量回归。
+        // 子流程档（issues/141 G4，owner 2026-10-01 补拍＋二拍终局；spec 02-flow-definition.md §6.1 义务 1/3）：
+        // **规范名＝设计器实际输出的驼峰 `snaker:subProcess`**（mldong-flow-designer-plus 两模式都输出它，
+        // vben5-wf 原样透传无改写层，库里全部存量定义也是驼峰）。查表是 SimpleContext 的 HashMap get、
+        // 大小写敏感、未命中即丢节点，所以三种写法在这里同值并列注册，谁都不能少。
+        // 下面三档**就地保留、不删不管**：原「小写 subprocess 是规范名 ＋ 旧写法保一代并标 deprecate、
+        // 下个代次再删」的计划**已作废**——删驼峰 `subProcess` 会打断设计器输出与全部存量定义。
+        // 义务 1「查表前大小写归一」**不做**（不是待办）：归一化要改 SimpleContext.findByName 的查表口径、
+        // 牵动档位表全部条目，而 owner 裁定「只能按照设计器做，历史旧账不管」。
+        // 二拍：**子流程暂不进契约面**——本栈 `WfSubProcessParser` 也只解析 form/version、不执行子流程，
+        // 真实现后续单独开案；六栈（php/rust/moon/go/python/node）不补此档，靠未知档日志（义务 2）暴露。
         ServiceContext.put("subprocess", WfSubProcessParser.class);
-        // deprecate 别名（规范名 subprocess）：以下两档保留一代
+        // 同值别名（规范名＝驼峰 subProcess）：以下两档与上面那档一并保留，不标 deprecate、不排期删除
         ServiceContext.put("wfSubProcess", WfSubProcessParser.class);
         ServiceContext.put("subProcess", WfSubProcessParser.class);
     }
