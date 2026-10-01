@@ -119,6 +119,41 @@ public class ExpireTimeOnCreateTest {
     }
 
     /**
+     * issues/137 E：相对档**前缀**的两端空白必须裁掉（java 是本条最后一个没裁的栈）。
+     *
+     * <p>各栈整数解析对空白的容忍度天然不同：go 在 {@code Atoi} 前显式 {@code TrimSpace}、rust
+     * {@code .trim()}、.NET {@code int.TryParse} 与 python {@code int()} 默认就收前后空白，
+     * 而 java {@code Integer.parseInt(" 2")} 直接抛 ⇒ 同一份流程定义"别家有到期时间、java 没有"。
+     * 裁的位置只在前缀，**单位符与表达式末尾的空白不动**：{@code "2h "} 末位是空格、认不出单位，
+     * 仍按误配落穿（把整串去空白是另一件没立过法的事）。</p>
+     */
+    @Test
+    public void paddedRelativePrefixStillApplies() {
+        ProcessTask leading = instance().createTask(node("approve", " 2h"), "审批", one(), "op", 0L, true);
+        assertNotNull("前缀带一个空格的 2h 必须照样算得出（java 旧形状在这里抛 NFE ⇒ NULL）",
+                leading.getExpireTime());
+        long delta = Duration.between(leading.getCreateTime(), leading.getExpireTime()).getSeconds();
+        assertTrue("带空前缀的差值仍应≈2h（实得 " + delta + "s）",
+                delta >= 2 * 3600L - 5L && delta <= 2 * 3600L + 60L);
+
+        ProcessTask tabPlus = instance().createTask(node("approve", "	+2h "), "审批", one(), "op", 0L, true);
+        assertNull("单位符后面还带空格 ⇒ 末位不是 h，认不出单位，仍按误配落穿成 NULL（实得 "
+                + tabPlus.getExpireTime() + "）", tabPlus.getExpireTime());
+
+        // "2 h" 里那个空格**落在前缀区内**（末位仍是单位符 h）⇒ 属"前缀带空白"同一档，与 go 的
+        // `TrimSpace(expr[:len-1])` 同解。真正的分界线是单位符后面：`"2h "` 末位是空格、认不出单位。
+        ProcessTask inside = instance().createTask(node("approve", "2 h"), "审批", one(), "op", 0L, true);
+        assertNotNull("前缀区内的空白（数字与单位符之间）同样要裁掉——裁的是前缀，不是整串",
+                inside.getExpireTime());
+        assertTrue("且算出的仍是 2h 量（实得 " + inside.getExpireTime() + "）",
+                Duration.between(inside.getCreateTime(), inside.getExpireTime()).getSeconds()
+                        >= 2 * 3600L - 5L);
+
+        ProcessTask stillBad = instance().createTask(node("approve", " 2.5h"), "审批", one(), "op", 0L, true);
+        assertNull("trim 之后照样是误配（小数）⇒ 仍落穿，别把裁空白做成裁容错", stillBad.getExpireTime());
+    }
+
+    /**
      * 并行会签全员（案文 §1.8 写点③）：每个成员行都必须带到期时间。
      *
      * <p>这一格是补 csharp 执行者报出的缺口——它说本栈"并行全员"无专测格，摘掉那处没有格会红；

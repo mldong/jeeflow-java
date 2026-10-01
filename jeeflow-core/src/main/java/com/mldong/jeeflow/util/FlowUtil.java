@@ -129,12 +129,18 @@ public final class FlowUtil {
      * {@code [+-]?\d{1,18}}）都收 '+'，裁掉加号反而新造一处跨栈分叉。
      */
     private static Integer parseIntOrNull(String text) {
+        if (text == null) return null;
         try {
-            int parsed = Integer.parseInt(text);
-            return parsed < 0 ? null : parsed;
-        } catch (NumberFormatException e) {
-            return null;
-        }
+            // issues/137 E（owner 拍"统一 trim" · spec 04 §任务行 expire_time）：**只裁前缀的两端空白**。
+            // 到期表达式来自设计器手填/JSON 搬运，`" 2h"` 这种带一个空格的写法很常见，而各栈整数解析
+            // 对空白的容忍度天然不同（go `strconv.Atoi` 前先 TrimSpace、rust `.trim()`、.NET `TryParse`
+            // 默认就收前后空白、python `int()` 也收，java `Integer.parseInt` 偏偏不收）⇒ 不显式 trim 就是
+            // "同一份流程定义在 java 没到期时间、在别家有"。裁的位置只在**前缀**：单位符与末尾空白
+            // 不动（`"2h "` 末位是空格、认不出单位，仍按误配落穿），否则会把"整体去空白"这件没立过法的事
+            // 顺手做进去。
+            int parsed = Integer.parseInt(text.trim());
+            return parsed < 0 ? null : parsed;   // issues/137 D：负数同样算不合法（见上）
+        } catch (NumberFormatException e) { return null; }
     }
 
     private static java.time.LocalDateTime toLocalDateTime(Date date) {
