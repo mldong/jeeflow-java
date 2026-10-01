@@ -64,6 +64,18 @@ public final class ModelParser {
         processModel.setPreInterceptors(lfModel.getPreInterceptors());
         processModel.setRelTableName(lfModel.getRelTableName());
         processModel.setPersistMode(lfModel.getPersistMode());
+        // issues/137 A · 裁定 A（批二 §3-4）· **这一行就是基准自己的断链**：
+        // `JeeflowEngineImpl.java:93-96` 读的是 `ProcessModel.getExpireTime()`（流程定义**顶层**的
+        // 「期望完成时间」表达式，spec 02:21/55），而本方法此前逐字段搬了 9 项、**唯独漏了这一项**
+        // （`LfModel:15/27` 那个字段一直在，全 src/main 里 `ProcessModel.setExpireTime` 零调用者）
+        // ⇒ 引擎那句 `isNotEmpty` 守卫永远读到 null、`wf_process_instance.expire_time` 在参考实现里
+        // **恒 NULL**——"形状是 A、链路断在解析这一跳"。批二 §3-4 的 go 腿普查查出来的
+        // （go 无独立解析阶段、根键由结构体直接收，落地后反超基准），c# 同病（`ModelParser.cs:81-92`
+        // 的初始化器同样没有 `ExpireTime`）⇒ §3-4 真正的整改面是**八栈**而不是案文写的六栈。
+        // 取证格＝`InstanceExpireTimeOnStartTest#parserCarriesRootExpireTimeIntoProcessModel`
+        // （摘掉本行 ⇒ 该文件 10 格里 8 格红，且红的全是"配了该有值"的那几格；剩下两格是"该留 NULL"，
+        // 在断链状态下反而恒绿——这正是本案为什么必须有解析层那一格）。
+        processModel.setExpireTime(lfModel.getExpireTime());
 
         List<LfNode> nodes = lfModel.getNodes();
         List<LfEdge> edges = lfModel.getEdges();
