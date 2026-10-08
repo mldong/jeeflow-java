@@ -14,6 +14,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+          # runner 镜像默认 Maven 升到 3.10 后，central-publishing 0.6.0 的 staging 布局与之不兼容，
+          # Central 校验会报与真实原因无关的 "Bundle has content that does NOT have a .pom file"（1.8.38 三连败）。
+          maven-version: '3.9'
           cache: maven
       - name: Import GPG key
         id: import_gpg
