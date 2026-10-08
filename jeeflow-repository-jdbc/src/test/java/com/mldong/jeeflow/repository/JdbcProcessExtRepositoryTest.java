@@ -182,4 +182,31 @@ public class JdbcProcessExtRepositoryTest {
         extRepo.removeSurrogate(all.getId());
         assertNull(extRepo.findSurrogateById(all.getId()));
     }
+
+    /**
+     * issues/152 ②：SQL 仓第二层兜底——落在归属列 {@code t.operator} 上的空值 EQ ⇒ **空页**，
+     * 不得"这条条件不加"退化成全库台账（spec 06 §4.5 归属不变式 / §2.5 双层尺子）。
+     * 阳性对照用同一份数据、只换成真实归属值，证明判据不是恒真。
+     */
+    @Test
+    public void pageSurrogatesBlankOwnershipReturnsEmptyPage() {
+        LocalDateTime now = LocalDateTime.now();
+        ProcessSurrogate own = new ProcessSurrogate();
+        own.setOperator("op152-own");
+        own.setSurrogate("ag152");
+        own.setProcessName("leave");
+        own.setStartTime(now.minusDays(1));
+        own.setEndTime(now.plusDays(1));
+        own.setEnabled(1);
+        extRepo.saveSurrogate(own);
+
+        assertEquals("对照：真实归属列必须出行", 1, extRepo.pageSurrogates(
+                new PageQuery(1, 50).add("t.operator", "EQ", "op152-own")).getRecordCount());
+        assertEquals("空串归属列不得退化成全库", 0, extRepo.pageSurrogates(
+                new PageQuery(1, 50).add("t.operator", "EQ", "")).getRecordCount());
+        assertEquals("纯空白同档", 0, extRepo.pageSurrogates(
+                new PageQuery(1, 50).add("t.operator", "EQ", "   ")).getRecordCount());
+        assertTrue("空值档不得返回任何行", extRepo.pageSurrogates(
+                new PageQuery(1, 50).add("t.operator", "EQ", "")).getRows().isEmpty());
+    }
 }

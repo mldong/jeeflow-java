@@ -1493,6 +1493,9 @@ public class JeeflowFacade {
 
     private Map<String, Object> surrogatePage(Map<String, Object> args) {
         PageQuery query = queryParser.parse(args);
+        // issues/152 ②：t.operator 是归属列，与 instancePage 同形注入（spec 06 §4.5 归属不变式）——
+        // 引擎自己保证「我的委托」只看自己授出的行，不再靠集成壳注入 operator 才成立。
+        query.add("t.operator", "EQ", operatorArg(args));
         PageResult<ProcessSurrogate> page = ext().pageSurrogates(query);
         return pageResult(page);
     }
@@ -1549,7 +1552,11 @@ public class JeeflowFacade {
     private void applySurrogateFields(ProcessSurrogate s, Map<String, Object> args, String operator) {
         s.setProcessName(toStr(args.get("processName")));
         if (args.containsKey("operator")) {
-            s.setOperator(toStr(args.get("operator"))); // 授权人 = 操作人
+            // issues/152 ③：只认非空的显式值。空串/全空白**不得**落进 operator——那种行是「死行」，
+            // getSurrogate 的 WHERE operator = ? 永不命中，台账看得见、待办永远不并人（spec 06 §2.5
+            // 空串＝缺键同档）。save 路径的 operator 形参已是归一值（缺省 user1），update 路径保留原授权人。
+            String explicit = toStr(args.get("operator"));
+            if (explicit != null && !explicit.trim().isEmpty()) s.setOperator(explicit);
         }
         s.setSurrogate(toStr(args.get("surrogate")));
         s.setStartTime(parseTime(args.get("startTime")));

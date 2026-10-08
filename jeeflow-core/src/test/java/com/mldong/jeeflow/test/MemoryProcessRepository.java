@@ -551,7 +551,7 @@ public class MemoryProcessRepository implements IProcessRepository {
     }
 
     /** 某一列是否给了<b>有效</b>条件（值非 null、字符串非全空白、集合非空）——与 JDBC 仓同名同判据。 */
-    private static boolean hasEffectiveCondition(PageQuery query, String column) {
+    static boolean hasEffectiveCondition(PageQuery query, String column) {
         if (query == null) return false;
         for (PageQuery.Condition cond : query.getConditions()) {
             if (!column.equals(cond.getColumn())) continue;

@@ -353,6 +353,14 @@ public class JdbcProcessExtRepository implements IProcessExtRepository {
             String col = cond.getColumn();
             if (!whitelist.contains(col)) continue; // 不在白名单，丢弃
             Object val = cond.getValue();
+            // issues/152 ②：归属列上的空值 ⇒ 空页，不是「这条条件不加」（spec 06 §4.5 归属不变式 /
+            // §2.5 双层尺子的第二层，防绕过门面直调本仓）。只收 t.operator，下面那句「空值当作没填」
+            // 仍是 m_LIKE_* 等可选过滤的通用放行，一起收会把可选过滤改坏。
+            boolean blankVal = val == null || (val instanceof String && ((String) val).trim().isEmpty());
+            if (blankVal && "EQ".equalsIgnoreCase(cond.getOperator()) && "t.operator".equals(col)) {
+                sql.append(" AND 1=0");
+                continue;
+            }
             if (val == null || (val instanceof String && ((String) val).isEmpty())) continue;
 
             switch (cond.getOperator().toUpperCase()) {

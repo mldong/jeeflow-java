@@ -13,6 +13,7 @@ import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
 import com.mldong.jeeflow.facade.JeeflowFacade;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
 import com.mldong.jeeflow.spi.IUserProvider;
+import com.mldong.jeeflow.spi.PageQuery;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -620,5 +621,138 @@ public class SurrogateAutoApplyTest {
         new com.mldong.jeeflow.interceptor.impl.SurrogateInterceptor()
                 .apply(task, FLOW, LocalDateTime.now());   // 仓储未配置：静默返回
         assertEquals(java.util.Collections.singletonList(PRINCIPAL), task.getActorIds());
+    }
+
+    // ═══ issues/152 ① 档 1：同授权人并存「全流程」＋「精确」且都窗内 ⇒ 精确接管（内置版方向相反）═══
+
+    @Test
+    public void exactScopeBeatsGlobalScopeWhenBothInWindow() throws Exception {
+        boot(true, true);
+        String op = "op-scope";
+        String globalAgent = "wangwu";
+        LocalDateTime now = LocalDateTime.now();
+        ledgerWithId(1L, op, globalAgent, "", now.minusDays(1), now.plusDays(1), 1);      // 全流程
+        ledgerWithId(2L, op, AGENT, FLOW, now.minusDays(1), now.plusDays(1), 1);          // 精确
+        ProcessInstance inst = engine.startProcessInstanceById(registerSimpleFlow().getId(),
+                op, FlowData.create());
+        List<String> actors = repo.findTaskActors(firstDoingTask(inst.getInstanceId()).getTaskId());
+        assertTrue("精确作用域那条必须接管（实际=" + actors + "）", actors.contains(AGENT));
+        assertFalse("内置版是「全流程优先」盖住精确，引擎不得复活它（实际=" + actors + "）",
+                actors.contains(globalAgent));
+    }
+
+    /** 档 1 的另一条腿（阳性对照）：精确那条判否 ⇒ 仍兜底全流程，不得判否即止 */
+    @Test
+    public void globalScopeStillAppliesWhenExactScopeJudgedNo() throws Exception {
+        boot(true, true);
+        String op = "op-scope-fallback";
+        String globalAgent = "wangwu";
+        LocalDateTime now = LocalDateTime.now();
+        ledgerWithId(1L, op, globalAgent, "", now.minusDays(1), now.plusDays(1), 1);          // 全流程窗内
+        ledgerWithId(2L, op, AGENT, FLOW, now.plusDays(1), now.plusDays(2), 1);               // 精确但窗外
+        ProcessInstance inst = engine.startProcessInstanceById(registerSimpleFlow().getId(),
+                op, FlowData.create());
+        List<String> actors = repo.findTaskActors(firstDoingTask(inst.getInstanceId()).getTaskId());
+        assertTrue("精确判否后应兜底全流程（实际=" + actors + "）", actors.contains(globalAgent));
+    }
+
+    // ═══ issues/152 ③ 档 4：save 不带 operator / 带空 operator ⇒ 归一落值，不得写死行 ═══
+
+    /** 走门面 save 的「不带 operator」档：行必须落在 §2.5 归一缺省 user1 上，且能被本人待办命中 */
+    @Test
+    public void facadeSaveWithoutOperatorKeyLandsOnNormalizedOperator() throws Exception {
+        boot(true, true);
+        Long id = savedId(saveRawViaFacade(null));
+        assertEquals("缺键档不得落空串（空串＝死行，判据永不命中）", "user1", detailRow(id).get("operator"));
+        // 正面判据：以归一后的授权人建单，代理人真并进参与者表
+        ProcessInstance inst = engine.startProcessInstanceById(
+                registerSimpleFlow().getId(), "user1", FlowData.create());
+        assertTrue("该行必须能被本人后续待办命中",
+                repo.findTaskActors(firstDoingTask(inst.getInstanceId()).getTaskId()).contains(AGENT));
+    }
+
+    /** 档 4 的负形（spec 06 §2.5 空串＝缺键同档）：显式传空白 operator 同样不得落空串 */
+    @Test
+    public void facadeSaveWithBlankOperatorKeyDoesNotWriteDeadRow() throws Exception {
+        boot(true, true);
+        Long id = savedId(saveRawViaFacade("   "));
+        assertEquals("空串/全空白必须走归一，不得落进 operator", "user1", detailRow(id).get("operator"));
+    }
+
+    // ═══ issues/152 ② 档 5：processSurrogate/page 归属不变式（门面注入 + 仓储第二层）═══
+
+    @Test
+    public void surrogatePageOnlyShowsOwnRows() throws Exception {
+        boot(true, true);
+        ledger("op-mine", AGENT, FLOW, null, null, 1);
+        ledger("op-others", "wangwu", FLOW, null, null, 1);
+        List<Map<String, Object>> rows = pageRowsViaFacade("op-mine");
+        assertEquals("分页只能看自己授出的委托（实际=" + rows + "）", 1, rows.size());
+        assertEquals("op-mine", rows.get(0).get("operator"));
+    }
+
+    /** 不带 operator 档（§2.5 归一）：只出 user1 授出的行，绝不允许退化成全库台账 */
+    @Test
+    public void surrogatePageWithoutOperatorShowsOnlyDefaultUserRows() throws Exception {
+        boot(true, true);
+        ledger("user1", AGENT, FLOW, null, null, 1);
+        ledger("op-others", "wangwu", FLOW, null, null, 1);
+        List<Map<String, Object>> rows = pageRowsViaFacade(null);
+        assertEquals("缺 operator 不是「不过滤」，是归一到缺省 user1（实际=" + rows + "）", 1, rows.size());
+        assertEquals("user1", rows.get(0).get("operator"));
+    }
+
+    /** 第二层兜底：绕过门面直调内存仓，归属列空值 ⇒ 空页（与 SQL 仓同答案，条款 6） */
+    @Test
+    public void pageSurrogatesWithBlankOwnershipReturnsEmptyPage() {
+        boot(true, true);
+        ledger("op-mine", AGENT, FLOW, null, null, 1);
+        assertEquals("对照：真实归属列必须出行", 1,
+                extRepo.pageSurrogates(new PageQuery(1, 50).add("t.operator", "EQ", "op-mine")).getRecordCount());
+        assertEquals("空串归属列不得退化成全库", 0,
+                extRepo.pageSurrogates(new PageQuery(1, 50).add("t.operator", "EQ", "")).getRecordCount());
+        assertEquals("纯空白同档", 0,
+                extRepo.pageSurrogates(new PageQuery(1, 50).add("t.operator", "EQ", "   ")).getRecordCount());
+        assertEquals("归属列整键缺失同样空页", 0,
+                extRepo.pageSurrogates(new PageQuery(1, 50)).getRecordCount());
+    }
+
+    // ── issues/152 辅助 ──
+
+    /** operator 传 null 即"不带这个键"（区别于显式空串），走门面 processSurrogate/save */
+    private Map<String, Object> saveRawViaFacade(String operator) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (operator != null) body.put("operator", operator);
+        body.put("processName", FLOW);
+        body.put("surrogate", AGENT);
+        body.put("startTime", "2000-01-01 00:00:00");
+        body.put("endTime", "2099-12-31 23:59:59");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> r = (Map<String, Object>)
+                new JeeflowFacade(engine, repo, extRepo).flow("processSurrogate/save", body);
+        assertEquals("save 应成功: " + r, Integer.valueOf(0), r.get("code"));
+        return r;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> detailRow(Long id) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("id", id);
+        Map<String, Object> r = (Map<String, Object>)
+                new JeeflowFacade(engine, repo, extRepo).flow("processSurrogate/detail", body);
+        assertEquals("detail 应成功: " + r, Integer.valueOf(0), r.get("code"));
+        return (Map<String, Object>) r.get("data");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> pageRowsViaFacade(String operator) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (operator != null) body.put("operator", operator);
+        body.put("pageNum", 1);
+        body.put("pageSize", 50);
+        Map<String, Object> r = (Map<String, Object>)
+                new JeeflowFacade(engine, repo, extRepo).flow("processSurrogate/page", body);
+        assertEquals("page 应成功: " + r, Integer.valueOf(0), r.get("code"));
+        return (List<Map<String, Object>>) ((Map<String, Object>) r.get("data")).get("rows");
     }
 }

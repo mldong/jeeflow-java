@@ -103,6 +103,11 @@ public class MemoryProcessExtRepository implements IProcessExtRepository {
 
     @Override
     public PageResult<ProcessSurrogate> pageSurrogates(PageQuery query) {
+        // issues/152 ②：归属列 t.operator 缺失或为空值 ⇒ 空页，与 JdbcProcessExtRepository.buildWhere
+        // 同一条判据（内存仓与 SQL 仓必须同答案，spec 06 §4.5 条款 6）。
+        if (!MemoryProcessRepository.hasEffectiveCondition(query, "t.operator")) {
+            return PageResult.of(query.getPageNum(), query.getPageSize(), 0, new ArrayList<ProcessSurrogate>());
+        }
         // m_ 条件过滤（issues/82-7）：对齐 JDBC buildWhere（白名单 + EQ/LIKE/IN…）+ buildOrder 默认 t.id DESC。
         // 内存约定同核心仓储 pageDefines：过滤后返回全部行（不切片），recordCount=过滤后总数。
         List<ProcessSurrogate> rows = surrogates.values().stream()
