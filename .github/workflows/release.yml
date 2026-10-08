@@ -14,9 +14,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-          # runner 镜像默认 Maven 升到 3.10 后，central-publishing 0.6.0 的 staging 布局与之不兼容，
-          # Central 校验会报与真实原因无关的 "Bundle has content that does NOT have a .pom file"（1.8.38 三连败）。
-          maven-version: '3.9'
           cache: maven
       - name: Import GPG key
         id: import_gpg
@@ -24,6 +21,17 @@ jobs:
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - name: Pin Maven 3.9
+        # setup-java@v4 没有 maven-version 输入项（写了会被忽略并告警），runner 默认 Maven 随镜像换代。
+        # central-publishing 旧版在 Maven 3.10 的 resolver 布局下会把产物摆错位置，Central 只回
+        # "Bundle has content that does NOT have a .pom file"——与本仓实际内容无关（1.8.38/1.8.39 六连败）。
+        run: |
+          MAVEN_VERSION=3.9.11
+          curl -fsSLo /tmp/maven.tgz \
+            "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+          sudo mkdir -p /opt/maven
+          sudo tar -xzf /tmp/maven.tgz -C /opt/maven --strip-components=1
+          echo "/opt/maven/bin" >> "$GITHUB_PATH"
       - name: Configure Maven settings
         run: |
           mkdir -p ~/.m2
@@ -51,7 +59,7 @@ jobs:
           # 重试 3 次（Sonatype 偶尔暂时性失败）
           for i in 1 2 3; do
             echo "=== 尝试发布 ($i/3) ==="
-            if mvn -P release deploy -DskipTests \
+            if mvn -V -P release deploy -DskipTests \
               "-Dgpg.passphrase=${{ secrets.GPG_PASSPHRASE }}" \
               -pl '!:jeeflow-demo-boot4' \
               -B; then
