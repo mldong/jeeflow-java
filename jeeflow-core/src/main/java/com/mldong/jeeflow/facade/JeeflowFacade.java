@@ -751,6 +751,9 @@ public class JeeflowFacade {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (ProcessTask t : history) {
             Map<String, Object> vo = new LinkedHashMap<>();
+            // issues/154：审批记录行补主键，且显式字符串化（宿主 Jackson 的 Long→String 那条通道
+            // 只保宿主，引擎不得依赖它——八栈里 moon/独立 wasm 档没有这层）
+            vo.put("id", String.valueOf(t.getTaskId()));
             vo.put("taskName", t.getTaskName());
             vo.put("displayName", t.getDisplayName());
             vo.put("taskType", t.getTaskType() != null ? t.getTaskType().getCode() : null);

@@ -149,8 +149,11 @@ public class MemoryProcessRepository implements IProcessRepository {
 
     @Override
     public List<ProcessTask> findHistoryTasks(Long instanceId) {
+        // issues/154①：与 JdbcProcessRepository 同序（id ASC），内存档不得按 HashMap 插入序出，
+        // 否则 approvalRecord 的排序义务在 T0 这一档没有取证对象。
         return tasks.values().stream()
                 .filter(t -> instanceId.equals(t.getProcessInstanceId()))
+                .sorted(java.util.Comparator.comparing(ProcessTask::getTaskId))
                 .collect(Collectors.toList());
     }
 

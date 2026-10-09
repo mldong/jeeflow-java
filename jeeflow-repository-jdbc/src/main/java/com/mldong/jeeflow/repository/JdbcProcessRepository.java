@@ -329,7 +329,8 @@ public class JdbcProcessRepository implements IProcessRepository {
 
     @Override
     public List<ProcessTask> findHistoryTasks(Long instanceId) {
-        String sql = "SELECT * FROM wf_process_task WHERE process_instance_id = ? ORDER BY create_time ASC";
+        // issues/154①：排序键统一 id ASC（雪花 id 单调，同秒并发插入时比 create_time/update_time 确定）
+        String sql = "SELECT * FROM wf_process_task WHERE process_instance_id = ? ORDER BY id ASC";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, instanceId);

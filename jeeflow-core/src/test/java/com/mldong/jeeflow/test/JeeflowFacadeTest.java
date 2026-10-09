@@ -1069,6 +1069,20 @@ public class JeeflowFacadeTest {
         List<?> records = (List<?>) r.get("data");
         assertEquals(2, records.size()); // apply 已完成 + task1 进行中（全部任务记录，对齐 boot2）
 
+        // issues/154①④：出口九键齐（旧八键 + id）、id 必须是字符串、行序按 id 单调递增
+        List<String> keys = new ArrayList<>(((Map<String, Object>) records.get(0)).keySet());
+        java.util.Collections.sort(keys);
+        assertEquals(Arrays.asList("displayName", "ext", "finishTime", "id", "operator",
+                        "performType", "taskName", "taskState", "taskType"), keys);
+        assertTrue("approvalRecord.id 必须字符串化（19 位雪花出 number 会被 JS 截精度）",
+                ((Map<String, Object>) records.get(0)).get("id") instanceof String);
+        long prevId = -1L;
+        for (Object o : records) {
+            long curId = Long.parseLong(String.valueOf(((Map<String, Object>) o).get("id")));
+            assertTrue("approvalRecord 必须按 id ASC 出口（issues/154①）", curId > prevId);
+            prevId = curId;
+        }
+
         r = call("processInstance/highLight", args("id", instanceId));
         assertOk(r);
         Map<String, Object> hl = (Map<String, Object>) r.get("data");
