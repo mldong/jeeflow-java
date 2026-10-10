@@ -43,25 +43,14 @@ public class TestExpressionEvaluator implements IExpressionEvaluator {
     private static Object evalSimple(String expression, Map<String, Object> context) {
         expression = expression.trim();
 
-        // 处理 #nrOfCompletedInstances==2 这类会签条件
-        if (expression.contains("#nrOfCompletedInstances")) {
-            for (String key : context.keySet()) {
-                if (key.endsWith("nrOfCompletedInstances")) {
-                    Object val = context.get(key);
-                    String expr = expression.replace("#nrOfCompletedInstances",
-                            val != null ? val.toString() : "0");
-                    return evaluateComparison(expr);
-                }
-            }
-        }
-        if (expression.contains("#nrOfInstances")) {
-            for (String key : context.keySet()) {
-                if (key.endsWith("nrOfInstances")) {
-                    Object val = context.get(key);
-                    String expr = expression.replace("#nrOfInstances",
-                            val != null ? val.toString() : "0");
-                    return evaluateComparison(expr);
-                }
+        // issues/165：`#变量` 引用按**生产 SpEL 形状**精确查表替换（`#key` ⇔ context 里的
+        // `key`）。旧形状是 endsWith 后缀桥（`#nrOfCompletedInstances` 桥接到
+        // `csv_<node>_nrOfCompletedInstances`），会签门控裸名没进原料的单测也能绿——
+        // "测试绿生产红"由此而来，桥拆除后裸名格只有在 handler 真挂了裸名才可能绿。
+        for (Map.Entry<String, Object> entry : context.entrySet()) {
+            String ref = "#" + entry.getKey();
+            if (entry.getValue() != null && expression.contains(ref)) {
+                expression = expression.replace(ref, entry.getValue().toString());
             }
         }
 

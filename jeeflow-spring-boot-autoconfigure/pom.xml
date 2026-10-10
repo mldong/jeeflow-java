@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.mldong.jeeflow</groupId>
         <artifactId>jeeflow-parent</artifactId>
-        <version>1.8.41</version>
+        <version>1.8.42</version>
     </parent>
 
     <artifactId>jeeflow-spring-boot-autoconfigure</artifactId>
@@ -58,6 +58,14 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
             <scope>provided</scope>
+        </dependency>
+
+        <!-- issues/165：生产求值器判据要在这里跑（SpelExpressionEvaluator 只在本模块），
+             别拿 core 测试求值器的桥自证"测试绿生产红" -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

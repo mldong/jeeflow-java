@@ -48,17 +48,24 @@ public final class BusinessSeed {
             new Row(10, "userB", Map.of(), List.of()),
             new Row(8, "user1", Map.of(), List.of()));
 
-    /** 已完成 9 条：advance() 推到 state=20（分支无关） */
+    /**
+     * 已完成 9 条：advance() 推到 state=20（分支无关）。
+     *
+     * <p>issues/166 A（2026-10-11）：F5/F8/F9 补 finalAmount=8000——三行的 deptLeader 本是
+     * 15 文件编号时代 11-assignee-vars 的判定变量，flows 目录插入 06-…-expire.json 后
+     * define=12 已是 10-mixed-mode（八仓同序），决策边 finalAmount&gt;5000/&lt;=5000 没这把键
+     * 无路可走；补键走 e8→boss→end（与旧蒙臂 edges[0] 同形），矩阵"9 行已完成"原意复原。</p>
+     */
     private static final List<Row> FINISHED = List.of(
             new Row(1, "userA", Map.of(), List.of("user1", "director")),
             new Row(8, "userB", Map.of(), List.of("boss", "manager")),
             new Row(2, "manager", Map.of(), List.of("boss")),
             new Row(10, "director", Map.of(), List.of()),
-            new Row(12, "userC", Map.of("deptLeader", "leader"), List.of()),
+            new Row(12, "userC", Map.of("deptLeader", "leader", "finalAmount", 8000), List.of()),
             new Row(1, "director", Map.of(), List.of()),
             new Row(5, "manager", Map.of(), List.of()),
-            new Row(12, "userA", Map.of("deptLeader", "director"), List.of()),
-            new Row(12, "userB", Map.of("deptLeader", "user1"), List.of()));
+            new Row(12, "userA", Map.of("deptLeader", "director", "finalAmount", 8000), List.of()),
+            new Row(12, "userB", Map.of("deptLeader", "user1", "finalAmount", 8000), List.of()));
 
     /** 委托 8 条：processSurrogate/page 无 operator 过滤 → 8 用户委托菜单全非空 */
     private static final List<String[]> SURROGATES = List.of(

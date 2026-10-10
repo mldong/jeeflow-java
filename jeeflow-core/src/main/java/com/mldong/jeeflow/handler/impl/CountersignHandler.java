@@ -199,6 +199,15 @@ public class CountersignHandler implements IHandler {
                 allTasks.stream().filter(ProcessTask::isDoing).count());
         vars.put(prefix + FlowConst.NR_OF_COMPLETED_INSTANCES,
                 allTasks.stream().filter(ProcessTask::isFinished).count());
+        // issues/165 A：裸名与前缀键**同挂**——文档/设计器给用户的形状是
+        // `#nrOfCompletedInstances>=2`，生产求值器（SpEL `#变量` 精确查表）查的是裸名；
+        // 只挂前缀键时裸名永远求不出真 ⇒ 按文档配的会签在产线上"永不按阈值放行"。
+        // 前缀键保留（既有定义/测试兼容）；求值上下文里裸名以本节点为准（同名实例变量被覆盖）。
+        vars.put(FlowConst.NR_OF_INSTANCES, allTasks.size());
+        vars.put(FlowConst.NR_OF_ACTIVATE_INSTANCES,
+                allTasks.stream().filter(ProcessTask::isDoing).count());
+        vars.put(FlowConst.NR_OF_COMPLETED_INSTANCES,
+                allTasks.stream().filter(ProcessTask::isFinished).count());
         return vars;
     }
 }
