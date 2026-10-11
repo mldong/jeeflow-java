@@ -4,6 +4,7 @@ import com.mldong.jeeflow.core.JeeflowEngine;
 import com.mldong.jeeflow.facade.JeeflowFacade;
 import com.mldong.jeeflow.repository.JdbcProcessExtRepository;
 import com.mldong.jeeflow.spi.IProcessRepository;
+import com.mldong.jeeflow.spring.TransactionAwareDataSources;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -23,7 +24,10 @@ public class DemoConfig {
                                        IProcessRepository repository,
                                        DataSource dataSource,
                                        DemoUserSearchProvider userSearchProvider) {
-        return new JeeflowFacade(engine, repository, new JdbcProcessExtRepository(dataSource))
+        // issues/145-1：扩展仓储与主仓储/引擎事务管理器必须收同一枚原始 DataSource，
+        // 且经事务感知代理取连接，runInTx 才盖得住 design/design_his/surrogate 的写
+        return new JeeflowFacade(engine, repository,
+                new JdbcProcessExtRepository(TransactionAwareDataSources.transactionAware(dataSource)))
                 .setUserSearchProvider(userSearchProvider);
     }
 }

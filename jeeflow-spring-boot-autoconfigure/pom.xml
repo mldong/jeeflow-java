@@ -67,6 +67,20 @@
             <artifactId>junit</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- issues/145-1 三档判据（TransactionTierTest）：真库腿用 H2 内存库；
+             persist 写腿同源判据要真构造 JdbcDynamicTableWriter（jeeflow-persist 仅测试面引入） -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.mldong.jeeflow</groupId>
+            <artifactId>jeeflow-persist</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>

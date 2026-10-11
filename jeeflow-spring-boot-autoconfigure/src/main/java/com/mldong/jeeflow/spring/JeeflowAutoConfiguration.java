@@ -53,11 +53,14 @@ public class JeeflowAutoConfiguration {
 
     /**
      * 仓储实现 —— 纯 JDBC
+     *
+     * <p>DataSource 走 {@link TransactionAwareDataSources#transactionAware(DataSource)}：
+     * 不包代理时每条语句自取新连接，runInTx 开的 Spring 事务会空转（issues/145-1）。</p>
      */
     @Bean
     @ConditionalOnMissingBean
     public IProcessRepository jeeflowProcessRepository(DataSource dataSource) {
-        return new JdbcProcessRepository(dataSource);
+        return new JdbcProcessRepository(TransactionAwareDataSources.transactionAware(dataSource));
     }
 
     /**
