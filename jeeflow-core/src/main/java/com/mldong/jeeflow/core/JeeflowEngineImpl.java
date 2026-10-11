@@ -76,7 +76,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     @Override
     public ProcessInstance startProcessInstanceById(Long defineId, String operator, FlowData args,
                                                      Long parentId, String parentNodeName) {
-        return runInTx(() -> {
+        return inTx(() -> {
             // 1. 查流程定义
             ProcessInstance.ProcessDefine define = repository.findDefineById(defineId);
             if (define == null) {
@@ -126,7 +126,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     @Override
     public List<ProcessTask> executeProcessTask(Long taskId, String operator, FlowData args) {
-        return runInTx(() -> {
+        return inTx(() -> {
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
@@ -177,7 +177,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     @Override
     public List<ProcessTask> executeAndJumpTask(Long taskId, String operator, FlowData args, String nodeName) {
-        return runInTx(() -> {
+        return inTx(() -> {
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
@@ -207,7 +207,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     @Override
     public List<ProcessTask> executeAndJumpToEnd(Long taskId, String operator, FlowData args) {
-        return runInTx(() -> {
+        return inTx(() -> {
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
@@ -224,7 +224,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     @Override
     public List<ProcessTask> executeAndJumpToFirstTaskNode(Long taskId, String operator, FlowData args) {
-        return runInTx(() -> {
+        return inTx(() -> {
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
@@ -512,7 +512,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             ProcessSubmitTypeEnum.ROLLBACK_TO_OPERATOR.getCode(),
             ProcessSubmitTypeEnum.COUNTERSIGN_DISAGREE.getCode()));
 
-    private <T> T runInTx(ITransactionTemplate.Supplier<T> action) {
+    @Override
+    public <T> T inTx(ITransactionTemplate.Supplier<T> action) {
         ITransactionTemplate tx = ServiceContext.find(ITransactionTemplate.class);
         if (tx != null) {
             try {

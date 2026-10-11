@@ -362,6 +362,52 @@ public class TransactionTierTest {
         assertEquals("B 的行必须在", 1, rawCount("wf_process_define", "id", idB));
     }
 
+    // ═══ 动作档（spec/12 §12.2 原子面：门面 action ＝ 事务边界）═══
+
+    /**
+     * 复合动作 processInstance/startAndExecute（门面自组：engine.start ＋ repo.addTaskActor ＋ engine.execute）
+     * 在 execute 段中途抛错 ⇒ 整个动作一行不留（实例/任务/参与者）。
+     * 修前形状对照＝下一枚：不包动作边界时 start 的事务已单独提交，实例行留存＝半完成。
+     */
+    @Test
+    public void actionTier_facadeStartAndExecuteRollsBackWholeComposite() {
+        wireFixed();
+        long defineId = registerDefine("tx-tier-action", true);
+        com.mldong.jeeflow.facade.JeeflowFacade facade =
+                new com.mldong.jeeflow.facade.JeeflowFacade(engine, repo, null);
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("processDefineId", defineId);
+        args.put("operator", "u1");
+        Map<String, Object> result = facade.flow("processInstance/startAndExecute", args);
+
+        assertNotNull(result);
+        assertEquals("复合动作必须以失败信封收场", 99999999, result.get("code"));
+        assertEquals("动作档：实例行必须整体回滚", 0,
+                rawCount("wf_process_instance", "process_define_id", defineId));
+        assertEquals("动作档：任务行必须整体回滚（逐语句提交会留行）", 0, rawCountAll("wf_process_task"));
+        assertEquals("动作档：参与者行必须整体回滚", 0, rawCountAll("wf_process_task_actor"));
+    }
+
+    /** 修前形状对照（红样）：同样三段调用不经门面动作边界裸拼 ⇒ 中途抛错后实例行留存（半完成） */
+    @Test
+    public void actionTier_rawCompositionLeavesPartialState() {
+        wireFixed();
+        long defineId = registerDefine("tx-tier-action-raw", true);
+        ProcessInstance inst = startInstance(defineId);                        // 引擎入口事务：单独提交
+        List<ProcessTask> doing = repo.findDoingTasks(inst.getInstanceId(), null);
+        assertEquals(1, doing.size());
+        repo.addTaskActor(doing.get(0).getTaskId(), java.util.Collections.singletonList("u1"));
+        try {
+            agree(doing.get(0));                                               // 入口事务内抛错：只回滚本段
+            fail("注入的拦截器必须让动作抛错");
+        } catch (RuntimeException expected) {
+            assertTrue("抛错必须来自注入点: " + expected, causedByInjection(expected));
+        }
+        assertEquals("对照（红样）：实例行留存＝半完成", 1,
+                rawCount("wf_process_instance", "process_define_id", defineId));
+    }
+
     // ═══ persist 业务表写腿同源（spec/12 §12.2 覆盖面 / C99 ⑥）═══
 
     /** 修后形状：写入器也收事务感知代理 ⇒ 业务表写与流程写同一条事务，回滚一起撤 */
@@ -424,6 +470,16 @@ public class TransactionTierTest {
 
     private int rawCount(String table, String column, long value) {
         return countOn(ds, table, column, value);
+    }
+
+    private int rawCountAll(String table) {
+        try (Connection conn = ds.getConnection(); Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(1) FROM " + table)) {
+            rs.next();
+            return rs.getInt(1);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static int countOn(DataSource source, String table, long value) {

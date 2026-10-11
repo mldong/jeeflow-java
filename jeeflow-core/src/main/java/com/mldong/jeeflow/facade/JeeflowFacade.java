@@ -197,8 +197,27 @@ public class JeeflowFacade {
      */
     public Map<String, Object> flow(String action, Map<String, Object> args) {
         try {
-            if (args == null) args = new LinkedHashMap<>();
-            switch (action) {
+            final Map<String, Object> a = args == null ? new LinkedHashMap<String, Object>() : args;
+            // spec/12 §12.2：事务边界＝一次动作——门面自组的复合写（startAndExecute 的
+            // start＋参与者写＋execute、redeploy 的 define＋design 两表等）与引擎入口里的写
+            // 同处一事务；入口内的包裹嵌套并入（Spring REQUIRED）。未注册模板时在引擎侧
+            // 裸跑＝显式降级（§12.1 原则 4），行为与旧版一致。
+            return engine.inTx(() -> dispatch(action, a));
+        } catch (Exception e) {
+            // issues/137-G：判别规则与理由见 isForeignDetail——引擎写的中文契约文案照旧逐字透出
+            // （七栈＋十三壳＋前端 toast 都按原文对齐，不能在这条上收窄），只把**外来/内部异常**
+            // 的原文换成固定文案，原文连同栈一起进日志（cause 分离）。
+            if (isForeignDetail(e.getClass(), e.getMessage(), e.getCause(), e.getStackTrace())) {
+                log.log(Level.SEVERE, "jeeflow action 执行失败: action=" + action, e);
+                return error(INTERNAL_FAILURE_MSG);
+            }
+            return error(e.getMessage());
+        }
+    }
+
+    /** action 分派——事务边界已在 {@link #flow} 外层包裹（本方法抛错即整体回滚，信封在事务之外生成） */
+    private Map<String, Object> dispatch(String action, Map<String, Object> args) {
+        switch (action) {
                 // ── 流程定义 ──
                 case "processDefine/page": return definePage(args);
                 case "processDefine/detail": return defineDetail(args);
@@ -256,16 +275,6 @@ public class JeeflowFacade {
                 default:
                     return error("未知 action: " + action);
             }
-        } catch (Exception e) {
-            // issues/137-G：判别规则与理由见 isForeignDetail——引擎写的中文契约文案照旧逐字透出
-            // （七栈＋十三壳＋前端 toast 都按原文对齐，不能在这条上收窄），只把**外来/内部异常**
-            // 的原文换成固定文案，原文连同栈一起进日志（cause 分离）。
-            if (isForeignDetail(e.getClass(), e.getMessage(), e.getCause(), e.getStackTrace())) {
-                log.log(Level.SEVERE, "jeeflow action 执行失败: action=" + action, e);
-                return error(INTERNAL_FAILURE_MSG);
-            }
-            return error(e.getMessage());
-        }
     }
 
     // ═══ 流程定义 ═══
