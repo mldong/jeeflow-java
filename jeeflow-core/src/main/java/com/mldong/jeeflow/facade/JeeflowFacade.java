@@ -585,7 +585,11 @@ public class JeeflowFacade {
                 nodeProgress = buildNodeProgress(model, history);
                 collectPath(model.getStart(), activeNodeNames, historyNodeNames, historyEdgeNames,
                         new java.util.HashSet<>(), inst.getVariables(), history);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                // issues/162：保留降级面（对外仍 code=0、补全腿留空），失败支落一条可诊断 WARN
+                // （instanceId/defineId/err 三件齐；判据见 HighlightDegradeLog162Test）
+                log.log(Level.WARNING, "jeeflow WARN highLight 模型补全腿解码失败: instanceId="
+                        + instanceId + ", defineId=" + inst.getDefineId() + ", err=" + e, e);
             }
         }
         Map<String, Object> data = new LinkedHashMap<>();
