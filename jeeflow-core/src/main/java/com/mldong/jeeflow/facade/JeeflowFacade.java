@@ -334,6 +334,12 @@ public class JeeflowFacade {
         def.setType(model.getType());
         def.setContent(bytes);
         def.setUpdateUser(toStr(args.get("operator"), "system"));
+        // audit8 R5/spec 06：redeploy 是原地替换内容——先读再写保留原 version/state（缺失时仓储兜底）
+        ProcessInstance.ProcessDefine old = repository.findDefineById(defineId);
+        if (old != null) {
+            def.setVersion(old.getVersion());
+            def.setState(old.getState());
+        }
         repository.updateDefine(def);
         return ok();
     }
@@ -1387,6 +1393,8 @@ public class JeeflowFacade {
             def.setContent(bytes);
             // issues/59：保留原 version（替换语义，不递增）；缺失时 JDBC 兜底会误写 1
             def.setVersion(last.getVersion());
+            // audit8 R5/spec 06：替换语义同保 state，不得被仓储兜底复活（停用定义 redeploy 后仍停用）
+            def.setState(last.getState());
             def.setUpdateUser(toStr(args.get("operator"), "system"));
             repository.updateDefine(def);
             defineId = last.getId();

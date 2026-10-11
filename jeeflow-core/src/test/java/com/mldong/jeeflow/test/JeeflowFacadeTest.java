@@ -144,6 +144,31 @@ public class JeeflowFacadeTest {
         assertNull(repo.findDefineById(defineId2));
     }
 
+    // ═══ audit8 R5/spec 06：processDefine/redeploy 原地替换内容——version/state 不变 ═══
+
+    @Test
+    public void testDefineRedeployPreservesVersionState() throws Exception {
+        String content = new String(Files.readAllBytes(
+                Paths.get("src/test/resources/flows/01-simple.json")), StandardCharsets.UTF_8);
+
+        // 部署（首次 version=0）→ 停用（state=0）
+        Map<String, Object> r = call("processDefine/deploy", args("content", content));
+        assertOk(r);
+        Long defineId = toLong(((Map<String, Object>) r.get("data")).get("processDefineId"));
+        r = call("processDefine/upAndDown", args("id", defineId, "state", 0));
+        assertOk(r);
+        assertEquals(Integer.valueOf(0), repo.findDefineById(defineId).getState());
+
+        // 原地替换内容 → version 保持 0（不得被仓储兜底写 1）、state 保持停用 0（不得复活为 1）
+        r = call("processDefine/redeploy",
+                args("processDefineId", defineId, "content", content, "operator", "lisi"));
+        assertOk(r);
+        ProcessInstance.ProcessDefine def = repo.findDefineById(defineId);
+        assertEquals("redeploy 后 version 应不变: " + r, Integer.valueOf(0), def.getVersion());
+        assertEquals("redeploy 后 state 应保持停用: " + r, Integer.valueOf(0), def.getState());
+        assertEquals("lisi", def.getUpdateUser());
+    }
+
     // ═══ 流程实例 + 任务 ═══
 
     @Test
@@ -1961,6 +1986,17 @@ public class JeeflowFacadeTest {
         assertEquals(1, (int) extRepo.findDesignById(designId).getIsDeployed());
         // issues/59：redeploy 是替换语义，version 必须保持（JDBC 仓储曾因 def 未携带 version 兜底误写 1）
         assertEquals("redeploy 后 version 应不变", versionAfterDeploy, repo.findDefineById(defineId).getVersion());
+
+        // audit8 R5：同替换语义，state 也必须保持——停用后再 redeploy 不得被仓储兜底复活为 1
+        r = call("processDefine/upAndDown", args("id", defineId, "state", 0));
+        assertOk(r);
+        assertEquals(0, (int) repo.findDefineById(defineId).getState());
+        r = call("processDesign/redeploy", args("id", designId, "operator", "zhangsan"));
+        assertOk(r);
+        assertEquals("designRedeploy 后 state 应保持停用: " + r,
+                0, (int) repo.findDefineById(defineId).getState());
+        assertEquals("designRedeploy 后 version 仍应不变",
+                versionAfterDeploy, repo.findDefineById(defineId).getVersion());
 
         // 设计稿内容变更（updateDefine，不同 content）→ 新快照 + is_deployed=0
         String content2 = new String(Files.readAllBytes(
