@@ -33,7 +33,9 @@ jobs:
       - name: Install parent POM
         run: mvn -q install -N -DskipTests
       - name: Install dependencies
-        run: mvn -q install -DskipTests -pl jeeflow-core,jeeflow-repository-jdbc,jeeflow-spring-boot-autoconfigure,jeeflow-spring-boot4-starter
+        # jeeflow-persist 在列：autoconfigure 自 1.8.44 起测试面依赖它（三档判据真构造 JdbcDynamicTableWriter），
+        # 部分模块构建在该模块 test-compile 时会解析它——不在列且仓库尚无该代次 ⇒ 1.8.44 tag 轮演示部署失败
+        run: mvn -q install -DskipTests -pl jeeflow-core,jeeflow-repository-jdbc,jeeflow-persist,jeeflow-spring-boot-autoconfigure,jeeflow-spring-boot4-starter
       - name: Build demo jar
         run: mvn -q -pl jeeflow-demo-boot4 package -DskipTests -Dspring-boot.repackage.skip=true
       - name: Build Docker image
