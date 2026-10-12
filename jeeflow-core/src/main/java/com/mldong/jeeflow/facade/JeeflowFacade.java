@@ -330,6 +330,7 @@ public class JeeflowFacade {
     private Map<String, Object> deploy(Map<String, Object> args) {
         byte[] bytes = contentBytes(args);
         ProcessModel model = ModelParser.parse(bytes);
+        if (!hasName(model)) return error("流程定义缺少 name");
         Long defineId = saveDeployedDefine(model, bytes);
         return ok(Collections.singletonMap(FlowConst.PROCESS_DEFINE_ID_KEY, defineId));
     }
@@ -553,6 +554,9 @@ public class JeeflowFacade {
 
     private Map<String, Object> getLastByName(Map<String, Object> args) {
         String name = toStr(args.get("processDefineName"));
+        // issues/179 R13：必填参数缺失校验——旧形状空名落条件构造侧被「空值当没填」通用放行
+        // 丢掉 t.name 条件 ⇒ 查询退化全表、返回另一条流程的定义。对齐 rust/moon 缺参档。
+        if (StringUtils.isBlank(name)) return error("缺少processDefineName参数");
         PageQuery query = new PageQuery(1, 1);
         query.add("t.name", "EQ", name);
         query.setOrderBy("t.version desc");
@@ -1326,6 +1330,7 @@ public class JeeflowFacade {
         if (hisList.isEmpty()) return error("流程设计没有内容，无法发布");
         byte[] bytes = hisList.get(0).getContent();
         ProcessModel model = ModelParser.parse(bytes);
+        if (!hasName(model)) return error("流程定义缺少 name");
         Long defineId = saveDeployedDefine(model, bytes);
         design.setIsDeployed(1);
         design.setUpdateUser(toStr(args.get("operator"), "system"));
@@ -1390,6 +1395,7 @@ public class JeeflowFacade {
         if (hisList.isEmpty()) return error("流程设计没有内容，无法发布");
         byte[] bytes = hisList.get(0).getContent();
         ProcessModel model = ModelParser.parse(bytes);
+        if (!hasName(model)) return error("流程定义缺少 name");
         // 按 name 取最新定义：有则替换内容（version 不变），无则新建（对齐 boot3 redeploy）
         PageQuery query = new PageQuery(1, 1);
         query.add("t.name", "EQ", model.getName());
@@ -1951,6 +1957,11 @@ public class JeeflowFacade {
     private static String toStr(Object val, String def) {
         String s = toStr(val);
         return s != null ? s : def;
+    }
+
+    /** issues/179 R13：流程 JSON 缺 name 时不得落仓储「空值当没填」放行（对齐 go/py/node 三栈「流程定义缺少 name」形状）。 */
+    private static boolean hasName(ProcessModel model) {
+        return model.getName() != null && !model.getName().trim().isEmpty();
     }
 
     /**

@@ -2647,4 +2647,113 @@ public class JeeflowFacadeTest {
         assertNull(who + " 配的 " + expr + " 属误配相对档 ⇒ 落穿成 NULL，不得抛错、"
                 + "不得退化成当前时间、不得写 0", row.getExpireTime());
     }
+
+    // ═══ issues/179 R13（audit8）：空名落仓储「空值当没填」通用放行（Memory :562 / Jdbc :1195）⇒
+    //     条件整条丢弃。getLastByName 空名 ⇒ 查询退化全表、返他行；save 三腿缺 name ⇒ 版本号盗到
+    //     别流程头上 / 缺名内容盗改写他行。门面修复：getLastByName 空名 ⇒ 缺参错误信封（对齐
+    //     rust/moon「缺少processDefineName参数」）；deploy/designDeploy/designRedeploy 缺 name ⇒
+    //     「流程定义缺少 name」（对齐 go/py/node 三栈形状）。═══
+
+    /** R13 判据①②③：缺参/空串/空白串三档一律错误信封；库里另有他行时也不得返回任何行（后果档）。 */
+    @Test
+    public void test179GetLastByNameBlankNameRejected() {
+        Long other = deployDefine("r13OtherFlow"); // 后果档前提：库里有别的流程定义可被误返
+
+        Object[] blankPayloads = {null, "", "   "};
+        for (Object payload : blankPayloads) {
+            Map<String, Object> r = payload == null
+                    ? call("processDefine/getLastByName", args())
+                    : call("processDefine/getLastByName", args("processDefineName", payload));
+            assertEquals("空名档(" + payload + ")必须报错——旧形状退化全表会把他行返回来: " + r,
+                    Integer.valueOf(99999999), r.get("code"));
+            assertTrue("空名档(" + payload + ") msg 应含「缺少processDefineName参数」: " + r,
+                    String.valueOf(r.get("msg")).contains("缺少processDefineName参数"));
+            assertNull("空名档(" + payload + ")不得带 data: " + r, r.get("data"));
+        }
+
+        // 正常名回归：六键齐全、id 对上（挡住空名的同时不得误伤正常档）
+        Map<String, Object> ok = call("processDefine/getLastByName", args("processDefineName", "r13OtherFlow"));
+        assertOk(ok);
+        Map<String, Object> data = (Map<String, Object>) ok.get("data");
+        assertEquals("正常名回归 id", other, toLong(data.get("id")));
+        assertEquals("正常名回归 name", "r13OtherFlow", data.get("name"));
+        assertNotNull("正常名回归 displayName", data.get("displayName"));
+        assertNotNull("正常名回归 type", data.get("type"));
+        assertNotNull("正常名回归 state", data.get("state"));
+        assertNotNull("正常名回归 version", data.get("version"));
+    }
+
+    /** R13 判据⑤（deploy 腿）：content 缺 name ⇒「流程定义缺少 name」，不得落新行。 */
+    @Test
+    public void test179DeployMissingNameRejected() throws Exception {
+        int before = defineCount();
+        String noName = "{\"displayName\":\"缺名流程\",\"type\":\"approval\",\"nodes\":[],\"edges\":[]}";
+
+        Map<String, Object> r = call("processDefine/deploy", args("content", noName));
+        assertEquals("缺 name 的 deploy 必须报错（旧形状会按放行查询拿他流程最新版本 +1 落新行）: " + r,
+                Integer.valueOf(99999999), r.get("code"));
+        assertTrue("msg 应含「流程定义缺少 name」: " + r,
+                String.valueOf(r.get("msg")).contains("流程定义缺少 name"));
+        assertEquals("缺 name 的 deploy 不得落新行", before, defineCount());
+
+        // 正常内容回归：合法 JSON 照常可发
+        String content = new String(Files.readAllBytes(
+                Paths.get("src/test/resources/flows/01-simple.json")), StandardCharsets.UTF_8);
+        assertOk(call("processDefine/deploy", args("content", content)));
+        assertEquals("正常发布应照常落一行", before + 1, defineCount());
+    }
+
+    /** R13 判据⑤（designDeploy 腿）：设计内容缺 name ⇒「流程定义缺少 name」，不得落行、不得置已部署。 */
+    @Test
+    public void test179DesignDeployMissingNameRejected() {
+        Long designId = newDesign("r13NoNameDesign");
+        String noName = "{\"displayName\":\"缺名设计\",\"type\":\"approval\",\"nodes\":[],\"edges\":[]}";
+        assertOk(call("processDesign/updateDefine", args(
+                "processDesignId", designId, "operator", "user1", "content", noName)));
+
+        int before = defineCount();
+        Integer deployedBefore = extRepo.findDesignById(designId).getIsDeployed();
+        Map<String, Object> r = call("processDesign/deploy", args("id", designId, "operator", "user1"));
+        assertEquals("缺 name 的 designDeploy 必须报错: " + r, Integer.valueOf(99999999), r.get("code"));
+        assertTrue("msg 应含「流程定义缺少 name」: " + r,
+                String.valueOf(r.get("msg")).contains("流程定义缺少 name"));
+        assertEquals("不得落新定义行", before, defineCount());
+        assertEquals("发布失败后设计不得被置为已部署", deployedBefore,
+                extRepo.findDesignById(designId).getIsDeployed());
+    }
+
+    /** R13 判据⑦（designRedeploy 腿，后果最重）：内容缺 name ⇒ 报错，且不得把缺名内容盗写到他流程定义行。 */
+    @Test
+    public void test179DesignRedeployMissingNameRejected() {
+        Long victim = deployDefine("r13VictimFlow");
+        byte[] victimContent = rawRepo.findDefineById(victim).getContent();
+        byte[] victimSnapshot = victimContent == null ? null : victimContent.clone();
+        Integer victimVersion = rawRepo.findDefineById(victim).getVersion();
+
+        Long designId = newDesign("r13NoNameRedeploy");
+        String noName = "{\"displayName\":\"缺名重发\",\"type\":\"approval\",\"nodes\":[],\"edges\":[]}";
+        assertOk(call("processDesign/updateDefine", args(
+                "processDesignId", designId, "operator", "user1", "content", noName)));
+
+        int before = defineCount();
+        Map<String, Object> r = call("processDesign/redeploy", args("id", designId, "operator", "user1"));
+        assertEquals("缺 name 的 designRedeploy 必须报错（旧形状按放行查询命中他行并盗改内容）: " + r,
+                Integer.valueOf(99999999), r.get("code"));
+        assertTrue("msg 应含「流程定义缺少 name」: " + r,
+                String.valueOf(r.get("msg")).contains("流程定义缺少 name"));
+        assertTrue("他流程定义内容不得被盗改",
+                Arrays.equals(victimSnapshot, rawRepo.findDefineById(victim).getContent()));
+        assertEquals("他流程定义版本不得被盗改", victimVersion, rawRepo.findDefineById(victim).getVersion());
+        assertEquals("不得落新定义行", before, defineCount());
+        assertEquals("失败后设计不得被置为已部署（isDeployed 保持 0）", Integer.valueOf(0),
+                extRepo.findDesignById(designId).getIsDeployed());
+    }
+
+    /** R13 读数：定义总数（processDefine/page 的 recordCount） */
+    @SuppressWarnings("unchecked")
+    private int defineCount() {
+        Map<String, Object> r = call("processDefine/page", args("pageNum", 1, "pageSize", 100));
+        assertOk(r);
+        return ((Number) ((Map<String, Object>) r.get("data")).get("recordCount")).intValue();
+    }
 }
