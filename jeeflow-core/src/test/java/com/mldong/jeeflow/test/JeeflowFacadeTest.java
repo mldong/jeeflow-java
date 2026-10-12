@@ -302,7 +302,10 @@ public class JeeflowFacadeTest {
             if ("apply".equals(t.getTaskName())) {
                 assertEquals("已完成(20) 任务行不得被撤回改写",
                         com.mldong.jeeflow.enums.ProcessTaskStateEnum.FINISHED.getCode(), t.getTaskState());
-                assertEquals("已完成行的 update_user 保持办理人", "zhangsan", t.getUpdateUser());
+                // R10（issues/176）：apply 腿由 flow.auto 代执行 ⇒ 办结时执行主体=flow.auto；
+                // 本格钉的原始不变量不变——撤回不得改写已完成行（值仍是办结时写下的那个）
+                assertEquals("已完成行的 update_user 保持办结时的执行主体（R10 起=flow.auto，撤回不得改写）",
+                        FlowConst.AUTO_ID, t.getUpdateUser());
             } else {
                 assertEquals("进行中任务须落 30(WITHDRAW)，不能是 99(废弃码)",
                         com.mldong.jeeflow.enums.ProcessTaskStateEnum.WITHDRAW.getCode(), t.getTaskState());
@@ -582,8 +585,17 @@ public class JeeflowFacadeTest {
                 doneIds("leader").contains(taskId));
         assertFalse("转办→撤回后接手人（未办结）的 doneList 也不得含该单: " + doneIds("xiaohe"),
                 doneIds("xiaohe").contains(taskId));
-        // 正向对照：apply 行由 zhangsan 实际办结（startAndExecute 自动完成），证明 doneList 查询非恒空
-        assertFalse("对照：zhangsan 实际办结的 apply 行应在其已办列表", doneIds("zhangsan").isEmpty());
+        // R10（issues/176）：apply 行由 flow.auto 代执行（spec 04:60-62）⇒ 不进发起人已办；
+        // "数据真的在"改锚 raw 读（行仍落库、actor 列=flow.auto），否则两边空是自等假绿
+        assertTrue("R10 起 apply 行不进 zhangsan 已办: " + doneIds("zhangsan"), doneIds("zhangsan").isEmpty());
+        com.mldong.jeeflow.domain.ProcessTask applyRow = null;
+        for (com.mldong.jeeflow.domain.ProcessTask t : rawRepo.findHistoryTasks(instanceId)) {
+            if ("apply".equals(t.getTaskName())) {
+                applyRow = t;
+            }
+        }
+        assertNotNull("apply 留痕仍应落库（非没建行）", applyRow);
+        assertEquals("apply 行 actor 列应为 flow.auto", FlowConst.AUTO_ID, applyRow.getActorId());
     }
 
     /** 断言 {@code tf_transferHistory} 的形状与条数；返回账本供逐字段断言。 */
@@ -1896,9 +1908,11 @@ public class JeeflowFacadeTest {
         // 正向对照（先立"数据真的在"，否则三档相等的断言是空转）
         assertEquals("user1 应看到自己那 1 条实例", 1, pageRows("processInstance/page", args("operator", "user1")));
         assertEquals("user1 应收到 1 条抄送", 1, pageRows("processInstance/ccList", args("operator", "user1")));
-        assertTrue("user1 办结的 apply 应进自己已办",
-                pageRows("processTask/doneList", args("operator", "user1")) >= 1);
-        assertTrue("leader 手上应有待办（对照档，也是下面空串档的反面参照）",
+        // R10（issues/176）：apply 行由 flow.auto 代执行 ⇒ 不进 user1 已办；"数据在"改锚 flow.auto 档
+        assertEquals("R10 起 apply 行不进 user1 已办", 0,
+                pageRows("processTask/doneList", args("operator", "user1")));
+        assertEquals("apply 留痕改挂 flow.auto 档可查（两单两行）", 2,
+                pageRows("processTask/doneList", args("operator", FlowConst.AUTO_ID)));        assertTrue("leader 手上应有待办（对照档，也是下面空串档的反面参照）",
                 pageRows("processTask/todoList", args("operator", "leader")) >= 1);
 
         for (String action : exits) {

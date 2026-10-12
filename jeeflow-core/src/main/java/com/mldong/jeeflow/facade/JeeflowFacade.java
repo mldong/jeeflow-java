@@ -318,7 +318,9 @@ public class JeeflowFacade {
             if (startNextOp != null && !startNextOp.toString().isEmpty()) {
                 flowArgs.put(FlowConst.NEXT_NODE_OPERATOR, startNextOp);
             }
-            engine.executeProcessTask(task.getTaskId(), operator, flowArgs);
+            // issues/176：spec 04:60-62——apply 节点由 flow.auto 代执行（operator 列=flow.auto，
+            // 不进发起人已办）；u_* 由发起腿留下、引擎对 flow.auto 跳过注入（对齐 boot2 :317）
+            engine.executeProcessTask(task.getTaskId(), FlowConst.AUTO_ID, flowArgs);
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put(FlowConst.PROCESS_INSTANCE_ID_KEY, inst.getInstanceId());
