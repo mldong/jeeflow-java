@@ -1374,9 +1374,12 @@ public class JeeflowFacade {
         // 同步设计基本信息（jsonObject 里的 name/displayName/type）+ 内容变更 → 未部署
         try {
             ProcessModel model = ModelParser.parse(bytes);
-            design.setName(model.getName());
-            design.setDisplayName(model.getDisplayName());
-            design.setType(model.getType());
+            // issues/179 R13-2：缺名/缺字段的设计稿快照允许入库（拒收边界在 deploy/redeploy）——
+            // 逐字段判空：缺 name 直接 setName(null) 会撞 wf_process_design.name NOT NULL（真机 1048
+            // ⇒ 整个动作回滚、缺名快照永远存不进，R13 拒收腿在真机上不可达）
+            if (model.getName() != null) design.setName(model.getName());
+            if (model.getDisplayName() != null) design.setDisplayName(model.getDisplayName());
+            if (model.getType() != null) design.setType(model.getType());
         } catch (Exception ignored) {
         }
         design.setIsDeployed(0);

@@ -2749,6 +2749,27 @@ public class JeeflowFacadeTest {
                 extRepo.findDesignById(designId).getIsDeployed());
     }
 
+    /** R13-2（10-12 真机探针定案）：updateDefine 缺名草稿必须能入库——缺 name 直接 setName(null)
+     *  会撞 wf_process_design.name NOT NULL（真机 JDBC 1048 ⇒ 整动作回滚、缺名快照存不进 ⇒
+     *  deploy/redeploy 拒收腿在真机上不可达）。修后：code=0、快照入库、设计行 name 保持旧值。 */
+    @Test
+    public void test179UpdateDefineMissingNameDraftStored() {
+        Long designId = newDesign("r13DraftSync");
+        String keepName = extRepo.findDesignById(designId).getName();
+
+        String noName = "{\"displayName\":\"缺名草稿\",\"type\":\"approval\",\"nodes\":[],\"edges\":[]}";
+        assertOk(call("processDesign/updateDefine", args(
+                "processDesignId", designId, "operator", "user1", "content", noName)));
+
+        assertEquals("缺名草稿入库后设计行 name 应保持旧值（不得置 null）",
+                keepName, extRepo.findDesignById(designId).getName());
+        assertTrue("缺名草稿快照应入库（save 平铺兼容亦存一条，故不锁总数）",
+                extRepo.listDesignHis(designId).size() >= 1);
+        assertTrue("最新快照应为缺名内容（redeploy 读到它才会拒「流程定义缺少 name」）",
+                new String(extRepo.listDesignHis(designId).get(0).getContent(), StandardCharsets.UTF_8)
+                        .contains("缺名草稿"));
+    }
+
     /** R13 读数：定义总数（processDefine/page 的 recordCount） */
     @SuppressWarnings("unchecked")
     private int defineCount() {
