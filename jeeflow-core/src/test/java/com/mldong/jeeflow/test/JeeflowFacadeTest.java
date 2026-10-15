@@ -747,6 +747,50 @@ public class JeeflowFacadeTest {
         assertEquals(Integer.valueOf(99999999), r.get("code"));
     }
 
+    /** issues/236（audit8 R68）两档同钉：① 缺键档基准腿（四腿缺键＝清空、operator 保留，spec06 §4.5 缺键档）；
+     *  ② 布尔折算 `true→1 / false→0`（条文在、java 自家 `toInt` 违约落 0）。 */
+    @Test
+    public void testSurrogateUpdateMissingKeysAndBool() {
+        Map<String, Object> r = call("processSurrogate/save", args(
+                "operator", "zhangsan", "surrogate", "lisi", "processName", "leave",
+                "startTime", "2026-08-01 00:00:00", "endTime", "2026-08-31 23:59:59", "enabled", 1));
+        assertOk(r);
+        Long id = toLong(((Map<String, Object>) r.get("data")).get("id"));
+
+        // ① 只带 id 的 update ⇒ 流程名/被委托人/时间窗四腿清空、enabled 复位 1、operator 保留
+        assertOk(call("processSurrogate/update", args("id", id)));
+        r = call("processSurrogate/detail", args("id", id));
+        assertOk(r);
+        Map<String, Object> d = (Map<String, Object>) r.get("data");
+        assertEquals("zhangsan", d.get("operator"));
+        // 条文规定 null 与 '' 等价（读侧兜底判 IS NULL OR = ''），两形都不算违约
+        assertTrue(isBlankOrAbsent(d.get("processName")));
+        assertTrue(isBlankOrAbsent(d.get("surrogate")));
+        assertTrue(isBlankOrAbsent(d.get("startTime")));
+        assertTrue(isBlankOrAbsent(d.get("endTime")));
+        assertEquals(Integer.valueOf(1), d.get("enabled"));
+
+        // ② 布尔档：true→1（修前红＝toInt 走 Integer.parseInt("true") 抛 NumberFormatException 落 def=0）
+        assertOk(call("processSurrogate/update", args("id", id, "enabled", true)));
+        d = (Map<String, Object>) call("processSurrogate/detail", args("id", id)).get("data");
+        assertEquals(Integer.valueOf(1), d.get("enabled"));
+        assertOk(call("processSurrogate/update", args("id", id, "enabled", false)));
+        d = (Map<String, Object>) call("processSurrogate/detail", args("id", id)).get("data");
+        assertEquals(Integer.valueOf(0), d.get("enabled"));
+
+        // 回归：数字与字符串数字两档不受布尔支影响
+        assertOk(call("processSurrogate/update", args("id", id, "enabled", "1")));
+        d = (Map<String, Object>) call("processSurrogate/detail", args("id", id)).get("data");
+        assertEquals(Integer.valueOf(1), d.get("enabled"));
+        assertOk(call("processSurrogate/update", args("id", id, "enabled", 0)));
+        d = (Map<String, Object>) call("processSurrogate/detail", args("id", id)).get("data");
+        assertEquals(Integer.valueOf(0), d.get("enabled"));
+    }
+
+    private static boolean isBlankOrAbsent(Object v) {
+        return v == null || String.valueOf(v).trim().isEmpty();
+    }
+
     /** issues/95：前端「我的委托」行内与批量删除统一发 {ids}（行内 = 长度 1 的数组），
      *  此前六语言门面只读单数 {id} → 该页删除整体不可用；单 {id} 形态保留兼容（移动端发这个）。 */
     @Test

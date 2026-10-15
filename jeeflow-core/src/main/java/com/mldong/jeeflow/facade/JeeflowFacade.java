@@ -1949,6 +1949,9 @@ public class JeeflowFacade {
 
     private static Integer toInt(Object val, int def) {
         if (val == null) return def;
+        // 布尔折算档（spec06 §4.5 条款 5：true→1 / false→0）。旧形状此处走 parseInt("true")
+        // 抛 NumberFormatException 落 def，enabled 的 true 因此被当停用（issues/236）。
+        if (val instanceof Boolean) return ((Boolean) val) ? 1 : 0;
         if (val instanceof Number) return ((Number) val).intValue();
         try { return Integer.parseInt(val.toString()); } catch (NumberFormatException e) { return def; }
     }
