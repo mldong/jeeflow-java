@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS wf_process_task (
     process_instance_id  BIGINT        NOT NULL COMMENT '流程实例ID',
     task_name            VARCHAR(100)  NOT NULL COMMENT '任务名称编码',
     display_name         VARCHAR(100)  NOT NULL COMMENT '任务显示名称',
-    task_type            INT           NULL     COMMENT '任务类型(0：主办任务；1：协办任务)',
+    task_type            INT           NULL     COMMENT '任务类型(0：主办任务；1：协办任务；2：记录)',
     perform_type         INT           NULL     COMMENT '参与类型(0：普通参与；1：会签参与)',
     task_state           INT           NULL     COMMENT '任务状态(10：进行中；20：已完成；30：已撤回；40：强行中止；50：挂起；99：已废弃)',
     operator             VARCHAR(64)   NULL     COMMENT '任务处理人',
