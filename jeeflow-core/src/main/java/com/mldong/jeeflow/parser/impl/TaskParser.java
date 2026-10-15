@@ -102,8 +102,12 @@ public class TaskParser extends AbstractNodeParser {
     }
 
     private static boolean hasField(Class<?> clazz, String fieldName) {
-        for (Field f : clazz.getDeclaredFields()) {
-            if (f.getName().equals(fieldName)) return true;
+        // issues/231：判据含父类链（对齐 boot2 ReflectUtil.hasField 语义）——
+        // name/displayName/layout/pre/postInterceptors 等父类声明键不得再镜像进 ext
+        for (Class<?> c = clazz; c != null; c = c.getSuperclass()) {
+            for (Field f : c.getDeclaredFields()) {
+                if (f.getName().equals(fieldName)) return true;
+            }
         }
         return false;
     }
