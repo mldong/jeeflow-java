@@ -1602,7 +1602,10 @@ public class JeeflowFacade {
             String explicit = toStr(args.get("operator"));
             if (explicit != null && !explicit.trim().isEmpty()) s.setOperator(explicit);
         }
-        s.setSurrogate(toStr(args.get("surrogate")));
+        // surrogate 列 NOT NULL（compose 现读）⇒ 缺键清空落空串，不能落 null；
+        // 读侧把 null 与 '' 同档（spec 06 §processSurrogate/update 四腿清空）
+        String surrogateVal = toStr(args.get("surrogate"));
+        s.setSurrogate(surrogateVal == null ? "" : surrogateVal);
         s.setStartTime(parseTime(args.get("startTime")));
         s.setEndTime(parseTime(args.get("endTime")));
         // issues/116：enabled 缺省=1（契约默认），显式传入但不可解析为整数的脏值按**停用**落库——
