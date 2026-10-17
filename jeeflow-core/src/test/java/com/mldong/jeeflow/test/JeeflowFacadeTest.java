@@ -918,6 +918,30 @@ public class JeeflowFacadeTest {
         assertOk(call("processDesign/remove", args("ids", Arrays.asList(d))));
     }
 
+    /** audit8 R110：任何实例（含进行中）存在时，processDefine/remove 整批拒绝且不半删。 */
+    @Test
+    public void testDefineRemoveRejectedWhenAnyInstanceExists() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Long defineId = def.getId();
+        assertOk(call("processInstance/startAndExecute",
+                args("processDefineId", defineId, "operator", "zhangsan")));
+
+        Map<String, Object> r = call("processDefine/remove", args("id", defineId));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertEquals("存在正在未完成的流程实例，不允许删除！", r.get("msg"));
+        assertNotNull("被拒时定义不得被删除", rawRepo.findDefineById(defineId));
+
+        Long clean = deployDefine("r110CleanDefine");
+        r = call("processDefine/remove", args("ids", Arrays.asList(clean, defineId)));
+        assertEquals(Integer.valueOf(99999999), r.get("code"));
+        assertEquals("存在正在未完成的流程实例，不允许删除！", r.get("msg"));
+        assertNotNull("批量校验应先于写入：clean 不得被部分删除", rawRepo.findDefineById(clean));
+        assertNotNull("dirty 定义也不得被删除", rawRepo.findDefineById(defineId));
+
+        assertOk(call("processDefine/remove", args("id", clean)));
+        assertNull("无实例的定义应可删除", rawRepo.findDefineById(clean));
+    }
+
     /** issues/96 §4B：{@code processDefine/remove} 入口形态四态（此前连 Java 自己都没有 {ids} 用例）。 */
     @Test
     public void testDefineRemoveParamShapeMatrix() {

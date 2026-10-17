@@ -7,7 +7,9 @@ import com.mldong.jeeflow.domain.ProcessDesign;
 import com.mldong.jeeflow.domain.ProcessDesignHis;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessSurrogate;
+import com.mldong.jeeflow.JeeflowException;
 import com.mldong.jeeflow.domain.ProcessTask;
+import com.mldong.jeeflow.enums.WfErrEnum;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
 import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
@@ -358,7 +360,14 @@ public class JeeflowFacade {
 
     private Map<String, Object> defineRemove(Map<String, Object> args) {
         // issues/28：兼容 {ids} 批量与单 {id}（空值报错见 idListArgs）
-        for (Long id : idListArgs(args)) {
+        List<Long> ids = idListArgs(args);
+        // audit8 R110：先对整批做存在性校验再删，避免"前面的删了、后面的被拒"的半删。
+        for (Long id : ids) {
+            if (repository.hasInstancesByDefineId(id)) {
+                throw new JeeflowException(WfErrEnum.EXIST_UN_FINISH_INSTANCE);
+            }
+        }
+        for (Long id : ids) {
             repository.removeDefine(id);
         }
         return ok();

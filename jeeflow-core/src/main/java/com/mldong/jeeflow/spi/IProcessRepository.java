@@ -30,6 +30,16 @@ public interface IProcessRepository {
     /** 删除流程定义 */
     void removeDefine(Long defineId);
 
+    /**
+     * 指定流程定义下是否存在任何实例（含已办结/已撤回）——audit8 R110 删除守卫。
+     * 默认走 pageInstances；JDBC 与内存仓各自覆盖为直接实现。
+     */
+    default boolean hasInstancesByDefineId(Long defineId) {
+        PageQuery query = new PageQuery(1, 1);
+        query.add("t.process_define_id", "EQ", defineId);
+        return pageInstances(query).getRecordCount() > 0;
+    }
+
     ProcessInstance findInstanceById(Long instanceId);
     void saveInstance(ProcessInstance instance);
     /** 更新实例并**级联持久化聚合内任务状态**（撤回/挂起/激活等变更随同落库，v1.0.1） */

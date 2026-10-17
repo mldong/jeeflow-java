@@ -142,6 +142,12 @@ public class JdbcProcessRepository implements IProcessRepository {
         }
     }
 
+    @Override
+    public boolean hasInstancesByDefineId(Long defineId) {
+        return queryCount("SELECT COUNT(1) FROM wf_process_instance WHERE process_define_id=?",
+                java.util.Collections.singletonList(defineId)) > 0;
+    }
+
     // ═══ 流程实例 ═══
 
     @Override

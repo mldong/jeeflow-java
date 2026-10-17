@@ -67,6 +67,12 @@ public class MemoryProcessRepository implements IProcessRepository {
         defines.remove(defineId);
     }
 
+    @Override
+    public boolean hasInstancesByDefineId(Long defineId) {
+        return instances.values().stream()
+                .anyMatch(i -> java.util.Objects.equals(i.getDefineId(), defineId));
+    }
+
     // ---- 流程实例 ----
     @Override
     public ProcessInstance findInstanceById(Long instanceId) {
