@@ -31,6 +31,9 @@ public class TaskParser extends AbstractNodeParser {
         taskModel.setExpireTime(properties.getStr(EXPIRE_TIME_KEY));
         taskModel.setAutoExecute(properties.getStr(AUTH_EXECUTE_KEY));
         taskModel.setCallback(properties.getStr(CALLBACK_KEY));
+        // 退回发起人后的重提方式：缺省 NORMAL，非法值报配置错误
+        taskModel.setReapplyMode(com.mldong.jeeflow.enums.ReapplyModeEnum.parse(
+                properties.get(com.mldong.jeeflow.core.ReapplySupport.PROP_REAPPLY_MODE), taskModel.getName()));
 
         // 解析候选人属性
         taskModel.setCandidateHandler(properties.getStr(EXT_FIELD_CANDIDATE_HANDLER_KEY));

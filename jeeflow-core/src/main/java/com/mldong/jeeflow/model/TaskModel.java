@@ -28,6 +28,8 @@ public class TaskModel extends NodeModel {
     private String candidateHandler;
     private CountersignTypeEnum countersignType;
     private String countersignCompletionCondition;
+    /** 退回发起人后的重提方式；缺省 NORMAL */
+    private com.mldong.jeeflow.enums.ReapplyModeEnum reapplyMode = com.mldong.jeeflow.enums.ReapplyModeEnum.NORMAL;
 
     @Override
     public void exec(Execution execution) {
@@ -85,4 +87,6 @@ public class TaskModel extends NodeModel {
     public void setCountersignType(CountersignTypeEnum countersignType) { this.countersignType = countersignType; }
     public String getCountersignCompletionCondition() { return countersignCompletionCondition; }
     public void setCountersignCompletionCondition(String countersignCompletionCondition) { this.countersignCompletionCondition = countersignCompletionCondition; }
+    public com.mldong.jeeflow.enums.ReapplyModeEnum getReapplyMode() { return reapplyMode; }
+    public void setReapplyMode(com.mldong.jeeflow.enums.ReapplyModeEnum reapplyMode) { this.reapplyMode = reapplyMode; }
 }

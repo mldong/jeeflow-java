@@ -63,6 +63,16 @@ public class CreateTaskHandler implements IHandler {
 
         execution.addTasks(tasks);
 
+        // 分支归属：重提直返路径显式传入；否则按父任务血缘＋模型静态范围推导。
+        // 落在任务变量保留键 _branchCtx，供汇合判据识别「来源分支是否仍未完成」。
+        for (ProcessTask task : tasks) {
+            List<java.util.Map<String, Object>> scopes = execution.getInheritedScopes() != null
+                    ? execution.getInheritedScopes()
+                    : com.mldong.jeeflow.core.ReapplySupport.buildScopes(
+                            execution.getProcessTask(), model, taskModel.getName(), task.getTaskId());
+            com.mldong.jeeflow.core.ReapplySupport.putScopes(task, scopes);
+        }
+
         // 执行拦截器
         List<FlowInterceptor> interceptors = ServiceContext.findList(FlowInterceptor.class);
         if (interceptors != null) {
@@ -78,7 +88,7 @@ public class CreateTaskHandler implements IHandler {
         // 与 Go 参考实现，故此处不再 fire。
     }
 
-    private List<String> resolveActors(TaskModel taskModel, ProcessModel model, Execution execution) {
+    public static List<String> resolveActors(TaskModel taskModel, ProcessModel model, Execution execution) {
         List<String> actors = new ArrayList<>();
         FlowData args = execution.getArgs();
         // 1. 动态指定下一节点处理人优先（v1.0.1：对齐 boot2/boot3 tf_nextNodeOperator）

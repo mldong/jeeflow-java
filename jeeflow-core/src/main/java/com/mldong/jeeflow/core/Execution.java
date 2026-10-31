@@ -63,6 +63,12 @@ public class Execution {
      */
     private final List<PendingInstanceEnd> pendingEnds = new ArrayList<>();
 
+    /**
+     * 本 execution 新建任务应写入的分支归属（重提直返路径显式传入；
+     * null 表示按父任务血缘自行推导）。见 {@link ReapplySupport}。
+     */
+    private List<java.util.Map<String, Object>> inheritedScopes;
+
     public void addTask(ProcessTask task) {
         this.processTaskList.add(task);
     }
@@ -159,6 +165,9 @@ public class Execution {
     public void setProcessTaskList(List<ProcessTask> processTaskList) { this.processTaskList = processTaskList; }
     public boolean isMerged() { return isMerged; }
     public void setMerged(boolean merged) { isMerged = merged; }
+
+    public List<java.util.Map<String, Object>> getInheritedScopes() { return inheritedScopes; }
+    public void setInheritedScopes(List<java.util.Map<String, Object>> inheritedScopes) { this.inheritedScopes = inheritedScopes; }
     public JeeflowEngine getEngine() { return engine; }
     public void setEngine(JeeflowEngine engine) { this.engine = engine; }
     public String getOperator() { return operator; }

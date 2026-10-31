@@ -9,6 +9,8 @@ import com.mldong.jeeflow.enums.*;
 import com.mldong.jeeflow.event.PendingInstanceEnd;
 import com.mldong.jeeflow.event.ProcessEvent;
 import com.mldong.jeeflow.event.ProcessPublisher;
+import com.mldong.jeeflow.handler.impl.CreateTaskHandler;
+import com.mldong.jeeflow.interceptor.FlowInterceptor;
 import com.mldong.jeeflow.interceptor.impl.SurrogateInterceptor;
 import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.model.*;
@@ -20,10 +22,12 @@ import com.mldong.jeeflow.util.FlowUtil;
 import com.mldong.jeeflow.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 工作流引擎实现——薄编排层
@@ -126,7 +130,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     @Override
     public List<ProcessTask> executeProcessTask(Long taskId, String operator, FlowData args) {
-        return inTx(() -> {
+        return inTxFor(taskId, () -> {
+            ProcessTask snapshot = repository.findTaskById(taskId);
+            if (snapshot != null && snapshot.isDoing() && ReapplySupport.reapplyOf(snapshot) != null) {
+                return executeReapply(snapshot, operator, args);
+            }
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
@@ -177,7 +185,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     @Override
     public List<ProcessTask> executeAndJumpTask(Long taskId, String operator, FlowData args, String nodeName) {
-        return inTx(() -> {
+        return inTxFor(taskId, () -> {
+            ProcessTask snapshot = repository.findTaskById(taskId);
+            rejectMarkedApplicant(snapshot, "跳转");
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
@@ -207,7 +217,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     @Override
     public List<ProcessTask> executeAndJumpToEnd(Long taskId, String operator, FlowData args) {
-        return inTx(() -> {
+        return inTxFor(taskId, () -> {
+            rejectMarkedApplicant(repository.findTaskById(taskId), "拒绝");
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
@@ -224,25 +235,189 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     @Override
     public List<ProcessTask> executeAndJumpToFirstTaskNode(Long taskId, String operator, FlowData args) {
-        return inTx(() -> {
+        return inTxFor(taskId, () -> {
+            ProcessTask snapshot = repository.findTaskById(taskId);
+            rejectMarkedApplicant(snapshot, "再次退回");
+            ProcessModel model = null;
+            TaskModel sourceNode = null;
+            if (snapshot != null && snapshot.isDoing()) {
+                ProcessInstance instance = repository.findInstanceById(snapshot.getProcessInstanceId());
+                if (instance != null) {
+                    ProcessInstance.ProcessDefine define = repository.findDefineById(instance.getDefineId());
+                    if (define != null) {
+                        model = ModelParser.parse(define.getContent());
+                        NodeModel node = model.getNode(snapshot.getTaskName());
+                        if (node instanceof TaskModel) {
+                            sourceNode = (TaskModel) node;
+                        }
+                    }
+                }
+            }
+            // 校验放在任何状态变更之前：非法配置/不支持的形状不得先完成任务、先发通知
+            boolean direct = sourceNode != null
+                    && ReapplyModeEnum.RETURN_TO_SOURCE.equals(sourceNode.getReapplyMode());
+            if (direct) {
+                validateReturnToSource(model, sourceNode);
+            }
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
-            ProcessModel model = exec.getProcessModel();
-            for (TransitionModel tm : model.getStart().getOutputs()) {
-                tm.setEnabled(true);
-                if (tm.getTarget() instanceof TaskModel) {
-                    ((TaskModel) tm.getTarget()).setAssignee(exec.getProcessInstance().getOperator());
+            model = exec.getProcessModel();
+            if (direct) {
+                createReturnToSourceApplication(exec, sourceNode, snapshot);
+            } else {
+                for (TransitionModel tm : model.getStart().getOutputs()) {
+                    tm.setEnabled(true);
+                    if (tm.getTarget() instanceof TaskModel) {
+                        ((TaskModel) tm.getTarget()).setAssignee(exec.getProcessInstance().getOperator());
+                    }
+                    tm.execute(exec);
                 }
-                tm.execute(exec);
             }
             persistTasks(exec);
             return exec.getProcessTaskList();
         });
     }
 
+    // ═══ 退回修改、重提直返 ═══
+
+    /**
+     * 带直返上下文的进行中申请待办只接受 submitType=5（重新提交）。
+     * 其他跳转/退回/拒绝入口一律在状态变更之前拒绝，避免绕过来源绑定或丢等待。
+     */
+    private static void rejectMarkedApplicant(ProcessTask snapshot, String action) {
+        if (snapshot != null && snapshot.isDoing() && ReapplySupport.reapplyOf(snapshot) != null) {
+            throw new JeeflowException("带重提直返标记的申请待办不允许" + action
+                    + "，只接受重新提交(submitType=5)");
+        }
+    }
+
+    /** 来源节点配置了 RETURN_TO_SOURCE 时的准入校验（不改任何状态） */
+    private void validateReturnToSource(ProcessModel model, TaskModel sourceNode) {
+        if (ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(sourceNode.getPerformType())) {
+            throw new JeeflowException("会签节点[" + sourceNode.getName() + "]不支持退回修改直返");
+        }
+        if (FlowUtil.isFirstTaskName(model, sourceNode.getName())) {
+            throw new JeeflowException("申请节点[" + sourceNode.getName() + "]不能配置重提直返");
+        }
+        if (firstTaskModel(model) == null) {
+            throw new JeeflowException("流程定义缺少申请节点，无法退回发起人");
+        }
+    }
+
+    /**
+     * submitType=6 的直返落点：完成来源任务（prepareExecution 已做）后，在原实例里
+     * 给发起人建一条申请待办，并把本次退回绑定写进任务变量；不重放来源出边、不重触发分叉。
+     */
+    private void createReturnToSourceApplication(Execution exec, TaskModel sourceNode, ProcessTask sourceTask) {
+        ProcessInstance instance = exec.getProcessInstance();
+        TaskModel applyModel = firstTaskModel(exec.getProcessModel());
+        ProcessTask appTask = instance.createTask(applyModel, applyModel.getDisplayName(),
+                new ArrayList<>(Collections.singletonList(instance.getOperator())),
+                instance.getOperator(), sourceTask.getTaskId(), true);
+        ReapplySupport.putScopes(appTask, ReapplySupport.emptyScopes());
+        ReapplySupport.putReapply(appTask, ReapplySupport.newReapplyContext(
+                ReapplyModeEnum.RETURN_TO_SOURCE.name(), sourceTask.getTaskId(), sourceNode.getName(),
+                ReapplySupport.scopesOf(sourceTask)));
+        exec.addTask(appTask);
+        // 与 CreateTaskHandler 同序：建单拦截器 → 完成节点的 post 拦截器 → 落库/通知（persistTasks）
+        runCreateInterceptors(exec, applyModel);
+        NodeModel completed = exec.getProcessModel().getNode(sourceNode.getName());
+        if (completed != null) {
+            completed.executePostInterceptors(exec);
+        }
+    }
+
+    /** 全局建单拦截器（ServiceContext 注册的 FlowInterceptor），对齐 CreateTaskHandler */
+    private static void runCreateInterceptors(Execution exec, NodeModel node) {
+        exec.setNodeModel(node);
+        List<FlowInterceptor> interceptors = ServiceContext.findList(FlowInterceptor.class);
+        if (interceptors != null) {
+            for (FlowInterceptor interceptor : interceptors) {
+                interceptor.intercept(exec);
+            }
+        }
+    }
+
+    /**
+     * submitType=5 且申请待办带直返上下文：校验来源后，在来源节点直接建新待办。
+     * 不执行申请节点出边（不重算来源前条件、不重触发分叉），也不执行来源节点出边。
+     */
+    private List<ProcessTask> executeReapply(ProcessTask applyTask, String operator, FlowData args) {
+        args = ReapplySupport.stripReserved(args);
+        Integer submitType = args.getInt(FlowConst.SUBMIT_TYPE);
+        if (submitType == null) {
+            submitType = ProcessSubmitTypeEnum.RE_APPLY.getCode();
+        }
+        if (!ProcessSubmitTypeEnum.RE_APPLY.getCode().equals(submitType)) {
+            throw new JeeflowException("带重提直返标记的申请待办只接受重新提交(submitType=5)");
+        }
+        ProcessInstance instance = repository.findInstanceById(applyTask.getProcessInstanceId());
+        if (instance == null) {
+            throw new JeeflowException("流程实例不存在");
+        }
+        ProcessInstance.ProcessDefine define = repository.findDefineById(instance.getDefineId());
+        if (define == null) {
+            throw new JeeflowException(WfErrEnum.NOT_FOUND_PROCESS_DEFINE);
+        }
+        ProcessModel model = ModelParser.parse(define.getContent());
+        Map<String, Object> ctx = ReapplySupport.reapplyOf(applyTask);
+        Long sourceTaskId = ReapplySupport.requireSourceTaskId(ctx);
+        ProcessTask source = null;
+        for (ProcessTask t : instance.getTasks()) {
+            if (sourceTaskId.equals(t.getTaskId())) {
+                source = t;
+                break;
+            }
+        }
+        if (source == null || !source.isFinished()) {
+            throw new JeeflowException("重提直返来源任务无效或未完成");
+        }
+        NodeModel sourceModel = model.getNode(source.getTaskName());
+        if (!(sourceModel instanceof TaskModel)
+                || !ReapplyModeEnum.RETURN_TO_SOURCE.equals(((TaskModel) sourceModel).getReapplyMode())) {
+            throw new JeeflowException("重提直返来源节点配置已变更，拒绝执行");
+        }
+        if (!FlowUtil.isFirstTaskName(model, applyTask.getTaskName())) {
+            throw new JeeflowException("重提直返必须从申请待办发起");
+        }
+        TaskModel target = (TaskModel) sourceModel;
+
+        Execution exec = prepareExecution(applyTask.getTaskId(), operator, args);
+        if (exec == null) return Collections.emptyList();
+        // 遗留的下一节点指定人参数不得影响本次建单（历史记录不删）
+        exec.getArgs().remove(FlowConst.NEXT_NODE_OPERATOR);
+        List<String> actors = CreateTaskHandler.resolveActors(target, model, exec);
+        if (actors == null || actors.isEmpty()) {
+            throw new JeeflowException("目标节点[" + target.getName() + "]没有可用参与者，重提已回滚");
+        }
+        List<Map<String, Object>> branch = ReapplySupport.branchOf(ctx);
+        ProcessTask newTask = instance.createTask(target, target.getDisplayName(), actors, operator,
+                applyTask.getTaskId(), false);
+        ReapplySupport.putScopes(newTask, branch);
+        exec.addTask(newTask);
+        // 与 CreateTaskHandler 同序：建单拦截器 → 申请节点 post 拦截器 → 落库/通知（persistTasks）
+        runCreateInterceptors(exec, target);
+        NodeModel applyNode = exec.getProcessModel().getNode(applyTask.getTaskName());
+        if (applyNode != null) {
+            applyNode.executePostInterceptors(exec);
+        }
+        persistTasks(exec);
+        return exec.getProcessTaskList();
+    }
+
+    private static TaskModel firstTaskModel(ProcessModel model) {
+        for (TaskModel t : model.getTasks()) {
+            if (FlowUtil.isFirstTaskName(model, t.getName())) {
+                return t;
+            }
+        }
+        return null;
+    }
+
     // ═══ 内部方法 ═══
 
     private Execution prepareExecution(Long taskId, String operator, FlowData args) {
+        args = ReapplySupport.stripReserved(args);
         ProcessTask task = repository.findTaskById(taskId);
         if (task == null || !task.isDoing()) {
             throw new JeeflowException(WfErrEnum.NOT_FOUND_DOING_PROCESS_TASK);
@@ -432,6 +607,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             surrogateApplier.apply(task, processName, LocalDateTime.now());
         }
         repository.saveTask(task);
+        // 分支根任务建单时自身 ID 尚未生成，落库后回填 _branchCtx.root；JDBC 仓储在 INSERT 时
+        // 已序列化变量，回填必须补一次 UPDATE 才落盘
+        if (ReapplySupport.fillRootSelf(task)) {
+            repository.updateTask(task);
+        }
         // TASK_START 在落库（分配 taskId）后 fire，见 start 内注释与 spec §4.4
         notifyTaskStart(task);
     }
@@ -530,6 +710,20 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             throw e;
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 同实例串行化：锁在事务外层，保证「重验状态 → 建后继任务」是同一临界区
+     * （汇合一次性放行、同一任务重复办理、退回与另一支汇合交错）。
+     */
+    private <T> T inTxFor(Long taskId, java.util.function.Supplier<T> action) {
+        java.util.concurrent.locks.ReentrantLock lock = InstanceLock.forTask(repository, taskId);
+        lock.lock();
+        try {
+            return inTx(action::get);
+        } finally {
+            lock.unlock();
         }
     }
 
