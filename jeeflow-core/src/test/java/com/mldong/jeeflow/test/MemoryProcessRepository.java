@@ -359,13 +359,21 @@ public class MemoryProcessRepository implements IProcessRepository {
         r.setTaskParentId(t.getParentTaskId());
         r.setCreateTime(t.getCreateTime());
         r.setUpdateTime(t.getUpdateTime());
-        if (t.getVariables() != null) {
-            com.mldong.jeeflow.json.IJsonProvider json = com.mldong.jeeflow.core.ServiceContext.find(com.mldong.jeeflow.json.IJsonProvider.class);
-            if (json != null) r.setVariable(json.toJson(t.getVariables()));
+        com.mldong.jeeflow.json.IJsonProvider json =
+                com.mldong.jeeflow.core.ServiceContext.find(com.mldong.jeeflow.json.IJsonProvider.class);
+        if (t.getVariables() != null && json != null) {
+            r.setVariable(json.toJson(t.getVariables()));
         }
         ProcessInstance inst = instances.get(t.getProcessInstanceId());
         if (inst != null) {
             r.setInstanceCreateTime(inst.getCreateTime());
+            // 与 JdbcProcessRepository 的 `pi.variable AS instance_variable` 投影对齐：issues/82-3
+            // 那条「任务变量只剩控制键 ⇒ ext 回退实例变量」的回退目标就是这一列。此前内存仓漏映射
+            // ⇒ 门面级用例只能 assertNotNull(row.get("ext"))，照不出回退有没有真发生（本轮
+            // `_branchCtx` 写进每条任务变量后七栈齐漏，只有 php 的 PDO 仓有内容级断言才报红）。
+            if (inst.getVariables() != null && json != null) {
+                r.setInstanceVariable(json.toJson(inst.getVariables()));
+            }
             ProcessInstance.ProcessDefine def = defines.get(inst.getDefineId());
             if (def != null) {
                 r.setProcessDefineName(def.getName());

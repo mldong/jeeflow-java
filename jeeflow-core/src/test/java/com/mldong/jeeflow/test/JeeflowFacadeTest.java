@@ -1881,6 +1881,68 @@ public class JeeflowFacadeTest {
         assertTrue("totalPage 应为正整数", ((Number) pageData.get("totalPage")).intValue() >= 1);
     }
 
+    /**
+     * issues/82-3 / 121 P1 的**内容级**判据——上面 testListRowContract 只 assertNotNull(row.get("ext"))，
+     * 回退有没有真发生它照不出（本轮 `_branchCtx` 写进每条任务变量后，七栈都是这么漏过去的）。
+     * 两腿：① 任务变量只剩引擎控制键 ⇒ ext 回退实例变量、内部键不透出；
+     * ② 直返申请待办 ⇒ ext = 实例变量 + `_reapplyContext`（前端「重新提交后返回：X」的取数口），
+     * 且合回不得污染同一响应里的 instanceExt 出口。
+     */
+    @SuppressWarnings("unchecked")
+    @Test
+    public void testTaskRowExtFallsBackWithReapplyReservedKeys() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan", "amount", 500));
+        Map<String, Object> r = call("processTask/todoList", args("operator", "leader"));
+        assertOk(r);
+        List<?> rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        Map<String, Object> row = (Map<String, Object>) rows.get(0);
+        Map<String, Object> ext = (Map<String, Object>) row.get("ext");
+        Map<String, Object> instanceExt = (Map<String, Object>) row.get("instanceExt");
+        // 前置非真空：发起腿会把 autoGenTitle / u_* 写进实例变量（ProcessInstance.create 的保留集）
+        assertTrue("前置：instanceExt 必须非空，否则下面的回退断言恒真空 → " + instanceExt,
+                instanceExt.containsKey(FlowConst.AUTO_GEN_TITLE));
+        assertEquals("任务变量只剩引擎控制键 ⇒ ext 应回退实例变量（issues/82-3 / 121 P1）",
+                instanceExt, ext);
+        assertFalse("内部键 _branchCtx 不得从任务行 ext 透出（spec 04 保留键）",
+                ext.containsKey("_branchCtx"));
+        assertFalse("行级首节点标记同属控制键，回退后不应留在 ext 上",
+                ext.containsKey(FlowConst.IS_FIRST_TASK_NODE));
+
+        ProcessInstance.ProcessDefine rts = registerFlow("14-return-to-source.json");
+        call("processInstance/startAndExecute",
+                args("processDefineId", rts.getId(), "operator", "applicant", "amount", 800));
+        r = call("processTask/todoList", args("operator", "userA"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        Object taskAId = ((Map<String, Object>) rows.get(0)).get("id");
+        assertOk(call("processTask/execute", args("processTaskId", taskAId, "operator", "userA",
+                "submitType", ProcessSubmitTypeEnum.ROLLBACK_TO_OPERATOR.getCode())));
+
+        r = call("processTask/todoList", args("operator", "applicant"));
+        assertOk(r);
+        rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        Map<String, Object> appRow = null;
+        for (Object o : rows) {
+            Map<String, Object> c = (Map<String, Object>) o;
+            if (((Map<String, Object>) c.get("ext")).containsKey("_reapplyContext")) {
+                appRow = c;
+            }
+        }
+        assertNotNull("直返申请待办的 ext 应带 _reapplyContext（前端「重新提交后返回：X」的取数口）",
+                appRow);
+        Map<String, Object> appExt = (Map<String, Object>) appRow.get("ext");
+        Map<String, Object> appInstanceExt = (Map<String, Object>) appRow.get("instanceExt");
+        assertTrue("回退仍要发生：实例变量在 ext 上 → " + appExt,
+                appExt.containsKey(FlowConst.AUTO_GEN_TITLE));
+        assertFalse("内部键 _branchCtx 不得从 ext 透出", appExt.containsKey("_branchCtx"));
+        assertEquals("来源节点应可读（前端提示就取这一格）", "taskA",
+                ((Map<String, Object>) appExt.get("_reapplyContext")).get("sourceNode"));
+        assertFalse("合回不得污染同一响应里的 instanceExt 出口",
+                appInstanceExt.containsKey("_reapplyContext"));
+    }
+
     // ═══ issues/05-5：m_ 前缀查询参数（前端 m_LIKE_name / m_pd_LIKE_* / m_t_LIKE_*）═══
 
     @Test

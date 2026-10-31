@@ -1,6 +1,7 @@
 package com.mldong.jeeflow.facade;
 
 import com.mldong.jeeflow.core.JeeflowEngine;
+import com.mldong.jeeflow.core.ReapplySupport;
 import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessDesign;
@@ -1834,14 +1835,38 @@ public class JeeflowFacade {
         Map<String, Object> ext = parseJsonMap(r.getVariable());
         // issues/121 P1：引擎建单必写的控制键不算「任务变量非空」，否则新建任务的 ext
         // 永远不再回退实例变量（issues/82-3 既有契约）。
-        if (ext.isEmpty() || (ext.size() == 1 && ext.containsKey(FlowConst.IS_FIRST_TASK_NODE))) {
-            ext = instanceExt;
+        // 「退回修改、重提直返」又添了两枚引擎内部键（spec 04 保留键 `_branchCtx`／`_reapplyContext`，
+        // 建单时无条件写入，空分支也写 `[]`）：同样不算用户变量——否则每条任务行都从此不再回退，
+        // 且内部键直接从公开出口透出。但 `_reapplyContext` 是前端「重新提交后返回：X」的唯一取数口
+        // （jeeflow-ui helpers.ts 读 `ext._reapplyContext`）⇒ 回退后原样合回。
+        // 合回必须落在**副本**上：`instanceExt` 是同一响应里另一个出口，不能被任务侧的键污染。
+        if (hasOnlyControlKeys(ext)) {
+            Object reapply = ext.get(ReapplySupport.VAR_REAPPLY_CTX);
+            ext = new LinkedHashMap<>(instanceExt);
+            if (reapply != null) {
+                ext.put(ReapplySupport.VAR_REAPPLY_CTX, reapply);
+            }
         }
         m.put("ext", ext);
         m.put("instanceExt", instanceExt);
         m.put("version", r.getProcessDefineVersion());
         m.put("taskFormData", formDataOf(parseJsonMap(r.getVariable()), FlowConst.TASK_FORM_DATA_PREFIX)); // issues/15
         return m;
+    }
+
+    /**
+     * 任务变量是否只剩引擎建单必写的控制键（issues/121 P1 的判据体）：
+     * 行级首节点标记 ＋ spec 04 的两枚直返保留键。空表也算（原 {@code ext.isEmpty()} 那一档）。
+     */
+    private static boolean hasOnlyControlKeys(Map<String, Object> ext) {
+        for (String k : ext.keySet()) {
+            if (!FlowConst.IS_FIRST_TASK_NODE.equals(k)
+                    && !ReapplySupport.VAR_BRANCH_CTX.equals(k)
+                    && !ReapplySupport.VAR_REAPPLY_CTX.equals(k)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 定义行：时间格式化 */
