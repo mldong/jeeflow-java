@@ -53,6 +53,15 @@ public abstract class NodeModel extends BaseModel implements Action {
         runInterceptors(interceptors, execution);
     }
 
+    /**
+     * 仅供引擎在"不执行节点出边、但已办结该节点任务"的路径（退回直返/重提）上调用，
+     * 保持 post 拦截器语义；不得在正常 execute 流程里额外调用（会重复执行一次）。
+     */
+    public void executePostInterceptors(Execution execution) {
+        execution.setNodeModel(this);
+        execPostInterceptors(execution);
+    }
+
     private void execPostInterceptors(Execution execution) {
         String interceptors = postInterceptors;
         if (StringUtils.isEmpty(interceptors)) {
