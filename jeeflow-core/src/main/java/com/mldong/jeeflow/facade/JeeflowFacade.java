@@ -736,13 +736,11 @@ public class JeeflowFacade {
                              Map<String, Object> instanceVars, List<ProcessTask> historyTasks) {
         if (node == null || node.getOutputs() == null || visited.contains(node.getName())) return;
         visited.add(node.getName());
-        for (TransitionModel tm : node.getOutputs()) {
-            // 决策节点：输出边表达式求值过滤（对齐 boot3 recursionModel，issues/06）——
-            // 表达式为 false 的分支未实际执行，不收集进高亮路径
-            if (node instanceof DecisionModel && StringUtils.isNotEmpty(tm.getExpr())
-                    && !evalDecisionExpr((DecisionModel) node, tm, instanceVars, historyTasks)) {
-                continue;
-            }
+        List<TransitionModel> outputs = node.getOutputs();
+        if (node instanceof DecisionModel) {
+            outputs = selectDecisionOutputs((DecisionModel) node, outputs, active, instanceVars, historyTasks);
+        }
+        for (TransitionModel tm : outputs) {
             String edgeName = tm.getName();
             if (edgeName != null && !edges.contains(edgeName)) edges.add(edgeName);
             NodeModel next = tm.getTarget();
@@ -753,6 +751,54 @@ public class JeeflowFacade {
             if (active.contains(next.getName())) continue; // 遇活跃节点停止深入
             collectPath(next, active, history, edges, visited, instanceVars, historyTasks);
         }
+    }
+
+    /**
+     * 决策节点选边（issues/241）：先按表达式求值（issues/06/153 旧口径），**当表达式给出的
+     * 非空结果与任务行佐证相矛盾时，以任务行为准**；表达式求值失败/零命中时保持既有降级面
+     * （issues/164/201 的口径不被本规则改写）。
+     *
+     * <p>直返单（reapplyMode=RETURN_TO_SOURCE）重提后，实例变量已按新值落库，而来源节点之前
+     * 的条件分支按契约不重算——按当前变量重放会选出没走过的分支；走过的分支在任务表里有行
+     * （活跃目标也算），这是执行事实。</p>
+     */
+    private List<TransitionModel> selectDecisionOutputs(DecisionModel decision, List<TransitionModel> outputs,
+                                                        List<String> active, Map<String, Object> instanceVars,
+                                                        List<ProcessTask> historyTasks) {
+        List<TransitionModel> selected = new ArrayList<>();
+        for (TransitionModel tm : outputs) {
+            if (StringUtils.isEmpty(tm.getExpr())
+                    || evalDecisionExpr(decision, tm, instanceVars, historyTasks)) {
+                selected.add(tm);
+            }
+        }
+        if (selected.isEmpty()) return selected;
+        for (TransitionModel tm : selected) {
+            NodeModel target = tm.getTarget();
+            if (target == null || target.getName() == null) continue;
+            if (active.contains(target.getName()) || hasTaskRow(historyTasks, target.getName())) {
+                return selected; // 表达式与执行事实一致，维持原口径
+            }
+        }
+        List<TransitionModel> activeHits = new ArrayList<>();
+        List<TransitionModel> evidenced = new ArrayList<>();
+        for (TransitionModel tm : outputs) {
+            NodeModel target = tm.getTarget();
+            if (target == null || target.getName() == null) continue;
+            if (active.contains(target.getName())) activeHits.add(tm);
+            if (hasTaskRow(historyTasks, target.getName())) evidenced.add(tm);
+        }
+        if (!activeHits.isEmpty()) return activeHits;
+        if (!evidenced.isEmpty()) return evidenced;
+        return selected;
+    }
+
+    private static boolean hasTaskRow(List<ProcessTask> tasks, String nodeName) {
+        if (tasks == null) return false;
+        for (ProcessTask t : tasks) {
+            if (nodeName.equals(t.getTaskName())) return true;
+        }
+        return false;
     }
 
     /**
