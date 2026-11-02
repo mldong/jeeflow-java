@@ -109,7 +109,7 @@ public class PersistPostInterceptor implements FlowInterceptor {
         // 幂等：以 process_instance_id 为键，先查后插
         if (writer.exists(tableName, "process_instance_id", instance.getInstanceId())) return;
 
-        Map<String, Object> data = extractFields(instance, null, false, true);   // 只 f_ 全量
+        Map<String, Object> data = extractFields(instance, execution.getArgs(), null, false, true);   // 只 f_ 全量
         fillContext(data, instance);
         writer.fillSystemFields(data, true);
         writer.insert(tableName, data);
@@ -127,8 +127,8 @@ public class PersistPostInterceptor implements FlowInterceptor {
         // 避免全量覆盖任务节点的只读/隐藏限制
         boolean taskNode = execution.getNodeModel() instanceof TaskModel;
         Map<String, Object> fieldPerm = taskNode ? resolveFieldPermission(execution) : null;
-        Map<String, Object> data = extractFields(instance, !exists ? null : fieldPerm,
-                !exists || taskNode, !exists || taskNode);
+        Map<String, Object> data = extractFields(instance, execution.getArgs(),
+                !exists ? null : fieldPerm, !exists || taskNode, !exists || taskNode);
 
         // 状态字段：优先 {节点ID}_{状态码} 列，无则 {节点ID} 列。
         // 任务节点写 DOING(10)——任务推进状态（execPost 在流转链之后触发，此时 state 可能已被
@@ -184,8 +184,16 @@ public class PersistPostInterceptor implements FlowInterceptor {
     /**
      * 提取字段：f_ 去前缀（SYNC 下按字段权限过滤——只读/隐藏不更新；includeFormFields=false 时不带出，
      * 用于非任务节点定稿避免覆盖只读限制）；tf_ 去前缀冗余（有列则写，列过滤由 writer 做）。
+     *
+     * <p><b>两档读源不同，不是随手写的</b>：`f_` 是业务表单数据，随实例变量全流程可读；
+     * `tf_*` 是**当次提交**的控制类参数，规范 04「流程变量约定」末注立法后引擎不再把它并进
+     * 实例变量（上一轮的 `tf_addSignOperators` 复活会凭空多建待办），所以这一档只能读
+     * 本次提交的执行参数 {@code execution.getArgs()}——任务行留痕收的也是同一份。
+     * 从实例变量读 `tf_` 的那条腿在根因修复后静默失效（approval_comment 落空），
+     * 现由 {@code testSyncModeFullCycle} 钉住。</p>
      */
-    private Map<String, Object> extractFields(ProcessInstance instance, Map<String, Object> fieldPerm,
+    private Map<String, Object> extractFields(ProcessInstance instance, Map<String, Object> taskFields,
+                                              Map<String, Object> fieldPerm,
                                               boolean includeTaskFields, boolean includeFormFields) {
         Map<String, Object> data = new LinkedHashMap<>();
         FlowData variables = instance.getVariables();
@@ -197,7 +205,13 @@ public class PersistPostInterceptor implements FlowInterceptor {
                     String fieldName = key.substring(FIELD_PREFIX.length());
                     if (!isEditable(fieldPerm, fieldName)) continue;
                     data.put(fieldName, e.getValue());
-                } else if (includeTaskFields && key.startsWith(TASK_FIELD_PREFIX)
+                }
+            }
+        }
+        if (includeTaskFields && taskFields != null) {
+            for (Map.Entry<String, Object> e : taskFields.entrySet()) {
+                String key = e.getKey();
+                if (key != null && key.startsWith(TASK_FIELD_PREFIX)
                         && key.length() > TASK_FIELD_PREFIX.length()) {
                     data.put(key.substring(TASK_FIELD_PREFIX.length()), e.getValue());
                 }
