@@ -518,4 +518,46 @@ public class AddSignAfterTest {
         engine.executeProcessTask(fin.getTaskId(), "userF", plain(AGREE));
         assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), repo.findInstanceById(iid).getState());
     }
+
+    // ═══ 负向：加签链上「退回上一步」 ═══
+
+    /**
+     * 加签链上「退回上一步」(submitType=3) <b>禁</b>：当前行与血缘 parent 同节点，
+     * 既有血缘守卫 {@code NodeModel.canRejected} 判不过 ⇒ 走 20010008 的逐字文案。
+     *
+     * <p><b>下面的行数读数是本栈的现实，不是理想</b>（issues/243「退回上一步守卫排在办结之后」，
+     * 已立案未修）：{@code executeAndJumpTask} 的位序是先 {@code prepareExecution}
+     * （内部 {@code instance.completeTask} 已把当前行置为办结并 {@code updateTask} 落库），
+     * 之后 {@code rollbackToParent} 这条腿（{@code ProcessInstance.rejectTask}）才抛错；
+     * 内存仓储无回滚 ⇒ 报错那次结束后「当前行已办结、复活行一条不建」，待办从办理人手里消失。
+     * 真库（JDBC）外层有事务，异常整笔回滚，观察不到这一脏状态。</p>
+     */
+    @Test
+    public void test17_rollbackOnAddSignChainRejected() throws Exception {
+        ProcessInstance inst = startToReview(ADD_SIGN_ON);
+        Long iid = inst.getInstanceId();
+        ProcessTask a = doing(iid, "review");
+        assertNotNull(a);
+        engine.executeProcessTask(a.getTaskId(), "userA", agree("userB"));
+        ProcessTask b = doing(iid, "review");
+        assertNotNull("被加签人应在同一节点收到新待办", b);
+
+        try {
+            engine.executeAndJumpTask(b.getTaskId(), "userB",
+                    plain(ProcessSubmitTypeEnum.ROLLBACK.getCode()), null);
+            fail("加签链上不得退回上一步");
+        } catch (JeeflowException e) {
+            assertEquals("须命中既有 canRejected 守卫的内部码", 20010008, e.getCode());
+            assertTrue("msg: " + e.getMessage(), e.getMessage().contains(
+                    "无法驳回至上一步处理，请确认上一步骤并非fork、join、suprocess以及会签任务"));
+        }
+
+        // 令牌不得流出本节点：终审节点既无待办、也无任何行
+        assertNull("不得流出本节点", doing(iid, "final"));
+        assertEquals("终审节点一条行都不许建", 0, rows(iid, "final"));
+        // 现读位序（issues/243）：review 上只有 a（userA 办结）与 b（报错前已被 prepareExecution 办结）
+        // 两行，第三条"复活行"一条不建——守卫不过 ⇒ 不建复活行，这一档两种修法下都成立。
+        assertEquals("不得复活出第三条同节点行", 2, rows(iid, "review"));
+        assertEquals("报错那次当前行已被办结（守卫排在办结之后，本栈现实）", 0, doingCount(iid, "review"));
+    }
 }
