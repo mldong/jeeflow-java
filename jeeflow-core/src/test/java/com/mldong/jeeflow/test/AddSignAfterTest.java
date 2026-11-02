@@ -478,4 +478,44 @@ public class AddSignAfterTest {
         assertEquals("userB", String.valueOf(rowVars.get(FlowConst.ADD_SIGN_OPERATORS)));
         assertEquals(1, AddSignSupport.historyOf(repo.findTaskById(a.getTaskId())).size());
     }
+
+    /**
+     * 共享夹具 {@code flows/19-add-sign-after.json} 必须真被参考实现消费——
+     * 七语言仓 flows/ 是它的入库副本，各语言移植后加签时读的就是这一份，
+     * 没有生产者核对过的夹具会在传播轮里各语言各自"改一份能跑的"。
+     */
+    @Test
+    public void test16_sharedFixtureChainRuns() throws Exception {
+        byte[] bytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+                "src/test/resources/flows/19-add-sign-after.json"));
+        ProcessInstance.ProcessDefine def =
+                registerFlowJson(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
+        Long iid = inst.getInstanceId();
+        for (ProcessTask t : repo.findDoingTasks(iid, null)) {
+            engine.executeProcessTask(t.getTaskId(), "applicant", plain(APPLY));
+        }
+
+        ProcessTask a = doing(iid, "review");
+        assertNotNull("共享夹具的申请节点办结后应到审批节点", a);
+        engine.executeProcessTask(a.getTaskId(), "userA", agree("userB,userC"));
+        assertEquals("逗号串两形应建两行", 2, doingCount(iid, "review"));
+        assertNull(doing(iid, "final"));
+
+        // 先取快照再逐条办结：办结会改写仓储里的进行中集合，边遍历边办是并发修改
+        final List<Long> siblingIds = new java.util.ArrayList<>();
+        final List<String> siblingActors = new java.util.ArrayList<>();
+        for (ProcessTask sib : repo.findDoingTasks(iid, null)) {
+            siblingIds.add(sib.getTaskId());
+            siblingActors.add(firstActor(sib));
+        }
+        for (int i = 0; i < siblingIds.size(); i++) {
+            engine.executeProcessTask(siblingIds.get(i), siblingActors.get(i), plain(AGREE));
+        }
+        ProcessTask fin = doing(iid, "final");
+        assertNotNull("同圈兄弟全部办结后应放行", fin);
+        assertEquals(1, rows(iid, "final"));
+        engine.executeProcessTask(fin.getTaskId(), "userF", plain(AGREE));
+        assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), repo.findInstanceById(iid).getState());
+    }
 }
