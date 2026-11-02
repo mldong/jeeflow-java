@@ -452,4 +452,30 @@ public class AddSignAfterTest {
         assertEquals("后续节点只应有一条待办", 1, doingCount(iid, "final"));
         assertEquals(0, doingCount(iid, "review"));
     }
+
+    /**
+     * 根因守卫：控制类 {@code tf_*} 参数不得进实例变量（跨请求复活的病根），
+     * 但任务行留痕必须完整——两者是同一枚判据的两面。
+     */
+    @Test
+    public void test15_controlKeysNeverEnterInstanceVariables() throws Exception {
+        ProcessInstance inst = startToReview(ADD_SIGN_ON);
+        Long iid = inst.getInstanceId();
+        ProcessTask a = doing(iid, "review");
+        engine.executeProcessTask(a.getTaskId(), "userA",
+                agree("userB").set(FlowConst.APPROVAL_COMMENT, "请 B 复核"));
+
+        FlowData instanceVars = repo.findInstanceById(iid).getVariables();
+        assertNull("tf_addSignOperators 不得进实例变量", instanceVars.get(FlowConst.ADD_SIGN_OPERATORS));
+        assertNull("tf_approvalComment 不得进实例变量", instanceVars.get(FlowConst.APPROVAL_COMMENT));
+        for (String key : instanceVars.keySet()) {
+            assertFalse("实例变量里不应有任何 tf_ 键: " + key,
+                    key.startsWith(FlowConst.TASK_FORM_DATA_PREFIX));
+        }
+        // 留痕仍在任务行上（修根因不得把审计信息一起改掉）
+        FlowData rowVars = repo.findTaskById(a.getTaskId()).getVariables();
+        assertEquals("请 B 复核", rowVars.get(FlowConst.APPROVAL_COMMENT));
+        assertEquals("userB", String.valueOf(rowVars.get(FlowConst.ADD_SIGN_OPERATORS)));
+        assertEquals(1, AddSignSupport.historyOf(repo.findTaskById(a.getTaskId())).size());
+    }
 }

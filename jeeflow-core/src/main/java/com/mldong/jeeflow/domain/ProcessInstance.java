@@ -105,7 +105,18 @@ public class ProcessInstance {
         ProcessTask task = findDoingTask(taskId);
         task.finish(operator, args);
         if (args != null) {
-            this.variables.putAll(args);
+            // 控制类参数（tf_*）一律不进实例变量——它们只属于这一次提交与这一条任务行。
+            // 整包 putAll 会让上一轮的 tf_ 键跨请求复活：tf_addSignOperators 会让后续办结
+            // 凭空多建一条本节点待办，tf_nextNodeOperator 同病（直返腿为此在引擎里显式剥键），
+            // tf_approvalComment 更是把某人的审批意见污染成全流程可读的变量。
+            // 判据出处＝「退回修改、重提直返」方案 §4.2「不把控制数据混入业务表单或决策表达式参数」，
+            // 本轮抬成引擎通用规则；任务行留痕不受影响（ProcessTask#finish 仍收整包 args）。
+            for (String key : args.keySet()) {
+                if (key != null && key.startsWith(FlowConst.TASK_FORM_DATA_PREFIX)) {
+                    continue;
+                }
+                this.variables.put(key, args.get(key));
+            }
             // 提取 f_ 前缀变量持久化到流程变量
             FlowData formData = FlowData.create();
             for (String key : args.keySet()) {
