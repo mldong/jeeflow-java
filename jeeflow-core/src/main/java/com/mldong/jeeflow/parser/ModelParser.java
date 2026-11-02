@@ -121,6 +121,23 @@ public final class ModelParser {
             }
         }
 
+        // 后加签两条解析期硬校验（规范 02 §4.3）——配了就直接报错，不做运行时降级：
+        // 静默跑下去会让配置者以为开关生效，实际两档推进闸各裁各的。
+        // 排在引用构造之后，因为"是不是首任务节点"要沿 start 的出边看（FlowUtil 需要 target 已接好）。
+        for (TaskModel task : processModel.getTasks()) {
+            if (!task.isAllowAddSign()) {
+                continue;
+            }
+            if (com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(task.getPerformType())) {
+                throw new com.mldong.jeeflow.JeeflowException("会签节点[" + task.getName()
+                        + "]不允许配置 allowAddSign：会签池内加人与会签之后加人是两种语义，推进闸会打架");
+            }
+            if (com.mldong.jeeflow.util.FlowUtil.isFirstTaskName(processModel, task.getName())) {
+                throw new com.mldong.jeeflow.JeeflowException("首任务节点[" + task.getName()
+                        + "]不允许配置 allowAddSign：申请节点的办理是发起/重提语义，与加签路由打架");
+            }
+        }
+
         return processModel;
     }
 }

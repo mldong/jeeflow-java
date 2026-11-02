@@ -60,6 +60,17 @@ public final class FlowConst {
      */
     public static final String TRANSFER_HISTORY = "tf_transferHistory";
 
+    /** 后加签：本次提交指定的**本节点**后继办理人（规范 04 · 后加签） */
+    public static final String ADD_SIGN_OPERATORS = "tf_addSignOperators";
+    /** 后加签追加式账本（落已完成任务行变量，形状照 {@link #TRANSFER_HISTORY}） */
+    public static final String ADD_SIGN_HISTORY = "tf_addSignHistory";
+    /**
+     * 后加签轮次号键前缀（拼 {@code _{节点名}}）。
+     * <p>不复用会签的 {@link #LOOP_COUNTER}：后者是退回复活时被 {@code lineageVariables}
+     * 剔掉的会签簿记，加签链的轮次要跨"已办过的人"计数，两者语义不同。</p>
+     */
+    public static final String ADD_SIGN_ROUND = "addSignRound";
+
     /** 用户 ID */
     public static final String USER_USER_ID = "u_userId";
     /** 用户姓名 */

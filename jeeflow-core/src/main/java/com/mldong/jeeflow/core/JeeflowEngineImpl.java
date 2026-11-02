@@ -222,6 +222,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
+            // 拒绝结束：本节点未完成的加签任务一并废弃，不留孤儿待办（规范 04 · 后加签）
+            AddSignSupport.abandonDoingOnNode(model, exec.getProcessInstance(),
+                    exec.getProcessTask().getTaskName(), operator);
             for (EndModel end : model.getModels(EndModel.class)) {
                 TransitionModel tm = new TransitionModel();
                 tm.setTarget(end);
@@ -262,6 +265,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             model = exec.getProcessModel();
+            // 退回发起人：本节点未完成的加签任务一并废弃，不留孤儿待办（规范 04 · 后加签）
+            AddSignSupport.abandonDoingOnNode(model, exec.getProcessInstance(),
+                    exec.getProcessTask().getTaskName(), operator);
             if (direct) {
                 createReturnToSourceApplication(exec, sourceNode, snapshot);
             } else {
@@ -438,6 +444,10 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         // 被拒值无法经流程变量落到下游节点写入，上游只读声明不可被绕过
         args = FlowUtil.filterFieldByPerm(args, model, task.getTaskName());
 
+        // 后加签写入口校验（规范 04 · 后加签）：必须排在 completeTask 之前——内存仓储无回滚，
+        // 报错时不得留下已完成的任务行（"报错且无写入"是这条链的硬要求）。
+        AddSignSupport.validateSubmission(model, task, args, operator);
+
         // 完成任务——聚合根内部修改了 instance 中的 task 状态
         instance.completeTask(taskId, operator, args);
 
@@ -473,6 +483,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         Execution exec = buildExecution(model, instance, mergedArgs, operator);
         exec.setProcessTask(task);
         exec.setProcessTaskId(taskId);
+        // 加签人取"本次请求"的值显式带上，不让处理器读合并后的 args（判据与病因见
+        // Execution#addSignOperators 的注释——实例变量会把上一轮的 tf_ 键复活）。
+        exec.setAddSignOperators(AddSignSupport.operators(args));
         return exec;
     }
 

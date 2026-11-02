@@ -34,6 +34,12 @@ public class TaskParser extends AbstractNodeParser {
         // 退回发起人后的重提方式：缺省 NORMAL，非法值报配置错误
         taskModel.setReapplyMode(com.mldong.jeeflow.enums.ReapplyModeEnum.parse(
                 properties.get(com.mldong.jeeflow.core.ReapplySupport.PROP_REAPPLY_MODE), taskModel.getName()));
+        // 后加签两开关（规范 02 §4.3）：缺省关／0＝不限，非法值解析期报配置错误，不得静默当缺省。
+        // 声明成 TaskModel 字段后，下方"非模型字段的键镜像进 ext"那条腿不再收它们（双源就此断掉）。
+        taskModel.setAllowAddSign(com.mldong.jeeflow.core.AddSignSupport.parseAllow(
+                properties.get(com.mldong.jeeflow.core.AddSignSupport.PROP_ALLOW_ADD_SIGN), taskModel.getName()));
+        taskModel.setAddSignMaxRounds(com.mldong.jeeflow.core.AddSignSupport.parseMaxRounds(
+                properties.get(com.mldong.jeeflow.core.AddSignSupport.PROP_ADD_SIGN_MAX_ROUNDS), taskModel.getName()));
 
         // 解析候选人属性
         taskModel.setCandidateHandler(properties.getStr(EXT_FIELD_CANDIDATE_HANDLER_KEY));

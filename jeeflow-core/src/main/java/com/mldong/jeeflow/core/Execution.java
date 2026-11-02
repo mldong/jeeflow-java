@@ -69,6 +69,17 @@ public class Execution {
      */
     private List<java.util.Map<String, Object>> inheritedScopes;
 
+    /**
+     * <b>本次请求</b>点名的后加签办理人（已归一，没点人为空表）。
+     *
+     * <p>为什么不从 {@link #args} 读：{@code ProcessInstance#completeTask} 把整包提交参数并进
+     * <b>实例变量</b>（{@code ProcessInstance.java:108}），而 {@code args} 是"实例变量 ← 本次参数"
+     * 的合并结果 ⇒ 上一轮提交里的 {@code tf_addSignOperators} 会随实例变量复活，凭空多建一条
+     * 本节点待办。{@code tf_nextNodeOperator} 同病，直返腿为此在 {@code JeeflowEngineImpl} 里
+     * 显式剥键。控制类参数一律只认当次请求，这里用字段承载而不是靠剥键。</p>
+     */
+    private List<String> addSignOperators = new ArrayList<>();
+
     public void addTask(ProcessTask task) {
         this.processTaskList.add(task);
     }
@@ -168,6 +179,10 @@ public class Execution {
 
     public List<java.util.Map<String, Object>> getInheritedScopes() { return inheritedScopes; }
     public void setInheritedScopes(List<java.util.Map<String, Object>> inheritedScopes) { this.inheritedScopes = inheritedScopes; }
+    public List<String> getAddSignOperators() { return addSignOperators; }
+    public void setAddSignOperators(List<String> addSignOperators) {
+        this.addSignOperators = addSignOperators != null ? addSignOperators : new ArrayList<String>();
+    }
     public JeeflowEngine getEngine() { return engine; }
     public void setEngine(JeeflowEngine engine) { this.engine = engine; }
     public String getOperator() { return operator; }

@@ -30,11 +30,22 @@ public class TaskModel extends NodeModel {
     private String countersignCompletionCondition;
     /** 退回发起人后的重提方式；缺省 NORMAL */
     private com.mldong.jeeflow.enums.ReapplyModeEnum reapplyMode = com.mldong.jeeflow.enums.ReapplyModeEnum.NORMAL;
+    /** 后加签开关；缺省 false（节点不可加签，行为与既有普通任务逐字一致） */
+    private boolean allowAddSign;
+    /** 后加签轮次上限；0＝不限（缺省） */
+    private int addSignMaxRounds;
 
     @Override
     public void exec(Execution execution) {
         if (ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(performType)) {
             fire(new CountersignHandler(this), execution);
+            if (execution.isMerged()) {
+                runOutTransition(execution);
+            }
+        } else if (allowAddSign) {
+            // 后加签档：推进闸交给 AddSignHandler 裁决（本次点人→同节点续建且不流转；
+            // 没点人但本节点还有兄弟待办→不流转；两者皆否→放行出边）。
+            fire(new com.mldong.jeeflow.handler.impl.AddSignHandler(this), execution);
             if (execution.isMerged()) {
                 runOutTransition(execution);
             }
@@ -89,4 +100,8 @@ public class TaskModel extends NodeModel {
     public void setCountersignCompletionCondition(String countersignCompletionCondition) { this.countersignCompletionCondition = countersignCompletionCondition; }
     public com.mldong.jeeflow.enums.ReapplyModeEnum getReapplyMode() { return reapplyMode; }
     public void setReapplyMode(com.mldong.jeeflow.enums.ReapplyModeEnum reapplyMode) { this.reapplyMode = reapplyMode; }
+    public boolean isAllowAddSign() { return allowAddSign; }
+    public void setAllowAddSign(boolean allowAddSign) { this.allowAddSign = allowAddSign; }
+    public int getAddSignMaxRounds() { return addSignMaxRounds; }
+    public void setAddSignMaxRounds(int addSignMaxRounds) { this.addSignMaxRounds = addSignMaxRounds; }
 }
