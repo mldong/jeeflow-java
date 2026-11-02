@@ -525,12 +525,12 @@ public class AddSignAfterTest {
      * 加签链上「退回上一步」(submitType=3) <b>禁</b>：当前行与血缘 parent 同节点，
      * 既有血缘守卫 {@code NodeModel.canRejected} 判不过 ⇒ 走 20010008 的逐字文案。
      *
-     * <p><b>下面的行数读数是本栈的现实，不是理想</b>（issues/243「退回上一步守卫排在办结之后」，
-     * 已立案未修）：{@code executeAndJumpTask} 的位序是先 {@code prepareExecution}
-     * （内部 {@code instance.completeTask} 已把当前行置为办结并 {@code updateTask} 落库），
-     * 之后 {@code rollbackToParent} 这条腿（{@code ProcessInstance.rejectTask}）才抛错；
-     * 内存仓储无回滚 ⇒ 报错那次结束后「当前行已办结、复活行一条不建」，待办从办理人手里消失。
-     * 真库（JDBC）外层有事务，异常整笔回滚，观察不到这一脏状态。</p>
+     * <p><b>报错那一次零写入</b>（issues/243 甲案，2026-11-03 落地）：血缘守卫
+     * {@code ProcessInstance.checkRejectable} 由引擎排在 {@code prepareExecution}
+     * （内部 {@code instance.completeTask} 会把当前行办结并 {@code updateTask} 落库）<b>之前</b>，
+     * 所以内存仓储（无回滚）里报错后当前行仍是 DOING、待办还在办理人手里。
+     * 修前的形状是"点了退回、报错了、待办也没了"；真库（JDBC）外层有事务，两种位序都整笔回滚，
+     * 观察不到差别——这一档只有内存仓储照得出来，故本格同时钉文案与零写入。</p>
      */
     @Test
     public void test17_rollbackOnAddSignChainRejected() throws Exception {
@@ -555,9 +555,14 @@ public class AddSignAfterTest {
         // 令牌不得流出本节点：终审节点既无待办、也无任何行
         assertNull("不得流出本节点", doing(iid, "final"));
         assertEquals("终审节点一条行都不许建", 0, rows(iid, "final"));
-        // 现读位序（issues/243）：review 上只有 a（userA 办结）与 b（报错前已被 prepareExecution 办结）
-        // 两行，第三条"复活行"一条不建——守卫不过 ⇒ 不建复活行，这一档两种修法下都成立。
+        // review 上只有 a（userA 办结）与 b（报错那次<b>没被</b>办结）两行，
+        // 第三条"复活行"一条不建——守卫不过 ⇒ 不建复活行，这一档两种修法下都成立。
         assertEquals("不得复活出第三条同节点行", 2, rows(iid, "review"));
-        assertEquals("报错那次当前行已被办结（守卫排在办结之后，本栈现实）", 0, doingCount(iid, "review"));
+        assertEquals("报错零写入：当前行必须仍是待办（守卫排在办结之前）", 1, doingCount(iid, "review"));
+        assertEquals("实例状态不受这次失败影响", ProcessInstanceStateEnum.DOING.getCode(),
+                repo.findInstanceById(iid).getState());
+        ProcessTask stillDoing = doing(iid, "review");
+        assertNotNull("待办还在办理人手里", stillDoing);
+        assertEquals("还是报错那一条，不是新建的行", b.getTaskId(), stillDoing.getTaskId());
     }
 }

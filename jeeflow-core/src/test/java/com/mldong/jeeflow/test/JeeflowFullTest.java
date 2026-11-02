@@ -250,24 +250,25 @@ public class JeeflowFullTest {
             assertTrue("msg 应带 20010007 的文案: " + e.getMessage(),
                     e.getMessage().contains("上一步任务ID为空"));
         }
-        // 内存仓储没有事务：序言已把当前任务置 20，异常不会回滚那一步（真事务仓储/JDBC 下整笔回滚）。
-        // 这里能断的是「不建单」：总行数不变，没有凭空多出的复活行。
-        assertEquals("报错即不建单，任务行总数不变",
+        // issues/243 甲案：血缘守卫排在 prepareExecution（内含 completeTask + updateTask）之前，
+        // 报错那一次零写入——行数不变，且当前待办还在办理人手里（修前会被静默办结）。
+        assertEquals("报错即零写入，任务行总数不变",
                 rows, repo.findInstanceById(iid).getTasks().size());
+        assertNotNull("报错后当前待办必须仍是 DOING", doingByName(iid, "apply"));
 
         // 老行形状：parent 为 NULL（P1 之前落的数据）同样必须报 20010007，不得静默通过。
-        // 另起一条实例：上一段那次失败已把 apply 置为 FINISHED（内存仓储无事务），复用它会撞到"任务不在进行中"。
-        ProcessInstance legacy = engine.startProcessInstanceById(def.getId(), "applicant", FlowData.create());
-        ProcessTask legacyApply = doingByName(legacy.getInstanceId(), "apply");
-        legacyApply.setParentTaskId(null);
-        repo.updateTask(legacyApply);
+        // 复用上面那条即可：上一段报错没动它（零写入），这里只把它的 parent 改成 NULL。
+        apply.setParentTaskId(null);
+        repo.updateTask(apply);
         try {
-            engine.executeAndJumpTask(legacyApply.getTaskId(), "applicant", FlowData.create()
+            engine.executeAndJumpTask(apply.getTaskId(), "applicant", FlowData.create()
                     .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.ROLLBACK.getCode()), null);
             fail("parent=NULL 必须报 20010007");
         } catch (com.mldong.jeeflow.JeeflowException expected) {
             assertTrue("msg: " + expected.getMessage(), expected.getMessage().contains("上一步任务ID为空"));
         }
+        assertEquals("NULL 血缘那一档同样零写入",
+                rows, repo.findInstanceById(iid).getTasks().size());
     }
 
     /** 负向：血缘守卫 canRejected——parent 是旁支（非祖先、且中间只穿 fork/join/start）⇒ 20010008 */
@@ -284,6 +285,7 @@ public class JeeflowFullTest {
         repo.updateTask(a);
         repo.addTaskActor(a.getTaskId(), java.util.Arrays.asList("forker"));
         a.getActorIds().add("forker");
+        int rows = repo.findInstanceById(iid).getTasks().size();
         try {
             engine.executeAndJumpTask(a.getTaskId(), "forker", FlowData.create()
                     .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.ROLLBACK.getCode()), null);
@@ -292,6 +294,12 @@ public class JeeflowFullTest {
             assertTrue("msg 应带 20010008 的文案: " + e.getMessage(),
                     e.getMessage().contains("无法驳回至上一步处理"));
         }
+        // issues/243 甲案：canRejected 那一档同样零写入（守卫排在 completeTask 之前）——
+        // 报错后 a 那条并行待办仍在办理人手里，且没有凭空多出的行。
+        assertTrue("报错后当前行必须仍是 DOING（零写入）",
+                repo.findTaskById(a.getTaskId()).isDoing());
+        assertEquals("报错不建单：实例下任务行总数不变",
+                rows, repo.findInstanceById(iid).getTasks().size());
     }
 
     // ═══════════════════════════════════════════

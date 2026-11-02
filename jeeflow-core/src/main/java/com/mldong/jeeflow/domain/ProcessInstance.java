@@ -344,14 +344,18 @@ public class ProcessInstance {
     }
 
     /**
-     * 退回上一步（血缘版，规范 04 · 退回上一步）：上一步来源＝当前行的 task_parent_id，
-     * 复活那条历史行，**不按模型入边拓扑推**（拓扑版在分支/回环流会回到本实例没走过的节点，
-     * 且历史上还会在首任务节点上因 {@code (TaskModel) getNode("start")} 抛 ClassCastException）。
+     * 退回上一步的两道守卫（规范 04 · 退回上一步）：**只读判据，不碰任何状态**。
      *
+     * <p>issues/243：这道守卫必须由引擎排在 {@code prepareExecution}（内部 {@code completeTask}
+     * 会把当前行置为办结）<b>之前</b>——内存仓储无回滚，判据后置时"报错"那一次调用结束后
+     * 当前待办已经消失且没有复活行，用户看到的是"点了退回、报错了、待办也没了"。
+     * 与后加签写入口四判据同一规矩：判据一律排在任何状态变更之前，报错即零写入。</p>
+     *
+     * @return 血缘前驱那条历史行（{@code currentTask.task_parent_id} 指向的行）
      * @throws JeeflowException 20010007 无血缘（parent 为空或 0，含 P1 之前落的老行）；
      *                          20010008 canRejected 守卫不过（上一步是 fork/join/subprocess/会签）
      */
-    public ProcessTask rejectTask(ProcessModel model, ProcessTask currentTask) {
+    public ProcessTask checkRejectable(ProcessModel model, ProcessTask currentTask) {
         Long parentTaskId = currentTask.getParentTaskId();
         ProcessTask history = null;
         if (parentTaskId != null && parentTaskId != 0L) {
@@ -370,6 +374,19 @@ public class ProcessInstance {
         if (current == null || parent == null || !NodeModel.canRejected(current, parent)) {
             throw new JeeflowException(WfErrEnum.ROLLBACK_PARENT_NOT_REJECTABLE);
         }
+        return history;
+    }
+
+    /**
+     * 退回上一步（血缘版，规范 04 · 退回上一步）：上一步来源＝当前行的 task_parent_id，
+     * 复活那条历史行，**不按模型入边拓扑推**（拓扑版在分支/回环流会回到本实例没走过的节点，
+     * 且历史上还会在首任务节点上因 {@code (TaskModel) getNode("start")} 抛 ClassCastException）。
+     *
+     * <p>判据在 {@link #checkRejectable}（issues/243：引擎把那道守卫排在任何状态变更之前），
+     * 本方法在守卫已过之后只负责复活。</p>
+     */
+    public ProcessTask rejectTask(ProcessModel model, ProcessTask currentTask) {
+        ProcessTask history = checkRejectable(model, currentTask);
 
         FlowData vars = lineageVariables(history.getVariables());
         // 首任务节点那条不是"本人办的"（发起人提交），参与者取发起人快照。
@@ -396,6 +413,8 @@ public class ProcessInstance {
         newTask.setVariables(vars);
         // 到期时间按"被回退掉的那个"节点（＝当前节点）的表达式重算，同 mldong-boot2；
         // 变量源用新建行自带的 vars（＝boot2 的 hisVariable），不是实例变量
+        // 守卫已过 ⇒ 这里 getNode 必不为 null（checkRejectable 里 null 就报 20010008 了）
+        NodeModel current = model.getNode(currentTask.getTaskName());
         if (current instanceof TaskModel) {
             applyExpireTime(newTask, ((TaskModel) current).getExpireTime(), vars);
         }

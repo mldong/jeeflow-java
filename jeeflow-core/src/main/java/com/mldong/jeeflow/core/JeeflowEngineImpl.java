@@ -188,6 +188,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         return inTxFor(taskId, () -> {
             ProcessTask snapshot = repository.findTaskById(taskId);
             rejectMarkedApplicant(snapshot, "跳转");
+            if (StringUtils.isEmpty(nodeName)) {
+                // issues/243 甲案：血缘守卫排在 prepareExecution 之前——prepareExecution 内部
+                // completeTask 会把当前行办结，内存仓储无回滚，守卫后置 ⇒ 报错那次待办凭空消失。
+                checkRollbackPossible(snapshot);
+            }
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
@@ -421,6 +426,23 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     }
 
     // ═══ 内部方法 ═══
+
+    /**
+     * 退回上一步（{@code nodeName} 空 ⇒ 血缘腿）的写前置守卫（issues/243 甲案）。
+     *
+     * <p>只做一件事：把 {@code ProcessInstance.checkRejectable} 的两道判据（20010007／20010008）
+     * 提到任何状态变更之前。<b>不</b>在这里报"任务不在进行中／无权办理"，也不在这里发明第二套文案——
+     * 那几档留给 {@code prepareExecution} 的既有固定错（它们在 completeTask 之前，本来就零写入）；
+     * 取不到实例或定义时同样一律放行，由 {@code prepareExecution} 返回 null 走它的原形状。</p>
+     */
+    private void checkRollbackPossible(ProcessTask current) {
+        if (current == null || !current.isDoing()) return;
+        ProcessInstance instance = repository.findInstanceById(current.getProcessInstanceId());
+        if (instance == null) return;
+        ProcessInstance.ProcessDefine define = repository.findDefineById(instance.getDefineId());
+        if (define == null) return;
+        instance.checkRejectable(ModelParser.parse(define.getContent()), current);
+    }
 
     private Execution prepareExecution(Long taskId, String operator, FlowData args) {
         args = ReapplySupport.stripReserved(args);
