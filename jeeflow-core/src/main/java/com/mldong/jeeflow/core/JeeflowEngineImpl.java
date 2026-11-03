@@ -495,6 +495,19 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         // 报错时不得留下已完成的任务行（"报错且无写入"是这条链的硬要求）。
         AddSignSupport.validateSubmission(model, task, args, operator);
 
+        // issues/244 ①：当前节点 pre/post 拦截器的类名解析必须排在 completeTask 之前。
+        // 改前顺序是 completeTask → updateTask → node.execute，而 NodeModel.execute 的 post 拦截器
+        // 排在流转之后；类名写错时任务行已被静默办结、后继任务又没落库（persistTasks 在
+        // node.execute 之后）⇒ 内存仓储上留下「实例 DOING(10) 却零待办」。真库有事务整笔回滚，
+        // 观察不到差别。这里只做**只读**校验（不实例化、不跑 intercept，理由见
+        // NodeModel#validateDeclaredInterceptors 的注释），失败抛的还是执行期那一句原文案。
+        // 能力边界：只覆盖 类名解析不出来 / 没实现 FlowInterceptor / 没有无参构造器 三类，
+        // 构造器自己抛异常仍会在写之后炸（本轮不管）。
+        NodeModel currentNode = model.getNode(task.getTaskName());
+        if (currentNode != null) {
+            currentNode.validateDeclaredInterceptors(model);
+        }
+
         // 完成任务——聚合根内部修改了 instance 中的 task 状态
         instance.completeTask(taskId, operator, args);
 

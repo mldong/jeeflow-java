@@ -46,11 +46,65 @@ public abstract class NodeModel extends BaseModel implements Action {
     }
 
     private void execPreInterceptors(Execution execution) {
-        String interceptors = preInterceptors;
-        if (StringUtils.isEmpty(interceptors)) {
-            interceptors = execution.getProcessModel().getPreInterceptors();
+        runInterceptors(effectiveInterceptors(preInterceptors,
+                execution.getProcessModel().getPreInterceptors()), execution);
+    }
+
+    /**
+     * pre/post 拦截器串的<b>唯一</b>回落判据：节点级为空则取流程级。
+     *
+     * <p>执行期（{@link #execPreInterceptors}／{@link #execPostInterceptors}）与写前只读校验
+     * （{@link #validateDeclaredInterceptors}）共用这一处，避免"校验看节点级、执行看流程级"
+     * 这类两套判据各自演进的病。</p>
+     */
+    public static String effectiveInterceptors(String nodeLevel, String processLevel) {
+        return StringUtils.isEmpty(nodeLevel) ? processLevel : nodeLevel;
+    }
+
+    /**
+     * 本节点声明的 pre/post 拦截器类名<b>只读校验</b>（issues/244 ①，参考实现）。
+     *
+     * <p>判据在 {@link #validateInterceptors}（一处实现、只解析类名、不实例化）。引擎必须在
+     * {@code ProcessInstance#completeTask} 之前调用本方法：内存仓储没有事务回滚，等到
+     * {@code NodeModel#execute} 里 {@code execPostInterceptors} 才炸时，当前任务行已经被办结、
+     * 后继任务又还没落库（{@code persistTasks} 排在 {@code node.execute} 之后）⇒ 实例保持
+     * DOING(10) 却零待办，流程原地失联。真库靠入口外层事务整笔回滚，观察不到差别。</p>
+     *
+     * <p><b>为什么不是"再跑一次拦截器"</b>：{@link #runInterceptors} 会 {@code newInstance} 并
+     * 调用 {@code intercept(execution)}——构造器与业务逻辑都有执行期副作用，预跑一遍等于让每个
+     * 拦截器执行两次（还会污染 execution.args / 任务变量）。所以这里只做"能不能解析出可实例化的类"。</p>
+     *
+     * <p><b>能力边界（如实记）</b>：只覆盖三类——①类名解析不出来；②类没实现
+     * {@link FlowInterceptor}；③没有无参构造器。<b>构造器自己抛异常</b>仍会在写之后炸，本轮不管；
+     * 抽象类/非 public 构造器也不在本档判据内（那属于第四、第五类，要扩须另立判据）。</p>
+     */
+    public void validateDeclaredInterceptors(ProcessModel processModel) {
+        validateInterceptors(effectiveInterceptors(preInterceptors, processModel.getPreInterceptors()));
+        validateInterceptors(effectiveInterceptors(postInterceptors, processModel.getPostInterceptors()));
+    }
+
+    /**
+     * 拦截器串的只读可实例化校验：逐类名 {@code Class.forName} ＋ 断言实现
+     * {@link FlowInterceptor} ＋ 存在无参构造器，<b>不调用构造器</b>。
+     *
+     * @throws RuntimeException 文案与执行期逐字相同（{@code "无法实例化拦截器: " + 原始串元素}），
+     *                          cause 保留底层反射异常——外部出口与日志都不变
+     */
+    public static void validateInterceptors(String interceptors) {
+        if (StringUtils.isEmpty(interceptors)) return;
+        for (String className : interceptors.split(",")) {
+            try {
+                Class<?> clazz = Class.forName(className.trim());
+                if (!FlowInterceptor.class.isAssignableFrom(clazz)) {
+                    throw new IllegalArgumentException(
+                            "类[" + className.trim() + "]未实现 FlowInterceptor 接口");
+                }
+                // 只查声明、不调用：getDeclaredConstructor() 找不到时抛 NoSuchMethodException
+                clazz.getDeclaredConstructor();
+            } catch (Exception e) {
+                throw new RuntimeException("无法实例化拦截器: " + className, e);
+            }
         }
-        runInterceptors(interceptors, execution);
     }
 
     /**
@@ -63,11 +117,8 @@ public abstract class NodeModel extends BaseModel implements Action {
     }
 
     private void execPostInterceptors(Execution execution) {
-        String interceptors = postInterceptors;
-        if (StringUtils.isEmpty(interceptors)) {
-            interceptors = execution.getProcessModel().getPostInterceptors();
-        }
-        runInterceptors(interceptors, execution);
+        runInterceptors(effectiveInterceptors(postInterceptors,
+                execution.getProcessModel().getPostInterceptors()), execution);
     }
 
     private void runInterceptors(String interceptors, Execution execution) {

@@ -302,6 +302,14 @@ public class ProcessInstance {
         // PARALLEL / 未配置类型保持全员预创建。
         if (CountersignTypeEnum.SEQUENTIAL.equals(taskModel.getCountersignType())) {
             String node = taskModel.getName();
+            // issues/244 ②：名册为空时**建一行、不挂任何参与者**，引擎不报错——跨栈已定的语义
+            // （go/python/node/moon 四栈现行行为就是"建一行不挂人"，java 这是补齐多数派）。
+            // 改前这里直接 actorIds.get(0)：零人时抛 IndexOutOfBoundsException，而调用点
+            // (CreateTaskHandler) 没有 size 校验、且此刻当前任务已办结（prepareExecution 里
+            // completeTask 先跑）⇒ 内存仓储上留下「当前行 DONE、新行没建」的失联形状。
+            // 只动 SEQUENTIAL 这一支；PARALLEL 的"零人 0 行"不在本笔范围（下方循环逐字不变）。
+            List<String> actors = actorIds == null || actorIds.isEmpty()
+                    ? new ArrayList<>() : new ArrayList<>(Collections.singletonList(actorIds.get(0)));
             ProcessTask first = ProcessTask.create(
                     this.instanceId,
                     node,
@@ -309,7 +317,7 @@ public class ProcessInstance {
                     taskModel.getTaskType(),
                     taskModel.getPerformType(),
                     taskModel.getForm(),
-                    new ArrayList<>(java.util.Collections.singletonList(actorIds.get(0))),
+                    actors,
                     operator,
                     parentTaskId,
                     isFirstTaskNode
