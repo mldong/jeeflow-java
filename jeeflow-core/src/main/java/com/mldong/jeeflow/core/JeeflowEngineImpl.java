@@ -469,6 +469,63 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         }
     }
 
+    /**
+     * 已办撤回（issues/246，规范 04 · 已办撤回）：办理人撤回自己已办结的那一手，同实例内复活重办。
+     *
+     * <p>判据全部排在任何状态变更之前（报错即零写入——与后加签写入口/退回守卫同一规矩）：
+     * 行存在且已办结 → 参与者/特权 → 实例 DOING → 节点开关 → 窗口（下游无任何 FINISHED）。
+     * 落库顺序：废弃行 updateTask → 复活行 saveTask（拿 taskId，全量写参与者行）→ 原行盖
+     * {@code tf_recallHistory}（recalledTaskId 指向复活行）updateTask → 实例 updateTime →
+     * fire 码 10 TASK_RECALL（sourceId＝被撤回的旧行，复活行自己的待办另走码 3）。</p>
+     */
+    @Override
+    public ProcessTask recallTask(Long taskId, String operator) {
+        ProcessTask target = repository.findTaskById(taskId);
+        if (target == null || !target.isFinished()) {
+            throw new JeeflowException(RecallSupport.MSG_NOT_FINISHED);
+        }
+        boolean privileged = FlowConst.AUTO_ID.equalsIgnoreCase(operator)
+                || FlowConst.ADMIN_ID.equalsIgnoreCase(operator);
+        if (!privileged && (target.getActorIds() == null || !target.getActorIds().contains(operator))) {
+            throw new JeeflowException(RecallSupport.MSG_NO_PERMISSION);
+        }
+        ProcessInstance instance = repository.findInstanceById(target.getProcessInstanceId());
+        if (instance == null) {
+            throw new JeeflowException("流程实例不存在");
+        }
+        if (!com.mldong.jeeflow.enums.ProcessInstanceStateEnum.DOING.getCode().equals(instance.getState())) {
+            throw new JeeflowException(RecallSupport.MSG_INSTANCE_NOT_DOING);
+        }
+        ProcessInstance.ProcessDefine define = repository.findDefineById(instance.getDefineId());
+        ProcessModel model = ModelParser.parse(define.getContent());
+        NodeModel node = model.getNode(target.getTaskName());
+        if (!(node instanceof TaskModel) || !((TaskModel) node).isAllowRecall()) {
+            throw new JeeflowException(String.format(RecallSupport.MSG_SWITCH_OFF, target.getTaskName()));
+        }
+        List<ProcessTask> doingDescendants = RecallSupport.validateWindow(instance.getTasks(), target);
+        // ── 判据全过，以下才允许写 ──
+        boolean isFirstTaskNode = FlowUtil.isFirstTaskName(model, target.getTaskName());
+        ProcessTask resurrected = instance.recallTask((TaskModel) node, target, operator,
+                doingDescendants, isFirstTaskNode);
+        for (ProcessTask t : doingDescendants) {
+            repository.updateTask(t);
+        }
+        repository.saveTask(resurrected);
+        RecallSupport.appendRecallHistory(target, operator, resurrected.getTaskId());
+        repository.updateTask(target);
+        repository.updateInstance(instance);
+        // 码 10 TASK_RECALL：撤回事实落库之后 fire 一次（复活行的待办另走码 3，见 saveNewTask）
+        ProcessPublisher.notify(ProcessEvent.builder()
+                .eventType(com.mldong.jeeflow.enums.ProcessEventTypeEnum.TASK_RECALL)
+                .sourceId(target.getTaskId())
+                .data(FlowData.create()
+                        .set(ProcessPublisher.KEY_INSTANCE_ID, instance.getInstanceId())
+                        .set(ProcessPublisher.KEY_TASK_ID, target.getTaskId())
+                        .set(ProcessPublisher.KEY_OPERATOR, operator))
+                .build());
+        return resurrected;
+    }
+
     private Execution prepareExecution(Long taskId, String operator, FlowData args) {
         args = ReapplySupport.stripReserved(args);
         ProcessTask task = repository.findTaskById(taskId);

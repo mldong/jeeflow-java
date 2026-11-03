@@ -37,7 +37,12 @@ public class TaskParser extends AbstractNodeParser {
         // 后加签两开关（规范 02 §4.3）：缺省关／0＝不限，非法值解析期报配置错误，不得静默当缺省。
         // 声明成 TaskModel 字段后，下方"非模型字段的键镜像进 ext"那条腿不再收它们（双源就此断掉）。
         taskModel.setAllowAddSign(com.mldong.jeeflow.core.AddSignSupport.parseAllow(
-                properties.get(com.mldong.jeeflow.core.AddSignSupport.PROP_ALLOW_ADD_SIGN), taskModel.getName()));
+                properties.get(com.mldong.jeeflow.core.AddSignSupport.PROP_ALLOW_ADD_SIGN),
+                taskModel.getName(), com.mldong.jeeflow.core.AddSignSupport.PROP_ALLOW_ADD_SIGN));
+        // 已办撤回开关（规范 02 §4.4，issues/246）：同尺解析，非法值解析期报配置错误
+        taskModel.setAllowRecall(com.mldong.jeeflow.core.AddSignSupport.parseAllow(
+                properties.get(com.mldong.jeeflow.core.RecallSupport.PROP_ALLOW_RECALL),
+                taskModel.getName(), com.mldong.jeeflow.core.RecallSupport.PROP_ALLOW_RECALL));
         taskModel.setAddSignMaxRounds(com.mldong.jeeflow.core.AddSignSupport.parseMaxRounds(
                 properties.get(com.mldong.jeeflow.core.AddSignSupport.PROP_ADD_SIGN_MAX_ROUNDS), taskModel.getName()));
 

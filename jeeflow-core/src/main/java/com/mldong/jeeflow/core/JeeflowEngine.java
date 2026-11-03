@@ -37,6 +37,13 @@ public interface JeeflowEngine {
     /** 执行并跳转到第一个任务节点 */
     List<ProcessTask> executeAndJumpToFirstTaskNode(Long taskId, String operator, FlowData args);
 
+    /**
+     * 已办撤回（issues/246，规范 04 · 已办撤回）：办理人撤回自己已办结的那一手，同实例内复活重办。
+     *
+     * @return 复活的新任务行（DOING，唯一活待办）
+     */
+    ProcessTask recallTask(Long taskId, String operator);
+
     /** 获取仓储 */
     com.mldong.jeeflow.spi.IProcessRepository getRepository();
 

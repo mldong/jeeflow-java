@@ -47,8 +47,8 @@ public final class AddSignSupport {
     private AddSignSupport() {
     }
 
-    /** 解析 {@code allowAddSign}：缺省 false；非布尔报配置错误，不得静默当缺省。 */
-    public static boolean parseAllow(Object value, String nodeName) {
+    /** 解析布尔开关：缺省 false；非布尔报配置错误，不得静默当缺省（allowAddSign/allowRecall 同尺）。 */
+    public static boolean parseAllow(Object value, String nodeName, String keyName) {
         if (value == null) {
             return false;
         }
@@ -65,7 +65,7 @@ public final class AddSignSupport {
         if ("false".equalsIgnoreCase(v)) {
             return false;
         }
-        throw new JeeflowException("节点[" + nodeName + "]的 " + PROP_ALLOW_ADD_SIGN + " 配置非法: " + v);
+        throw new JeeflowException("节点[" + nodeName + "]的 " + keyName + " 配置非法: " + v);
     }
 
     /** 解析 {@code addSignMaxRounds}：缺省 0＝不限；非整数或负数报配置错误。 */

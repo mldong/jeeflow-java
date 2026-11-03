@@ -264,6 +264,7 @@ public class JeeflowFacade {
                 case "processTask/addCandidate": return taskAddCandidate(args);
                 case "processTask/transfer": return taskTransfer(args);          // issues/115
                 case "processTask/removeTaskActor": return taskRemoveActor(args); // issues/115 第 47 个 action
+                case "processTask/recall": return taskRecall(args);              // issues/246 已办撤回
                 case "processTask/latest": return taskLatest(args);
                 // ── 委托代理（需扩展仓储）──
                 case "processSurrogate/page": return surrogatePage(args);
@@ -482,6 +483,23 @@ public class JeeflowFacade {
                         .set(ProcessPublisher.KEY_OPERATOR, operator))
                 .build());
         return ok();
+    }
+
+    /**
+     * 已办撤回（issues/246，规范 06 §processTask/recall）：办理人撤回自己已办结的那一手，
+     * 同实例内复活重办。判据与落库全在引擎（{@code JeeflowEngineImpl#recallTask}），
+     * 门面只做参数归一（主键档缺失响亮报错，绝不拿 ''/0 当 id 落库）与信封包装。
+     */
+    private Map<String, Object> taskRecall(Map<String, Object> args) {
+        Long taskId = toLong(args.get("processTaskId"));
+        String operator = toStr(args.get("operator"));
+        if (StringUtils.isBlank(operator)) return error("operator 必填");
+        if (taskId == null) return error("processTaskId 缺失");
+        com.mldong.jeeflow.domain.ProcessTask resurrected = engine.recallTask(taskId, operator);
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("processTaskId", String.valueOf(resurrected.getTaskId()));
+        data.put("taskState", resurrected.getTaskState());
+        return ok(data);
     }
 
     /**

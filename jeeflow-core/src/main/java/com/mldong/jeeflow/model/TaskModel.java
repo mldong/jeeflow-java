@@ -34,6 +34,8 @@ public class TaskModel extends NodeModel {
     private boolean allowAddSign;
     /** 后加签轮次上限；0＝不限（缺省） */
     private int addSignMaxRounds;
+    /** 已办撤回开关（issues/246）；缺省 false；会签/申请节点解析期禁配（ModelParser） */
+    private boolean allowRecall;
 
     @Override
     public void exec(Execution execution) {
@@ -104,4 +106,6 @@ public class TaskModel extends NodeModel {
     public void setAllowAddSign(boolean allowAddSign) { this.allowAddSign = allowAddSign; }
     public int getAddSignMaxRounds() { return addSignMaxRounds; }
     public void setAddSignMaxRounds(int addSignMaxRounds) { this.addSignMaxRounds = addSignMaxRounds; }
+    public boolean isAllowRecall() { return allowRecall; }
+    public void setAllowRecall(boolean allowRecall) { this.allowRecall = allowRecall; }
 }

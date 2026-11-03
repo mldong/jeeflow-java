@@ -101,7 +101,9 @@ public enum ProcessEventTypeEnum {
      * 在补齐之前，本栈的门格（08-compliance 场景 34／镜像层 L2-30）按 <b>unreachable 记账</b>：
      * 缺的是触发源，不是 fire 点，不得用"集成层主动补发"顶替（§11.1 明令禁止）。</p>
      */
-    INSTANCE_TERMINATED(9, "流程实例终止事件");
+    INSTANCE_TERMINATED(9, "流程实例终止事件"),
+    /** 已办撤回（issues/246，spec 11 码 10）：sourceId＝被撤回的旧行；复活行自己的待办另走码 3 */
+    TASK_RECALL(10, "已办任务撤回事件");
 
     // 10+ 预留：超时催办 / 超时自动通过 ……（§11.4 第 1 条「本轮不发」——八栈都没有时钟扫描器，
     // 发了没有触发源；占号只为防下一个新栈再发明一套，见 §11.3 表末行）

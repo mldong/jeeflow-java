@@ -138,6 +138,22 @@ public final class ModelParser {
             }
         }
 
+        // 已办撤回两条解析期硬校验（规范 02 §4.4，issues/246）：会签节点撤"谁的一票"语义不清；
+        // 申请节点走实例撤回＋重新发起（既有通道），不需要同实例复活。
+        for (TaskModel task : processModel.getTasks()) {
+            if (!task.isAllowRecall()) {
+                continue;
+            }
+            if (com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(task.getPerformType())) {
+                throw new com.mldong.jeeflow.JeeflowException("会签节点[" + task.getName()
+                        + "]不允许配置 allowRecall：撤\"谁的一票\"语义不清");
+            }
+            if (com.mldong.jeeflow.util.FlowUtil.isFirstTaskName(processModel, task.getName())) {
+                throw new com.mldong.jeeflow.JeeflowException("首任务节点[" + task.getName()
+                        + "]不允许配置 allowRecall：申请节点走实例撤回＋重新发起，不需要同实例复活");
+            }
+        }
+
         return processModel;
     }
 }

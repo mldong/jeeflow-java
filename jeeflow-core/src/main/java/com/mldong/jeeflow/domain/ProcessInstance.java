@@ -138,6 +138,26 @@ public class ProcessInstance {
         this.updateUser = operator;
     }
 
+    /**
+     * 已办撤回（issues/246，规范 04 · 已办撤回）：判据由 RecallSupport 前置（报错即零写入），
+     * 本方法只做两件写——废弃下游未答行、复活新行（同节点同名、参与者＝原行名册、血缘与到期时间同尺）。
+     * 原 FINISHED 行一律不改写（历史即任务行）；其 tf_recallHistory 账本要等复活行拿到 taskId
+     * 才能盖，由引擎在落库后补盖。
+     *
+     * @return 复活的新行（DOING，唯一活待办）
+     */
+    public ProcessTask recallTask(TaskModel node, ProcessTask target, String operator,
+                                  List<ProcessTask> doingDescendants, boolean isFirstTaskNode) {
+        for (ProcessTask t : doingDescendants) {
+            t.abandon(operator);
+        }
+        ProcessTask resurrected = createTask(node, target.getDisplayName(),
+                target.getActorIds(), operator, target.getParentTaskId(), isFirstTaskNode);
+        this.updateTime = LocalDateTime.now();
+        this.updateUser = operator;
+        return resurrected;
+    }
+
     /** 流程完成 */
     public void finish() {
         this.state = ProcessInstanceStateEnum.FINISHED.getCode();

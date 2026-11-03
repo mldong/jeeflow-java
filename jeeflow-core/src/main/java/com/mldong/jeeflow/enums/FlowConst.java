@@ -64,6 +64,8 @@ public final class FlowConst {
     public static final String ADD_SIGN_OPERATORS = "tf_addSignOperators";
     /** 后加签追加式账本（落已完成任务行变量，形状照 {@link #TRANSFER_HISTORY}） */
     public static final String ADD_SIGN_HISTORY = "tf_addSignHistory";
+    /** 已办撤回账本（issues/246）：{operator, time, recalledTaskId} 只追加，落被撤回的旧行变量 */
+    public static final String RECALL_HISTORY = "tf_recallHistory";
     /**
      * 后加签轮次号键前缀（拼 {@code _{节点名}}）。
      * <p>不复用会签的 {@link #LOOP_COUNTER}：后者是退回复活时被 {@code lineageVariables}
