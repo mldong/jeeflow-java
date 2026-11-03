@@ -265,6 +265,7 @@ public class JeeflowFacade {
                 case "processTask/transfer": return taskTransfer(args);          // issues/115
                 case "processTask/removeTaskActor": return taskRemoveActor(args); // issues/115 第 47 个 action
                 case "processTask/recall": return taskRecall(args);              // issues/246 已办撤回
+                case "processTask/revokeDynamicCountersign": return taskRevokeCountersign(args); // issues/247
                 case "processTask/latest": return taskLatest(args);
                 // ── 委托代理（需扩展仓储）──
                 case "processSurrogate/page": return surrogatePage(args);
@@ -503,6 +504,172 @@ public class JeeflowFacade {
     }
 
     /**
+     * 动态会签发起分流（issues/247，规范 04 · 动态会签）：征询节点带 {@code tf_addSignOperators}
+     * 的提交＝只建成员行、<b>不办结主办行</b>；返回响应 marker（data.dynamicCountersign），
+     * 非征询提交返回 null 走普通流转。判据全排前（互斥/参与人/加给自己/重复/上限），报错即零写入。
+     */
+    private Map<String, Object> tryDynamicCountersign(Long taskId, String operator, FlowData flowArgs) {
+        ProcessTask host = repository.findTaskById(taskId);
+        if (host == null || !host.isDoing()) return null;
+        java.util.List<String> operators = com.mldong.jeeflow.core.AddSignSupport.operators(flowArgs);
+        if (operators.isEmpty()) return null;
+        ProcessInstance inst = repository.findInstanceById(host.getProcessInstanceId());
+        if (inst == null) return null;
+        ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        if (def == null) return null;
+        ProcessModel model = ModelParser.parse(def.getContent());
+        com.mldong.jeeflow.model.NodeModel node = model.getNode(host.getTaskName());
+        if (!(node instanceof TaskModel) || !((TaskModel) node).isDynamicCountersign()) return null;
+        // 成员行不能冒充主办发起（拉人只限主办行）——放行给闸门腿报它的逐字文案
+        if (com.mldong.jeeflow.core.CollectSupport.isMemberRow(inst.getTasks(), host)) return null;
+        TaskModel collectNode = (TaskModel) node;
+        // 互斥（与 tf_nextNodeOperator 同传＝死参数，报错不静默）
+        if (flowArgs.get(FlowConst.NEXT_NODE_OPERATOR) != null
+                && !String.valueOf(flowArgs.get(FlowConst.NEXT_NODE_OPERATOR)).trim().isEmpty()) {
+            throw new JeeflowException(com.mldong.jeeflow.core.AddSignSupport.MSG_MUTEX);
+        }
+        if (!host.isAllowed(operator)) {
+            throw new JeeflowException(WfErrEnum.NOT_ALLOWED_EXECUTE);
+        }
+        int round = com.mldong.jeeflow.core.CollectSupport.lastRound(host) + 1;
+        if (collectNode.getAddSignMaxRounds() > 0 && round > collectNode.getAddSignMaxRounds()) {
+            throw new JeeflowException(String.format(
+                    com.mldong.jeeflow.core.AddSignSupport.MSG_MAX_ROUNDS,
+                    collectNode.getName(), collectNode.getAddSignMaxRounds()));
+        }
+        String reason = flowArgs.getStr(FlowConst.ADD_SIGN_REASON);
+        java.util.List<ProcessTask> existing =
+                com.mldong.jeeflow.core.CollectSupport.memberRows(inst.getTasks(), host);
+        for (String op : operators) {
+            if (op.equals(operator)) {
+                throw new JeeflowException(com.mldong.jeeflow.core.AddSignSupport.MSG_SELF);
+            }
+            for (ProcessTask m : existing) {
+                if (m.isDoing() && m.getActorIds() != null && m.getActorIds().contains(op)) {
+                    throw new JeeflowException(String.format(
+                            com.mldong.jeeflow.core.CollectSupport.MSG_DUPLICATE, op, collectNode.getName()));
+                }
+            }
+        }
+        // ── 判据全过：建成员行（同节点同名、parent＝主办行、轮次/原因/分支归属三戳）──
+        boolean isFirstTaskNode = com.mldong.jeeflow.util.FlowUtil.isFirstTaskName(model, collectNode.getName());
+        java.util.List<ProcessTask> created = new ArrayList<>();
+        for (String op : operators) {
+            ProcessTask member = inst.createTask(collectNode, collectNode.getDisplayName(),
+                    new ArrayList<>(java.util.Collections.singletonList(op)), operator,
+                    host.getTaskId(), isFirstTaskNode);
+            member.getVariables().put(FlowConst.ADD_SIGN_ROUND + "_" + collectNode.getName(), round);
+            if (reason != null && !reason.isEmpty()) {
+                member.getVariables().put(FlowConst.ADD_SIGN_REASON, reason);
+            }
+            com.mldong.jeeflow.core.ReapplySupport.putScopes(member,
+                    com.mldong.jeeflow.core.ReapplySupport.buildScopes(host, model, collectNode.getName(), member.getTaskId()));
+            created.add(member);
+        }
+        com.mldong.jeeflow.core.CollectSupport.appendCollectHistory(host, operator, operators, round, reason);
+        host.getVariables().put(FlowConst.ADD_SIGN_ROUND + "_" + collectNode.getName(), round);
+        // 落库：成员行 saveTask（拿 taskId、全量写参与者行）＋逐行 fire 码 3；主办行 updateTask
+        for (ProcessTask member : created) {
+            repository.saveTask(member);
+            ProcessPublisher.notify(ProcessEvent.builder()
+                    .eventType(ProcessEventTypeEnum.PROCESS_TASK_START)
+                    .sourceId(member.getTaskId())
+                    .data(FlowData.create()
+                            .set(ProcessPublisher.KEY_INSTANCE_ID, member.getProcessInstanceId())
+                            .set(ProcessPublisher.KEY_TASK_ID, member.getTaskId())
+                            .set(ProcessPublisher.KEY_ACTORS, member.getActorIds()))
+                    .build());
+        }
+        repository.updateTask(host);
+        int[] count = com.mldong.jeeflow.core.CollectSupport.countMembers(inst.getTasks(), host);
+        java.util.Map<String, Object> marker = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Object> dc = new java.util.LinkedHashMap<>();
+        dc.put("round", round);
+        dc.put("total", count[0]);
+        dc.put("submitted", count[1]);
+        marker.put("dynamicCountersign", dc);
+        return marker;
+    }
+
+    /**
+     * 动态会签闸门（issues/247）：征询节点上——主办行未收齐成员意见 ⇒ 逐字文案报错
+     * （挡<b>全部</b> submitType，含驳回；唯一出口＝processTask/revokeDynamicCountersign）；
+     * 成员行携带拉人参数 ⇒ 报错（拉人只限主办行）。非征询节点原样放行。
+     */
+    private void gateDynamicCountersign(Long taskId, FlowData flowArgs) {
+        ProcessTask task = repository.findTaskById(taskId);
+        if (task == null || !task.isDoing()) return;
+        ProcessInstance inst = repository.findInstanceById(task.getProcessInstanceId());
+        if (inst == null) return;
+        ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        if (def == null) return;
+        ProcessModel model = ModelParser.parse(def.getContent());
+        com.mldong.jeeflow.model.NodeModel node = model.getNode(task.getTaskName());
+        if (!(node instanceof TaskModel) || !((TaskModel) node).isDynamicCountersign()) return;
+        if (com.mldong.jeeflow.core.CollectSupport.isMemberRow(inst.getTasks(), task)) {
+            if (!com.mldong.jeeflow.core.AddSignSupport.operators(flowArgs).isEmpty()) {
+                throw new JeeflowException(com.mldong.jeeflow.core.CollectSupport.MSG_MEMBER_PULL);
+            }
+            return;
+        }
+        // 收齐判据＝还有无 DOING 成员行（宽口径计数跳过撤回清场的 99 行）
+        if (!com.mldong.jeeflow.core.CollectSupport.pendingMembers(inst.getTasks(), task).isEmpty()) {
+            int[] count = com.mldong.jeeflow.core.CollectSupport.countMembers(inst.getTasks(), task);
+            throw new JeeflowException(String.format(
+                    com.mldong.jeeflow.core.CollectSupport.MSG_PENDING,
+                    task.getTaskName(), count[1], count[0]));
+        }
+    }
+
+    /**
+     * 撤回动态会签（issues/247，规范 06 §processTask/revokeDynamicCountersign）：废弃主办行下
+     * 全部未答成员行，账本追加撤回条目；已交意见行原样保留；闸门自然恢复（判据＝还有无 DOING 成员行）；
+     * 轮次不消耗。独立 action，不进 execute 参数空间（撤回不是办结动作）。
+     */
+    private Map<String, Object> taskRevokeCountersign(Map<String, Object> args) {
+        Long taskId = toLong(args.get("processTaskId"));
+        String operator = toStr(args.get("operator"));
+        String reason = toStr(args.get("reason"));
+        if (StringUtils.isBlank(operator)) return error("operator 必填");
+        if (taskId == null) return error("processTaskId 缺失");
+        ProcessTask host = repository.findTaskById(taskId);
+        if (host == null) return error("任务不存在");
+        boolean privileged = FlowConst.AUTO_ID.equalsIgnoreCase(operator)
+                || FlowConst.ADMIN_ID.equalsIgnoreCase(operator);
+        // 参与人判断不能用 isAllowed（只认 DOING 行）——主办已办结时按名册判断，待答判据随后兜底
+        if (!privileged && (host.getActorIds() == null || !host.getActorIds().contains(operator))) {
+            return error(com.mldong.jeeflow.core.CollectSupport.MSG_NO_PERMISSION_REVOKE);
+        }
+        ProcessInstance inst = repository.findInstanceById(host.getProcessInstanceId());
+        if (inst == null) return error("流程实例不存在");
+        ProcessInstance.ProcessDefine def = repository.findDefineById(inst.getDefineId());
+        ProcessModel model = ModelParser.parse(def.getContent());
+        com.mldong.jeeflow.model.NodeModel node = model.getNode(host.getTaskName());
+        if (!(node instanceof TaskModel) || !((TaskModel) node).isDynamicCountersign()) {
+            return error(String.format(com.mldong.jeeflow.core.CollectSupport.MSG_NO_PENDING, host.getTaskName()));
+        }
+        java.util.List<ProcessTask> pending =
+                com.mldong.jeeflow.core.CollectSupport.pendingMembers(inst.getTasks(), host);
+        if (pending.isEmpty()) {
+            return error(String.format(com.mldong.jeeflow.core.CollectSupport.MSG_NO_PENDING, host.getTaskName()));
+        }
+        java.util.List<String> revokedActors = new ArrayList<>();
+        for (ProcessTask m : pending) {
+            m.abandon(operator);
+            revokedActors.add(m.getActorIds() == null || m.getActorIds().isEmpty()
+                    ? null : m.getActorIds().get(0));
+            repository.updateTask(m);
+        }
+        com.mldong.jeeflow.core.CollectSupport.appendRevokeHistory(host, operator, revokedActors,
+                com.mldong.jeeflow.core.CollectSupport.lastRound(host), reason);
+        repository.updateTask(host);
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("revoked", revokedActors.size());
+        data.put("actors", revokedActors);
+        return ok(data);
+    }
+
+    /**
      * 撤回归属判据（issues/114，命中任一即放行，全不命中拒绝）：
      *
      * <ol>
@@ -558,6 +725,13 @@ public class JeeflowFacade {
             if (!FlowConst.PROCESS_TASK_ID_KEY.equals(k) && !"operator".equals(k)) flowArgs.put(k, v);
         });
         flowArgs.put(FlowConst.SUBMIT_TYPE, submitType);
+        // ── 动态会签分流与闸门（issues/247）——判据全部排在任何状态变更之前 ──
+        java.util.Map<String, Object> collect = tryDynamicCountersign(taskId, operator, flowArgs);
+        if (collect != null) {
+            // 征询模式带 tf_addSignOperators：只建成员行、不办结主办行（响应带 marker 供前端提示）
+            return ok(collect);
+        }
+        gateDynamicCountersign(taskId, flowArgs);
         // boot3 execute 分发（spec §11.2）
         if (ProcessSubmitTypeEnum.REJECT.getCode().equals(submitType)) {
             engine.executeAndJumpToEnd(taskId, operator, flowArgs);
@@ -975,6 +1149,14 @@ public class JeeflowFacade {
                                 TaskModel taskNode = (TaskModel) node;
                                 tm.put("form", taskNode.getForm());
                                 tm.put("ext", taskNode.getExt());
+                            }
+                            // 动态会签投影（issues/247）：征询主办行 ext.dynamicCountersign 从成员行现算
+                            if (node instanceof TaskModel && ((TaskModel) node).isDynamicCountersign()) {
+                                Map<String, Object> collect = com.mldong.jeeflow.core.CollectSupport
+                                        .buildProjection(inst.getTasks(), task);
+                                if (collect != null) {
+                                    tExt.put("dynamicCountersign", collect);
+                                }
                             }
                             vo.put("taskModel", tm);
                             break;

@@ -154,6 +154,27 @@ public final class ModelParser {
             }
         }
 
+        // 动态会签三条解析期硬校验（规范 02 §4.4，issues/247）：与 allowAddSign 双开＝共用参数
+        // tf_addSignOperators 的行为歧义；会签节点推进语义与征询挂起语义打架；申请节点不需要征询。
+        for (TaskModel task : processModel.getTasks()) {
+            if (!task.isDynamicCountersign()) {
+                continue;
+            }
+            if (task.isAllowAddSign()) {
+                throw new com.mldong.jeeflow.JeeflowException("节点[" + task.getName()
+                        + "]不允许同时配置 allowAddSign 与 dynamicCountersign：两档共用 tf_addSignOperators，"
+                        + "行为靠节点属性分流，双开＝行为歧义");
+            }
+            if (com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(task.getPerformType())) {
+                throw new com.mldong.jeeflow.JeeflowException("会签节点[" + task.getName()
+                        + "]不允许配置 dynamicCountersign：会签池推进语义与征询挂起语义打架");
+            }
+            if (com.mldong.jeeflow.util.FlowUtil.isFirstTaskName(processModel, task.getName())) {
+                throw new com.mldong.jeeflow.JeeflowException("申请节点[" + task.getName()
+                        + "]不允许配置 dynamicCountersign：申请节点那手走实例撤回＋重新发起，不需要征询挂起");
+            }
+        }
+
         return processModel;
     }
 }

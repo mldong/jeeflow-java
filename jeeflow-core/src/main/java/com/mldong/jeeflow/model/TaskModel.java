@@ -36,6 +36,8 @@ public class TaskModel extends NodeModel {
     private int addSignMaxRounds;
     /** 已办撤回开关（issues/246）；缺省 false；会签/申请节点解析期禁配（ModelParser） */
     private boolean allowRecall;
+    /** 动态会签（征询模式）开关（issues/247）；缺省 false；与 allowAddSign 互斥（ModelParser 解析期报错） */
+    private boolean dynamicCountersign;
 
     @Override
     public void exec(Execution execution) {
@@ -47,6 +49,14 @@ public class TaskModel extends NodeModel {
         } else if (allowAddSign) {
             // 后加签档：推进闸交给 AddSignHandler 裁决（本次点人→同节点续建且不流转；
             // 没点人但本节点还有兄弟待办→不流转；两者皆否→放行出边）。
+            fire(new com.mldong.jeeflow.handler.impl.AddSignHandler(this), execution);
+            if (execution.isMerged()) {
+                runOutTransition(execution);
+            }
+        } else if (dynamicCountersign) {
+            // 征询档（issues/247）：发起腿在门面（带 tf_addSignOperators 的提交不办结主办行，
+            // 到不了这里）；能走进执行闸的只有成员行办结与主办行收齐后的拍板——两者复用
+            // AddSignHandler 推进闸：主办还 DOING ⇒ merged=false 节点不动；主办办结且成员清零 ⇒ 放行。
             fire(new com.mldong.jeeflow.handler.impl.AddSignHandler(this), execution);
             if (execution.isMerged()) {
                 runOutTransition(execution);
@@ -108,4 +118,6 @@ public class TaskModel extends NodeModel {
     public void setAddSignMaxRounds(int addSignMaxRounds) { this.addSignMaxRounds = addSignMaxRounds; }
     public boolean isAllowRecall() { return allowRecall; }
     public void setAllowRecall(boolean allowRecall) { this.allowRecall = allowRecall; }
+    public boolean isDynamicCountersign() { return dynamicCountersign; }
+    public void setDynamicCountersign(boolean dynamicCountersign) { this.dynamicCountersign = dynamicCountersign; }
 }

@@ -43,6 +43,10 @@ public class TaskParser extends AbstractNodeParser {
         taskModel.setAllowRecall(com.mldong.jeeflow.core.AddSignSupport.parseAllow(
                 properties.get(com.mldong.jeeflow.core.RecallSupport.PROP_ALLOW_RECALL),
                 taskModel.getName(), com.mldong.jeeflow.core.RecallSupport.PROP_ALLOW_RECALL));
+        // 动态会签（征询模式）开关（规范 02 §4.4，issues/247）：同尺解析
+        taskModel.setDynamicCountersign(com.mldong.jeeflow.core.AddSignSupport.parseAllow(
+                properties.get(com.mldong.jeeflow.core.CollectSupport.PROP_DYNAMIC_COUNTERSIGN),
+                taskModel.getName(), com.mldong.jeeflow.core.CollectSupport.PROP_DYNAMIC_COUNTERSIGN));
         taskModel.setAddSignMaxRounds(com.mldong.jeeflow.core.AddSignSupport.parseMaxRounds(
                 properties.get(com.mldong.jeeflow.core.AddSignSupport.PROP_ADD_SIGN_MAX_ROUNDS), taskModel.getName()));
 

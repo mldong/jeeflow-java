@@ -165,7 +165,8 @@ public final class AddSignSupport {
 
     /**
      * 废弃本节点未完成的加签任务（拒绝／退回发起人时调用，不留孤儿待办）。
-     * 只对开了 {@code allowAddSign} 的节点动手——会签节点的兄弟任务由既有会签腿管，不在此扩面。
+     * 只对开了 {@code allowAddSign} 或 {@code dynamicCountersign} 的节点动手（issues/247：
+     * 征询成员行同属本节点 DOING，实例撤回/退回路径一并清场）。
      *
      * @return 实际废弃的行数
      */
@@ -175,7 +176,8 @@ public final class AddSignSupport {
             return 0;
         }
         NodeModel node = model.getNode(nodeName);
-        if (!(node instanceof TaskModel) || !((TaskModel) node).isAllowAddSign()) {
+        if (!(node instanceof TaskModel) || (!((TaskModel) node).isAllowAddSign()
+                && !((TaskModel) node).isDynamicCountersign())) {
             return 0;
         }
         int abandoned = 0;
