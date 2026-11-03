@@ -192,6 +192,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
                 // issues/243 甲案：血缘守卫排在 prepareExecution 之前——prepareExecution 内部
                 // completeTask 会把当前行办结，内存仓储无回滚，守卫后置 ⇒ 报错那次待办凭空消失。
                 checkRollbackPossible(snapshot);
+            } else {
+                // issues/243 §8-2：命名跳转的「找不到节点模型」同一族缺口，同规矩前置。
+                checkJumpTargetExists(snapshot, nodeName);
             }
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
@@ -442,6 +445,28 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         ProcessInstance.ProcessDefine define = repository.findDefineById(instance.getDefineId());
         if (define == null) return;
         instance.checkRejectable(ModelParser.parse(define.getContent()), current);
+    }
+
+    /**
+     * 命名跳转（{@code nodeName} 非空那一支）的节点存在性前置守卫（issues/243 §8-2）。
+     *
+     * <p>与 {@link #checkRollbackPossible} 同族同规矩：从前这句"根据节点名称[X]无法找到节点模型"
+     * 是在 {@code prepareExecution}（内部 {@code completeTask} 已把当前行办结）之后才抛的，
+     * 内存仓储无回滚 ⇒ 名字写错一次就把自己的待办弄丢。真库有事务整笔回滚，观察不到差别，
+     * 所以这一档同样只有内存仓储照得出来（L2-55 钉的"报错后原任务仍 DOING"靠事务兜住）。</p>
+     *
+     * <p>只读；取不到任务/实例/定义时一律放行给 {@code prepareExecution} 报它的既有固定错，
+     * 也不在这里发明第二种文案——抛的还是原来那一句。</p>
+     */
+    private void checkJumpTargetExists(ProcessTask current, String nodeName) {
+        if (current == null || !current.isDoing()) return;
+        ProcessInstance instance = repository.findInstanceById(current.getProcessInstanceId());
+        if (instance == null) return;
+        ProcessInstance.ProcessDefine define = repository.findDefineById(instance.getDefineId());
+        if (define == null) return;
+        if (ModelParser.parse(define.getContent()).getNode(nodeName) == null) {
+            throw new JeeflowException("根据节点名称[" + nodeName + "]无法找到节点模型");
+        }
     }
 
     private Execution prepareExecution(Long taskId, String operator, FlowData args) {

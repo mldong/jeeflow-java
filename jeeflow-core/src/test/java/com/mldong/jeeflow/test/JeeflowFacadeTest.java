@@ -1692,6 +1692,13 @@ public class JeeflowFacadeTest {
         assertEquals(Integer.valueOf(99999999), jr.get("code"));
         assertTrue("JUMP 无效节点应报「无法找到节点模型」: " + jr.get("msg"),
                 String.valueOf(jr.get("msg")).contains("无法找到节点模型"));
+        // issues/243 §8-2：这一档的节点存在性判据已上提到办结之前 ⇒ 报错零写入。
+        // 修前 prepareExecution 先 completeTask，内存仓储无回滚，t2n 会被静默办结、待办就此消失
+        //（真库靠动作级事务回滚兜住，照不出来 ⇒ 这一格只有在内存仓储才有意义）。
+        assertEquals("报错后原任务必须还是那条待办（零写入，不是被办结也不是新建）",
+                t2n, doingTaskId(jn, "task2"));
+        assertEquals("失败的 JUMP 不得改实例状态", Integer.valueOf(10),
+                rawRepo.findInstanceById(jn).getState());
 
         // ── submitType=5 RE_APPLY：task1 重新提交（前端 detail 抽屉场景，含 f_ 表单 + tf_nextNodeOperator）
         Long ra = startMultiTaskAt("task1");
