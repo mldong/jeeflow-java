@@ -511,6 +511,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             repository.updateTask(t);
         }
         repository.saveTask(resurrected);
+        // 复活行自己的待办另走码 3（规范 04 · 已办撤回；issues/247 python 对齐轮纠：首版漏 fire，
+        // go v1.8.61/python 均按 spec 走码 3，Java 参考实现就此对齐）
+        notifyTaskStart(resurrected);
         RecallSupport.appendRecallHistory(target, operator, resurrected.getTaskId());
         repository.updateTask(target);
         repository.updateInstance(instance);
