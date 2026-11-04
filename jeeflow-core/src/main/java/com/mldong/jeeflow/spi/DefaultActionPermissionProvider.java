@@ -30,6 +30,13 @@ public class DefaultActionPermissionProvider implements IActionPermissionProvide
         OR_RULES.put("processDefine/getLastByName", new String[]{"wf:processDefine:detail", "wf:processDesign:listByType", "wf:processDefine:getLastByName"});
         OR_RULES.put("processTask/candidatePage", new String[]{"wf:processTask:execute", "wf:processTask:candidatePage"});
         OR_RULES.put("processTask/jumpAbleTaskNameList", new String[]{"wf:processTask:execute"});
+        // issues/246／247 两枚新 action（owner 2026-11-04 拍 B）：**复用"办理"这枚码**，不另建菜单按钮种子。
+        // 判据是既有惯例——`transfer`／`removeTaskActor`／`candidatePage`／`latest` 都没有 `sys_menu` 按钮行，
+        // `candidatePage`／`jumpAbleTaskNameList` 就是走本表复用 execute；而撤回／撤会签的主体按引擎判据
+        // 本来就必然是该行参与者（＝有办理权的人），拆出独立码实际给不出去，只会多一处存量库补种子的迁移。
+        // 六语言同款落点见各集成壳的权限表（本轮同批）。
+        OR_RULES.put("processTask/recall", new String[]{"wf:processTask:execute"});
+        OR_RULES.put("processTask/revokeDynamicCountersign", new String[]{"wf:processTask:execute"});
         // boot3 无权限注解的 action（登录即可）
         NO_PERM_ACTIONS.addAll(Arrays.asList(
                 "processInstance/detail", "processInstance/highLight", "processInstance/approvalRecord",
