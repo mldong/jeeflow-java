@@ -113,13 +113,31 @@ public class SurrogateInterceptor implements FlowInterceptor {
         }
         try {
             ProcessInstance.ProcessDefine define = engine.getRepository().findDefineById(instance.getDefineId());
-            return (define == null || StringUtils.isBlank(define.getName()))
-                    ? null : define.getName().trim();
+            return defineName(define);
         } catch (RuntimeException e) {
             System.err.println("[jeeflow] findDefineById(" + instance.getDefineId()
                     + ") failed, surrogate processName unresolved: " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 委托查询流程名的**同一把尺子**，供调用方手上已有定义行时直接用（issues/246 已办撤回：
+     * {@code recallTask} 的判据阶段就解析过模型、并取过定义行，再造一个 {@code Execution}
+     * 只为走上面那条重载，等于把同一个契约写成两遍）。
+     *
+     * <p>规则逐字同 {@link #resolveProcessName(Execution)}：模型 {@code name} 优先、
+     * 缺失才回落定义行 {@code name}；两枚都拿不到返回 {@code null}（⇒ 只能命中全流程兜底委托）。</p>
+     */
+    public static String resolveProcessName(ProcessModel model, ProcessInstance.ProcessDefine define) {
+        if (model != null && StringUtils.isNotBlank(model.getName())) {
+            return model.getName().trim();
+        }
+        return defineName(define);
+    }
+
+    private static String defineName(ProcessInstance.ProcessDefine define) {
+        return (define == null || StringUtils.isBlank(define.getName())) ? null : define.getName().trim();
     }
 
     /**

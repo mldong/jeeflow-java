@@ -8,6 +8,7 @@ import com.mldong.jeeflow.core.RecallSupport;
 import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessInstance;
+import com.mldong.jeeflow.domain.ProcessSurrogate;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessSubmitTypeEnum;
@@ -15,6 +16,9 @@ import com.mldong.jeeflow.spi.IUserProvider;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -207,6 +211,55 @@ public class RecallTest {
     }
 
     // ═══ 用例 ═══
+
+    /**
+     * 定档用例（owner 2026-11-04，规范 04 · 已办撤回第 3 条）：复活行**走建单收口** ⇒
+     * 名册＝原行名册 ＋ 当时生效委托并入（不摘原人），与普通建单同尺。
+     *
+     * <p>两档同一支用例内前后做，顺序不能换：先在不注册扩展仓储的形态下撤一次（名册逐字不变，
+     * 只有原办理人），再注册扩展仓储＋一条生效委托撤第二次（名册多出被委托人、原人仍在）。
+     * 「未配置扩展仓储」是正常部署形态，委托能力静默跳过、不得打断撤回——这一档就是它的哨兵。</p>
+     */
+    @Test
+    public void recallResurrectedRowMergesEffectiveSurrogate() throws Exception {
+        // ── 档一：没有扩展仓储 ⇒ 名册逐字不变 ──
+        ProcessInstance inst1 = startToReview(chain("\"allowRecall\":true"));
+        engine.executeProcessTask(doing(inst1.getInstanceId(), "review").getTaskId(), "userA",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, AGREE));
+        ProcessTask revivedPlain = engine.recallTask(
+                finishedRow(inst1.getInstanceId(), "review").getTaskId(), "userA");
+        assertEquals("未配置扩展仓储时名册不该多挂人", Arrays.asList("userA"), revivedPlain.getActorIds());
+
+        // ── 档二：复活**当时**有生效委托 ⇒ 名册＝原行名册＋代理人（不摘原人） ──
+        MemoryProcessExtRepository ext = new MemoryProcessExtRepository();
+        ProcessSurrogate ledger = new ProcessSurrogate();
+        ledger.setId(1L);
+        ledger.setOperator("userA");
+        ledger.setSurrogate("userB");
+        ledger.setProcessName("");
+        ledger.setStartTime(LocalDateTime.now().minusHours(1));
+        ledger.setEndTime(LocalDateTime.now().plusHours(1));
+        ledger.setEnabled(1);
+        ext.saveSurrogate(ledger);
+
+        ProcessInstance inst2 = startToReview(chain("\"allowRecall\":true"));
+        engine.executeProcessTask(doing(inst2.getInstanceId(), "review").getTaskId(), "userA",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, AGREE));
+        ProcessTask oldRow = finishedRow(inst2.getInstanceId(), "review");
+        List<String> rosterBefore = new ArrayList<String>(oldRow.getActorIds());
+        // 委托在 review 建单**之后**才注册——不设这条前置自证，"复活行含 userB"可能被
+        // "建单时就已并入、原行本来就有 userB"顶包，这一格就照不到撤回这条腿了。
+        assertEquals("前置：委托登记前原行名册只有 userA", Arrays.asList("userA"), rosterBefore);
+
+        ServiceContext.put("ext", ext);
+        ProcessTask revived = engine.recallTask(oldRow.getTaskId(), "userA");
+
+        assertTrue("复活行名册须含被委托人", revived.getActorIds().contains("userB"));
+        assertTrue("并入不摘原人", revived.getActorIds().contains("userA"));
+        assertEquals("落库的参与者表也要真带上（内存仓随行携带，读回才算）",
+                2, repo.findTaskActors(revived.getTaskId()).size());
+        assertEquals("原 FINISHED 行的名册一字不动", rosterBefore, oldRow.getActorIds());
+    }
 
     /** 正向：办结→撤回→原行留账本、复活行名册照旧、下游废弃、重办后再推进。 */
     @Test

@@ -510,10 +510,14 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         for (ProcessTask t : doingDescendants) {
             repository.updateTask(t);
         }
-        repository.saveTask(resurrected);
-        // 复活行自己的待办另走码 3（规范 04 · 已办撤回；issues/247 python 对齐轮纠：首版漏 fire，
-        // go v1.8.61/python 均按 spec 走码 3，Java 参考实现就此对齐）
-        notifyTaskStart(resurrected);
+        // 复活行走**建单唯一收口**（owner 2026-11-04 定档）：撤回后重新出现的这一手，本质是一次建单，
+        // 不是历史行的状态翻转——所以名册要与普通建单同尺：原行名册 ＋ 当时生效委托并入（不摘原人）。
+        // saveNewTask 内含「落库前 apply 委托 → saveTask（分配 taskId）→ 回填 branch root → fire 码 3」，
+        // 顺序不能拆：委托必须在 saveTask 之前并进集合，事后 addTaskActor 会打在尚未分配的 id 上静默无效。
+        // 此前本栈与 php／csharp 直调 saveTask ⇒ 不并委托，与 go／python／node／rust／moon 五栈相反（5-3 分裂），
+        // 定档后统一取"并"。开关仍归 Configuration#surrogateAutoApply，未配置扩展仓储时静默跳过。
+        saveNewTask(resurrected, SurrogateInterceptor.resolveProcessName(model, define));
+        // 账本排在复活行落库之后：recalledTaskId 要指向已分配 id 的那一行
         RecallSupport.appendRecallHistory(target, operator, resurrected.getTaskId());
         repository.updateTask(target);
         repository.updateInstance(instance);
