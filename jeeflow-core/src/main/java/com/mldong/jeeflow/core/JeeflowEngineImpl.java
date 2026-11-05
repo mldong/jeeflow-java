@@ -496,6 +496,20 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         if (!com.mldong.jeeflow.enums.ProcessInstanceStateEnum.DOING.getCode().equals(instance.getState())) {
             throw new JeeflowException(RecallSupport.MSG_INSTANCE_NOT_DOING);
         }
+        // issues/249：账本必须盖在聚合内的同一对象上。上面的 target 是 findTaskById 新取的独立副本，
+        // 而本方法末尾 updateInstance 会按聚合副本级联回写每一行任务（JdbcProcessRepository 级联腿
+        // 带 variable 列）——独立副本上盖的 tf_recallHistory 会被聚合里没账本的旧副本抹掉
+        // （内存仓两处同一引用所以测试绿、真库一手取证丢账本）。这里把 target 重指到聚合内按 id
+        // 取到的那一份（聚合副本经 mapTasks 水合，variables/actorIds 与独立副本同齐）；
+        // 取不到时保持原引用（内存仓本就是同一对象，循环即命中同一份）。
+        if (instance.getTasks() != null) {
+            for (ProcessTask t : instance.getTasks()) {
+                if (taskId.equals(t.getTaskId())) {
+                    target = t;
+                    break;
+                }
+            }
+        }
         ProcessInstance.ProcessDefine define = repository.findDefineById(instance.getDefineId());
         ProcessModel model = ModelParser.parse(define.getContent());
         NodeModel node = model.getNode(target.getTaskName());
