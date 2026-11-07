@@ -367,6 +367,7 @@ public class MemoryProcessRepository implements IProcessRepository {
         ProcessInstance inst = instances.get(t.getProcessInstanceId());
         if (inst != null) {
             r.setInstanceCreateTime(inst.getCreateTime());
+            r.setInstanceState(inst.getState());
             // 与 JdbcProcessRepository 的 `pi.variable AS instance_variable` 投影对齐：issues/82-3
             // 那条「任务变量只剩控制键 ⇒ ext 回退实例变量」的回退目标就是这一列。此前内存仓漏映射
             // ⇒ 门面级用例只能 assertNotNull(row.get("ext"))，照不出回退有没有真发生（本轮

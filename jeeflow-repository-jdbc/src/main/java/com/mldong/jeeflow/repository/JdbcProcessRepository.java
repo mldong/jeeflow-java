@@ -1107,7 +1107,8 @@ public class JdbcProcessRepository implements IProcessRepository {
         params.add((query.getPageNum() - 1) * query.getPageSize());
 
         String dataSql = "SELECT DISTINCT t.*, pd.name AS process_define_name, pd.display_name AS process_define_display_name, " +
-                "pd.version AS process_define_version, pi.variable AS instance_variable, pi.create_time AS instance_create_time " + baseSql;
+                "pd.version AS process_define_version, pi.variable AS instance_variable, pi.create_time AS instance_create_time, " +
+                "pi.state AS instance_state " + baseSql;
         List<TaskRow> rows = queryList(dataSql, params, this::mapTaskRow);
         return PageResult.of(query.getPageNum(), query.getPageSize(), total, rows);
     }
@@ -1177,6 +1178,7 @@ public class JdbcProcessRepository implements IProcessRepository {
         r.setProcessDefineDisplayName(rs.getString("process_define_display_name"));
         r.setInstanceVariable(rs.getString("instance_variable"));
         r.setInstanceCreateTime(toLocalDateTime(rs.getTimestamp("instance_create_time")));
+        r.setInstanceState(rs.getInt("instance_state"));
         return r;
     }
 

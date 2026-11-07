@@ -147,6 +147,38 @@ public class JdbcRepositoryTest {
         assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(), updated.getState());
     }
 
+    /**
+     * issues/250：真库腿钉住 instance_state 投影。内存仓也设了该字段，门面级用例照不出 SQL 漏投
+     * 这一列（issues/249 同形教训）⇒ 这里绕过门面直接读仓储行。内部对照＝同一批行在实例结束前后
+     * 读数必须不同（10 → 20），挡住「恒 10 / 恒 0 / 恒 null」这类假绿。
+     */
+    @Test
+    public void testTaskRowProjectsInstanceState() throws Exception {
+        ProcessInstance.ProcessDefine def = registerSimpleFlow();
+        ProcessInstance inst = engine.startProcessInstanceById(def.getId(), "user1", FlowData.create());
+        ProcessTask task = repo.findDoingTasks(inst.getInstanceId(), null).get(0);
+        repo.addTaskActor(task.getTaskId(), Arrays.asList("leader"));
+
+        List<com.mldong.jeeflow.spi.IProcessRepository.TaskRow> todo = repo.pageTodoTasks(
+                new PageQuery(1, 50).add("pta.actor_id", "EQ", "leader")).getRows();
+        assertFalse("正向对照：leader 应有待办", todo.isEmpty());
+        assertEquals("实例进行中 ⇒ 待办行 instanceState=10", Integer.valueOf(10),
+                todo.get(0).getInstanceState());
+
+        task.getActorIds().add("leader");
+        engine.executeProcessTask(task.getTaskId(), "leader",
+                FlowData.create().set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+        assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(),
+                repo.findInstanceById(inst.getInstanceId()).getState());
+
+        List<com.mldong.jeeflow.spi.IProcessRepository.TaskRow> done = repo.pageDoneTasks(
+                new PageQuery(1, 50).add("t.operator", "EQ", "leader")).getRows();
+        assertFalse("正向对照：leader 应有已办", done.isEmpty());
+        assertEquals("前置：任务行自身仍是已完成", Integer.valueOf(20), done.get(0).getTaskState());
+        assertEquals("实例已结束 ⇒ SQL 必须把 pi.state 投出来（任务态照不出这一格）",
+                Integer.valueOf(20), done.get(0).getInstanceState());
+    }
+
     // ═══ 测试：addTaskActor 追加语义（对齐 boot2/boot3，issues/03） ═══
 
     @Test

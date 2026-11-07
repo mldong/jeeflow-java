@@ -254,6 +254,7 @@ public interface IProcessRepository {
         private Integer processDefineVersion;
         private String instanceVariable;
         private java.time.LocalDateTime instanceCreateTime;
+        private Integer instanceState;
 
         public Long getId() { return id; } public void setId(Long id) { this.id = id; }
         public Long getProcessInstanceId() { return processInstanceId; } public void setProcessInstanceId(Long v) { this.processInstanceId = v; }
@@ -277,6 +278,7 @@ public interface IProcessRepository {
         public Integer getProcessDefineVersion() { return processDefineVersion; } public void setProcessDefineVersion(Integer v) { this.processDefineVersion = v; }
         public String getInstanceVariable() { return instanceVariable; } public void setInstanceVariable(String v) { this.instanceVariable = v; }
         public java.time.LocalDateTime getInstanceCreateTime() { return instanceCreateTime; } public void setInstanceCreateTime(java.time.LocalDateTime v) { this.instanceCreateTime = v; }
+        public Integer getInstanceState() { return instanceState; } public void setInstanceState(Integer v) { this.instanceState = v; }
     }
 
     /** 实例行数据 */

@@ -1888,6 +1888,50 @@ public class JeeflowFacadeTest {
         assertTrue("totalPage 应为正整数", ((Number) pageData.get("totalPage")).intValue() >= 1);
     }
 
+    /** 取分页响应的第 idx 行（issues/250 投影断言用） */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> rowAt(Map<String, Object> r, int idx) {
+        List<?> rows = (List<?>) ((Map<String, Object>) r.get("data")).get("rows");
+        assertNotNull(rows);
+        assertTrue("响应应至少有 " + (idx + 1) + " 行: " + r, rows.size() > idx);
+        return (Map<String, Object>) rows.get(idx);
+    }
+
+    /**
+     * issues/250：列表行必须带所属实例的状态（instanceState），前端据此把「实例已非进行中」的
+     * 已办行撤回按钮置灰。承重档＝**实例已结束后读已办**：任务行自身仍是 FINISHED(20)，
+     * 只有 instanceState 能告诉前端这单已走完（任务态照不出来）。
+     * 内部对照：同一实例结束前读待办行必须是 DOING(10)、结束后读已办行必须是 FINISHED(20)，
+     * 两格合起来挡住「恒 10 / 恒 20」这类假绿。
+     */
+    @Test
+    public void testListRowCarriesInstanceState() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlow("01-simple.json");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan", "amount", "1000"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        r = call("processTask/todoList", args("operator", "leader"));
+        assertOk(r);
+        assertEquals("实例进行中 ⇒ 待办行 instanceState=10", Integer.valueOf(10),
+                rowAt(r, 0).get("instanceState"));
+
+        List<com.mldong.jeeflow.domain.ProcessTask> doing = rawRepo.findDoingTasks(instanceId, null);
+        r = call("processTask/execute", args("processTaskId", doing.get(0).getTaskId(),
+                "operator", "leader", "submitType", 1));
+        assertOk(r);
+        assertEquals(com.mldong.jeeflow.enums.ProcessInstanceStateEnum.FINISHED.getCode(),
+                repo.findInstanceById(instanceId).getState());
+
+        r = call("processTask/doneList", args("operator", "leader"));
+        assertOk(r);
+        Map<String, Object> after = rowAt(r, 0);
+        assertEquals(Integer.valueOf(20), after.get("taskState"));
+        assertEquals("实例已结束 ⇒ 已办行 instanceState 必须是 20，否则前端无从置灰",
+                Integer.valueOf(20), after.get("instanceState"));
+    }
+
     /**
      * issues/82-3 / 121 P1 的**内容级**判据——上面 testListRowContract 只 assertNotNull(row.get("ext"))，
      * 回退有没有真发生它照不出（本轮 `_branchCtx` 写进每条任务变量后，七栈都是这么漏过去的）。

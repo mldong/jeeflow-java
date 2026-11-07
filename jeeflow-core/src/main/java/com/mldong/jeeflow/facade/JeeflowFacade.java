@@ -2077,6 +2077,7 @@ public class JeeflowFacade {
         m.put("processDefineName", r.getProcessDefineName());
         m.put("processDefineDisplayName", r.getProcessDefineDisplayName());
         m.put("instanceCreateTime", fmtTime(r.getInstanceCreateTime()));
+        m.put("instanceState", r.getInstanceState());
         Map<String, Object> instanceExt = parseJsonMap(r.getInstanceVariable());
         Map<String, Object> ext = parseJsonMap(r.getVariable());
         // issues/121 P1：引擎建单必写的控制键不算「任务变量非空」，否则新建任务的 ext
