@@ -438,8 +438,9 @@ public class JeeflowFacade {
                 ext.put("isFirstTaskNode", rowFirst != null
                         ? Boolean.parseBoolean(String.valueOf(rowFirst))
                         : doing && t.getTaskName().equals(firstTaskNodeId));
-                // issues/251：办理时快照的节点开关同样投成顶层（与分页行同姿势；无键不投）
-                Object rowRecall = ext.get(FlowConst.ALLOW_RECALL);
+                // issues/251：办理时快照的节点开关同样投成顶层（与分页行同姿势）；
+                // 只投已办行——待办行的键是上一手灌入的残留（内置线建单灌 args），无消费方
+                Object rowRecall = doing ? null : ext.get(FlowConst.ALLOW_RECALL);
                 if (rowRecall != null) {
                     vo.put("allowRecall", Boolean.parseBoolean(String.valueOf(rowRecall)));
                 }
@@ -2086,8 +2087,10 @@ public class JeeflowFacade {
         Map<String, Object> instanceExt = parseJsonMap(r.getInstanceVariable());
         Map<String, Object> ext = parseJsonMap(r.getVariable());
         // issues/251：办理时快照的节点开关投成顶层标准字段，供前端已办行置灰预判——
-        // 必须在下面 ext 回退替换之前取值（从原行变量取；无键＝存量行＝前端退回可点）
-        Object rowRecall = ext.get(FlowConst.ALLOW_RECALL);
+        // 必须在下面 ext 回退替换之前取值（从原行变量取；无键＝存量行＝前端退回可点）。
+        // 只投已办行：待办行的变量可能含上一手灌入的残留键（内置线建单灌 args），无消费方
+        Object rowRecall = ProcessTaskStateEnum.DOING.getCode().equals(r.getTaskState())
+                ? null : ext.get(FlowConst.ALLOW_RECALL);
         if (rowRecall != null) {
             m.put("allowRecall", Boolean.parseBoolean(String.valueOf(rowRecall)));
         }
