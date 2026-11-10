@@ -438,6 +438,11 @@ public class JeeflowFacade {
                 ext.put("isFirstTaskNode", rowFirst != null
                         ? Boolean.parseBoolean(String.valueOf(rowFirst))
                         : doing && t.getTaskName().equals(firstTaskNodeId));
+                // issues/251：办理时快照的节点开关同样投成顶层（与分页行同姿势；无键不投）
+                Object rowRecall = ext.get(FlowConst.ALLOW_RECALL);
+                if (rowRecall != null) {
+                    vo.put("allowRecall", Boolean.parseBoolean(String.valueOf(rowRecall)));
+                }
                 vo.put("ext", ext);
                 tasks.add(vo);
                 if (doing) activeTaskList.add(vo);
@@ -2080,6 +2085,12 @@ public class JeeflowFacade {
         m.put("instanceState", r.getInstanceState());
         Map<String, Object> instanceExt = parseJsonMap(r.getInstanceVariable());
         Map<String, Object> ext = parseJsonMap(r.getVariable());
+        // issues/251：办理时快照的节点开关投成顶层标准字段，供前端已办行置灰预判——
+        // 必须在下面 ext 回退替换之前取值（从原行变量取；无键＝存量行＝前端退回可点）
+        Object rowRecall = ext.get(FlowConst.ALLOW_RECALL);
+        if (rowRecall != null) {
+            m.put("allowRecall", Boolean.parseBoolean(String.valueOf(rowRecall)));
+        }
         // issues/121 P1：引擎建单必写的控制键不算「任务变量非空」，否则新建任务的 ext
         // 永远不再回退实例变量（issues/82-3 既有契约）。
         // 「退回修改、重提直返」又添了两枚引擎内部键（spec 04 保留键 `_branchCtx`／`_reapplyContext`，

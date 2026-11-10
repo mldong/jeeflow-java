@@ -4,6 +4,8 @@ import com.mldong.jeeflow.JeeflowException;
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessTask;
 import com.mldong.jeeflow.enums.FlowConst;
+import com.mldong.jeeflow.model.NodeModel;
+import com.mldong.jeeflow.model.TaskModel;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -35,6 +37,19 @@ public final class RecallSupport {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private RecallSupport() {
+    }
+
+    /**
+     * 办理时把当前节点的 allowRecall 开关快照进行变量（issues/251）：已办行置灰的"节点开关"
+     * 预判从行上读，查询出口只搬运不解析定义。{@code tf_} 前缀使实例合并自动剥键（不传播，
+     * completeTask 立法）；撤回校验仍以现读定义为权威，快照仅供前端预判（漂移为设计内）。
+     * 非 TaskModel（start/end/decision 等不办理的节点）与 null args 均静默跳过。
+     */
+    public static void stampAllowRecall(FlowData args, NodeModel node) {
+        if (args == null || !(node instanceof TaskModel)) {
+            return;
+        }
+        args.put(FlowConst.ALLOW_RECALL, ((TaskModel) node).isAllowRecall());
     }
 
     /**

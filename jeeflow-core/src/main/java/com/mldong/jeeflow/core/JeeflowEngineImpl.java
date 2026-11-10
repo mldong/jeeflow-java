@@ -586,6 +586,12 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             currentNode.validateDeclaredInterceptors(model);
         }
 
+        // issues/251：办理时把本节点的 allowRecall 开关快照进行变量（tf_ 前缀，实例合并
+        // 自动剥键不传播）——prepareExecution 是全部办结路径的唯一收敛点（executeProcessTask/
+        // executeAndJump* 三入口/发起腿都走它），一处盖键全路径覆盖。已办行置灰的"节点开关"
+        // 预判从行上读，查询出口只搬运不解析定义；撤回校验仍以现读定义为权威。
+        RecallSupport.stampAllowRecall(args, currentNode);
+
         // 完成任务——聚合根内部修改了 instance 中的 task 状态
         instance.completeTask(taskId, operator, args);
 

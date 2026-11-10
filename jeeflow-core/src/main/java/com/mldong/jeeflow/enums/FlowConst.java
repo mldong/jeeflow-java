@@ -66,6 +66,13 @@ public final class FlowConst {
     public static final String ADD_SIGN_HISTORY = "tf_addSignHistory";
     /** 已办撤回账本（issues/246）：{operator, time, recalledTaskId} 只追加，落被撤回的旧行变量 */
     public static final String RECALL_HISTORY = "tf_recallHistory";
+    /**
+     * 已办撤回节点开关快照（issues/251）：办理时由引擎从 TaskModel 盖到本行变量，
+     * 值＝该行办理时刻的 {@code allowRecall} 定义值。{@code tf_} 前缀使实例合并自动剥键
+     * （不传播，与 {@link #RECALL_HISTORY} 同通道）；查询出口把它搬运成行顶层
+     * {@code allowRecall} 供前端预判置灰——撤回校验仍以现读定义为权威，快照仅供预判。
+     */
+    public static final String ALLOW_RECALL = "tf_allowRecall";
     /** 动态会签（issues/247）发起原因：选填，随账本条目落库并盖到每条成员行（单行出证自足） */
     public static final String ADD_SIGN_REASON = "tf_addSignReason";
     /**

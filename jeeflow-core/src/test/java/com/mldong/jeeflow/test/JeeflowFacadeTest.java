@@ -1932,6 +1932,154 @@ public class JeeflowFacadeTest {
                 Integer.valueOf(20), after.get("instanceState"));
     }
 
+    // ═══ issues/251：已办行节点开关快照（办理时盖 tf_allowRecall → 出口搬运投顶层 allowRecall） ═══
+
+    private static String flagNode(String id, String props, String text) {
+        return "{\"id\":\"" + id + "\",\"type\":\"snaker:task\",\"x\":0,\"y\":0,"
+                + "\"properties\":{" + props + "},\"text\":{\"value\":\"" + text + "\"}}";
+    }
+
+    private static String flagEdge(String id, String from, String to) {
+        return "{\"id\":\"" + id + "\",\"type\":\"snaker:transition\",\"sourceNodeId\":\"" + from
+                + "\",\"targetNodeId\":\"" + to + "\",\"properties\":{}}";
+    }
+
+    /** 三节点链：start→apply(禁配档)→review(allowRecall=true)→end；内联注册不动共享 flows 目录。 */
+    private String chainFlag(String suffix) {
+        return "{\"name\":\"recall-flag-" + suffix + "\",\"displayName\":\"撤回开关快照\",\"type\":\"approval\","
+                + "\"nodes\":["
+                + "{\"id\":\"start\",\"type\":\"snaker:start\",\"x\":0,\"y\":0,\"properties\":{},\"text\":{\"value\":\"开始\"}},"
+                + flagNode("apply", "\"form\":\"apply-form\",\"taskType\":0,\"performType\":0,\"assignee\":\"applicant\"", "发起申请") + ","
+                + flagNode("review", "\"form\":\"form-r\",\"taskType\":0,\"performType\":0,\"assignee\":\"leader\",\"allowRecall\":true", "审批") + ","
+                + "{\"id\":\"end\",\"type\":\"snaker:end\",\"x\":0,\"y\":0,\"properties\":{},\"text\":{\"value\":\"结束\"}}"
+                + "],\"edges\":["
+                + flagEdge("e1", "start", "apply") + ","
+                + flagEdge("e2", "apply", "review") + ","
+                + flagEdge("e3", "review", "end")
+                + "]}";
+    }
+
+    private ProcessInstance.ProcessDefine registerFlowContent(String json, String name) throws Exception {
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setName(name);
+        def.setDisplayName(name);
+        def.setType("approval");
+        def.setState(1);
+        def.setVersion(1);
+        def.setContent(json.getBytes(StandardCharsets.UTF_8));
+        repo.addDefine(def);
+        return def;
+    }
+
+    /**
+     * 主档四合一：① 快照两态——review(allowRecall=true) 行顶层 true、apply(禁配档) 行顶层 false；
+     * ② 同名隔离——办理 args 塞业务裸键 allowRecall，ext 里业务值原样保留与顶层快照互不干扰；
+     * ③ 不传播——实例变量无 tf_allowRecall（实例合并剥 tf_）、待办行办理前无快照键；
+     * ④ detail 的 tasks 行同姿势投顶层。
+     */
+    @Test
+    public void testDoneRowCarriesAllowRecallSnapshot() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlowContent(chainFlag("a"), "recall-flag-a");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        // ③ 不传播（办理前）：待办 review 行变量无快照键——键只在办理时刻盖上
+        ProcessTask review = null;
+        for (ProcessTask t : rawRepo.findDoingTasks(instanceId, null)) {
+            if ("review".equals(t.getTaskName())) review = t;
+        }
+        assertNotNull(review);
+        assertFalse("待办行不应带快照键（办理时才盖）",
+                review.getVariables() != null
+                        && review.getVariables().get(FlowConst.ALLOW_RECALL) != null);
+
+        // ② 同名隔离：办理 args 塞业务裸键 allowRecall=custom
+        r = call("processTask/execute", args("processTaskId", review.getTaskId(),
+                "operator", "leader", "submitType", 1, "allowRecall", "custom"));
+        assertOk(r);
+
+        // ① 快照两态：review 行顶层 true、ext 里业务键 custom 原样保留
+        r = call("processTask/doneList", args("operator", "leader"));
+        assertOk(r);
+        Map<String, Object> reviewRow = rowAt(r, 0);
+        assertEquals("review 节点 allowRecall=true ⇒ 已办行顶层快照 true",
+                Boolean.TRUE, reviewRow.get("allowRecall"));
+        assertEquals("业务同名键与快照互不干扰（ext 里保留业务值）",
+                "custom", ((Map<String, Object>) reviewRow.get("ext")).get("allowRecall"));
+
+        // ① apply 行：禁配节点快照恒 false。申请行由 flow.auto 代执行、operator 列=flow.auto
+        // （issues/176，不进发起人已办）⇒ 断言走 detail 的 tasks 全量行，不走 doneList
+        r = call("processInstance/detail", args("id", instanceId));
+        assertOk(r);
+        boolean sawReviewTrue = false;
+        boolean sawApplyFalse = false;
+        for (Object o : (List<?>) ((Map<String, Object>) r.get("data")).get("tasks")) {
+            Map<String, Object> t = (Map<String, Object>) o;
+            if ("review".equals(t.get("taskName"))) {
+                assertEquals("detail 行与分页行同姿势", Boolean.TRUE, t.get("allowRecall"));
+                sawReviewTrue = true;
+            }
+            if ("apply".equals(t.get("taskName"))) {
+                assertEquals("申请节点禁配 allowRecall ⇒ 快照 false",
+                        Boolean.FALSE, t.get("allowRecall"));
+                sawApplyFalse = true;
+            }
+        }
+        assertTrue("detail 应包含 review/apply 历史行", sawReviewTrue && sawApplyFalse);
+
+        // ③ 不传播：实例变量无 tf_allowRecall
+        ProcessInstance inst = rawRepo.findInstanceById(instanceId);
+        assertFalse("实例变量不得含快照键（实例合并剥 tf_）",
+                inst.getVariables() != null
+                        && inst.getVariables().get(FlowConst.ALLOW_RECALL) != null);
+    }
+
+    /**
+     * 快照语义档＋缺失档：① 办结后把定义开关 true→false，行顶层仍是办理时刻值（快照；
+     * 撤回校验此时会按现读定义报"未开启"——预判与校验的分歧是设计内，后端权威）；
+     * ② 行变量无快照键（待办行/存量行同一形状）⇒ 顶层缺失，前端退回可点。
+     */
+    @Test
+    public void testAllowRecallSnapshotSemanticsAndMissingRow() throws Exception {
+        ProcessInstance.ProcessDefine def = registerFlowContent(chainFlag("b"), "recall-flag-b");
+        Map<String, Object> r = call("processInstance/startAndExecute",
+                args("processDefineId", def.getId(), "operator", "zhangsan"));
+        assertOk(r);
+        Long instanceId = toLong(((Map<String, Object>) r.get("data")).get("processInstanceId"));
+
+        // 缺失档（前半）：detail 的待办 review 行（未办理，无快照键）⇒ 顶层无 allowRecall
+        r = call("processInstance/detail", args("id", instanceId));
+        assertOk(r);
+        boolean sawReviewTodo = false;
+        for (Object o : (List<?>) ((Map<String, Object>) r.get("data")).get("tasks")) {
+            Map<String, Object> t = (Map<String, Object>) o;
+            if ("review".equals(t.get("taskName")) && Integer.valueOf(10).equals(t.get("taskState"))) {
+                assertFalse("无快照键 ⇒ 顶层缺失（前端退回可点）", t.containsKey("allowRecall"));
+                sawReviewTodo = true;
+            }
+        }
+        assertTrue(sawReviewTodo);
+
+        ProcessTask review = null;
+        for (ProcessTask t : rawRepo.findDoingTasks(instanceId, null)) {
+            if ("review".equals(t.getTaskName())) review = t;
+        }
+        r = call("processTask/execute", args("processTaskId", review.getTaskId(),
+                "operator", "leader", "submitType", 1));
+        assertOk(r);
+
+        // 快照语义：办结后改定义 true→false，行顶层仍是办理时刻值 true
+        String flipped = chainFlag("b").replace("\"allowRecall\":true", "\"allowRecall\":false");
+        def.setContent(flipped.getBytes(StandardCharsets.UTF_8));
+        rawRepo.updateDefine(def);
+        r = call("processTask/doneList", args("operator", "leader"));
+        assertOk(r);
+        assertEquals("办结后改定义 ⇒ 行顶层仍是办理时刻快照 true",
+                Boolean.TRUE, rowAt(r, 0).get("allowRecall"));
+    }
+
     /**
      * issues/82-3 / 121 P1 的**内容级**判据——上面 testListRowContract 只 assertNotNull(row.get("ext"))，
      * 回退有没有真发生它照不出（本轮 `_branchCtx` 写进每条任务变量后，七栈都是这么漏过去的）。
