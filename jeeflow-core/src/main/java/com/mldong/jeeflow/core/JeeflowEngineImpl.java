@@ -132,6 +132,10 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     public List<ProcessTask> executeProcessTask(Long taskId, String operator, FlowData args) {
         return inTxFor(taskId, () -> {
             ProcessTask snapshot = repository.findTaskById(taskId);
+            // issues/253 推进闸：协办行（task_type=1）办结不产生执行对象、不跑输出变迁
+            if (snapshot != null && snapshot.isDoing() && AidantSupport.isAidantRow(snapshot)) {
+                return completeAidantWithoutDrive(taskId, operator, args);
+            }
             if (snapshot != null && snapshot.isDoing() && ReapplySupport.reapplyOf(snapshot) != null) {
                 return executeReapply(snapshot, operator, args);
             }
@@ -187,6 +191,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     public List<ProcessTask> executeAndJumpTask(Long taskId, String operator, FlowData args, String nodeName) {
         return inTxFor(taskId, () -> {
             ProcessTask snapshot = repository.findTaskById(taskId);
+            // issues/253 推进闸：两路同闸（照 snaker，别只堵 executeTask 一路）——协办行跳转/退回
+            // 同样不驱动流程，且必须排在血缘/目标守卫之前，免得协办行被守卫的文案误拦。
+            if (snapshot != null && snapshot.isDoing() && AidantSupport.isAidantRow(snapshot)) {
+                return completeAidantWithoutDrive(taskId, operator, args);
+            }
             rejectMarkedApplicant(snapshot, "跳转");
             if (StringUtils.isEmpty(nodeName)) {
                 // issues/243 甲案：血缘守卫排在 prepareExecution 之前——prepareExecution 内部
@@ -199,6 +208,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
+            // issues/253：跳转/退回离开本节点 ⇒ 未办结协办行随废弃腿清场（账本记废弃）
+            AidantSupport.abandonPendingOnNode(exec.getProcessInstance(),
+                    exec.getProcessTask().getTaskName(), operator);
             if (StringUtils.isEmpty(nodeName)) {
                 // 血缘版 rejectTask 要么建出复活行、要么抛 20010007/20010008，不再返回 null
                 exec.addTask(exec.getProcessInstance().rejectTask(model, exec.getProcessTask()));
@@ -226,10 +238,18 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     @Override
     public List<ProcessTask> executeAndJumpToEnd(Long taskId, String operator, FlowData args) {
         return inTxFor(taskId, () -> {
-            rejectMarkedApplicant(repository.findTaskById(taskId), "拒绝");
+            ProcessTask snapshot = repository.findTaskById(taskId);
+            // issues/253 推进闸：协办行拒绝同样不驱动流程（任何 submitType 都只办结自己那一行）
+            if (snapshot != null && snapshot.isDoing() && AidantSupport.isAidantRow(snapshot)) {
+                return completeAidantWithoutDrive(taskId, operator, args);
+            }
+            rejectMarkedApplicant(snapshot, "拒绝");
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             ProcessModel model = exec.getProcessModel();
+            // issues/253：离开节点先清场未办结协办行（废弃＋账本记废弃），再走后加签/征询的既有废弃腿
+            AidantSupport.abandonPendingOnNode(exec.getProcessInstance(),
+                    exec.getProcessTask().getTaskName(), operator);
             // 拒绝结束：本节点未完成的加签任务一并废弃，不留孤儿待办（规范 04 · 后加签）
             AddSignSupport.abandonDoingOnNode(model, exec.getProcessInstance(),
                     exec.getProcessTask().getTaskName(), operator);
@@ -248,6 +268,10 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     public List<ProcessTask> executeAndJumpToFirstTaskNode(Long taskId, String operator, FlowData args) {
         return inTxFor(taskId, () -> {
             ProcessTask snapshot = repository.findTaskById(taskId);
+            // issues/253 推进闸：协办行退回发起人同样不驱动流程
+            if (snapshot != null && snapshot.isDoing() && AidantSupport.isAidantRow(snapshot)) {
+                return completeAidantWithoutDrive(taskId, operator, args);
+            }
             rejectMarkedApplicant(snapshot, "再次退回");
             ProcessModel model = null;
             TaskModel sourceNode = null;
@@ -273,6 +297,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             Execution exec = prepareExecution(taskId, operator, args);
             if (exec == null) return Collections.emptyList();
             model = exec.getProcessModel();
+            // issues/253：退回发起人离开本节点 ⇒ 未办结协办行随废弃腿清场（账本记废弃）
+            AidantSupport.abandonPendingOnNode(exec.getProcessInstance(),
+                    exec.getProcessTask().getTaskName(), operator);
             // 退回发起人：本节点未完成的加签任务一并废弃，不留孤儿待办（规范 04 · 后加签）
             AddSignSupport.abandonDoingOnNode(model, exec.getProcessInstance(),
                     exec.getProcessTask().getTaskName(), operator);
@@ -547,6 +574,129 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         return resurrected;
     }
 
+    /**
+     * 动态协办（issues/253，规范 04 · 动态协办）：主办把"这活"交给别人干——按人派生
+     * {@code task_type=1} 协办子行，<b>主办行原样保留 DOING</b>，节点推进仍由主办行办结触发。
+     *
+     * <p>判据全部排在任何状态变更之前（报错即零写入——与后加签/征询/撤回同一规矩）：
+     * 任务存在 → 禁递归（协办行不能再派生）→ 主办行 DOING → 名册鉴权（auto/admin 例外）→
+     * 逐人去重（该人已有本主办行下未办结协办行）。落库顺序：协办行 saveNewTask（委托并入 →
+     * saveTask 分配 id → fire 码 3）→ 主办行盖 wait 开关＋账本 updateTask。</p>
+     *
+     * <p>建单形状照征询成员行腿（{@code instance.createTask}：同节点同名、parent＝主办行、
+     * expire_time 按节点表达式同尺重算），另落 {@code task_type=1}／{@code performType=NORMAL}
+     * ——节点上配的 performType 可能是会签，协办行一律普通参与（规范 04 派生规则 1）。
+     * 委托并入走 {@link #saveNewTask} 既有腿（与撤回定档同一把尺），不新增事件码。</p>
+     */
+    @Override
+    public List<ProcessTask> aidantTask(Long taskId, List<String> actorIds, String reason,
+                                        boolean waitCompletion, String operator) {
+        return inTxFor(taskId, () -> {
+            ProcessTask host = repository.findTaskById(taskId);
+            if (host == null) {
+                throw new JeeflowException(AidantSupport.MSG_TASK_NOT_FOUND);
+            }
+            // 禁递归：协办行携带派生参数 ⇒ 报错（规范 04 派生规则 4）
+            if (AidantSupport.isAidantRow(host)) {
+                throw new JeeflowException(AidantSupport.MSG_NO_RECURSION);
+            }
+            if (!host.isDoing()) {
+                throw new JeeflowException(AidantSupport.MSG_NOT_DOING);
+            }
+            List<String> actors = StringUtils.normalizeActorArg(actorIds);
+            if (actors.isEmpty()) {
+                throw new JeeflowException(AidantSupport.MSG_NO_ACTORS);
+            }
+            boolean privileged = FlowConst.AUTO_ID.equalsIgnoreCase(operator)
+                    || FlowConst.ADMIN_ID.equalsIgnoreCase(operator);
+            // 以参与者表为判据（聚合副本可能滞后于加签/转办的增量写入，与 transfer 同源）
+            List<String> roster = repository.findTaskActors(taskId);
+            if (!privileged && (roster == null || !roster.contains(operator))) {
+                throw new JeeflowException(AidantSupport.MSG_NO_PERMISSION);
+            }
+            ProcessInstance instance = repository.findInstanceById(host.getProcessInstanceId());
+            if (instance == null) {
+                throw new JeeflowException("流程实例不存在");
+            }
+            // issues/249 同一课：账本必须盖在聚合内的同一对象上——findTaskById 在 JDBC 仓是独立副本，
+            // 后续 updateInstance 的级联会拿聚合里没账本的旧副本抹掉它。这里把 host 重指到聚合内那份。
+            if (instance.getTasks() != null) {
+                for (ProcessTask t : instance.getTasks()) {
+                    if (taskId.equals(t.getTaskId())) {
+                        host = t;
+                        break;
+                    }
+                }
+            }
+            ProcessInstance.ProcessDefine define = repository.findDefineById(instance.getDefineId());
+            if (define == null) {
+                throw new JeeflowException("流程定义不存在");
+            }
+            ProcessModel model = ModelParser.parse(define.getContent());
+            NodeModel node = model.getNode(host.getTaskName());
+            if (!(node instanceof TaskModel)) {
+                throw new JeeflowException(AidantSupport.MSG_NOT_DOING);
+            }
+            TaskModel taskNode = (TaskModel) node;
+            // 去重：该人已有本主办行下**未办结**协办行 ⇒ 报错（规范 04 派生规则 5）
+            List<ProcessTask> existing = AidantSupport.aidantRows(instance.getTasks(), host);
+            for (String actor : actors) {
+                for (ProcessTask t : existing) {
+                    if (t.isDoing() && t.getActorIds() != null && t.getActorIds().contains(actor)) {
+                        throw new JeeflowException(AidantSupport.MSG_DUPLICATE);
+                    }
+                }
+            }
+            // ── 判据全过，以下才允许写 ──
+            int round = AidantSupport.lastRound(host) + 1;
+            boolean isFirstTaskNode = FlowUtil.isFirstTaskName(model, taskNode.getName());
+            List<ProcessTask> created = new ArrayList<>();
+            for (String actor : actors) {
+                ProcessTask child = instance.createTask(taskNode, taskNode.getDisplayName(),
+                        new ArrayList<>(Collections.singletonList(actor)), operator,
+                        host.getTaskId(), isFirstTaskNode);
+                child.setTaskType(ProcessTaskTypeEnum.SECONDARY);
+                child.setPerformType(ProcessTaskPerformTypeEnum.NORMAL);
+                if (reason != null && !reason.isEmpty()) {
+                    child.getVariables().put(FlowConst.AIDANT_REASON, reason);
+                }
+                // 分支归属与每一次普通建单同一条腿（照征询成员行）：并行范围内的协办行继承父任务归属
+                ReapplySupport.putScopes(child, ReapplySupport.buildScopes(
+                        host, model, taskNode.getName(), child.getTaskId()));
+                created.add(child);
+            }
+            // 等待闸开关＋账本落主办行（主办不办结，variables 合并序保证账本活到办结后）
+            host.getVariables().put(FlowConst.AIDANT_WAIT, waitCompletion);
+            AidantSupport.appendAidantHistory(host, operator, actors, round, reason);
+            // ⚠️ 严禁覆写任务 actor_id/operator 列（转办那条 ⚠️ 同尺）：进行中任务该列恒无值是家族不变量，
+            // 派生协办不改主办行的办理人归属，审计由 update_user＋账本 operator 承载。
+            host.setUpdateUser(operator);
+            host.setUpdateTime(LocalDateTime.now());
+            String processName = SurrogateInterceptor.resolveProcessName(model, define);
+            for (ProcessTask child : created) {
+                saveNewTask(child, processName);
+            }
+            repository.updateTask(host);
+            return created;
+        });
+    }
+
+    /**
+     * 协办行办结的<b>推进闸</b>（issues/253，规范 04「推进闸与等待闸」；参照 snaker
+     * {@code SnakerEngineImpl.execute} 的「协办任务完成不产生执行对象」）：只完成任务行
+     * （prepareExecution 内含 completeTask／updateTask／fire 码 5），<b>不跑 node.execute、
+     * 不跑输出变迁</b>，返回空的新任务表。{@code executeProcessTask} 与 {@code executeAndJumpTask}
+     * 两路同闸（拒绝/退发起人两入口一并覆盖——协办行任何 submitType 都不得驱动流程）。
+     */
+    private List<ProcessTask> completeAidantWithoutDrive(Long taskId, String operator, FlowData args) {
+        Execution exec = prepareExecution(taskId, operator, args);
+        if (exec == null) {
+            return Collections.emptyList();
+        }
+        persistTasks(exec);
+        return exec.getProcessTaskList();
+    }
+
     private Execution prepareExecution(Long taskId, String operator, FlowData args) {
         args = ReapplySupport.stripReserved(args);
         ProcessTask task = repository.findTaskById(taskId);
@@ -572,6 +722,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         // 后加签写入口校验（规范 04 · 后加签）：必须排在 completeTask 之前——内存仓储无回滚，
         // 报错时不得留下已完成的任务行（"报错且无写入"是这条链的硬要求）。
         AddSignSupport.validateSubmission(model, task, args, operator);
+
+        // issues/253 等待闸：waitCompletion=true 的主办行办结前判"不存在 DOING 协办行"，
+        // 未齐 ⇒ 逐字文案报错、零写入。同样必须排在 completeTask 之前（内存仓储无回滚）。
+        // 协办行自身不受本闸约束（它办结本来就不驱动流程）；缺省 false 原样放行。
+        AidantSupport.gateWait(instance.getTasks(), task);
 
         // issues/244 ①：当前节点 pre/post 拦截器的类名解析必须排在 completeTask 之前。
         // 改前顺序是 completeTask → updateTask → node.execute，而 NodeModel.execute 的 post 拦截器

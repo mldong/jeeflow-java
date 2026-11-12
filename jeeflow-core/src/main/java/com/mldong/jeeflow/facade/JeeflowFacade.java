@@ -266,6 +266,7 @@ public class JeeflowFacade {
                 case "processTask/removeTaskActor": return taskRemoveActor(args); // issues/115 第 47 个 action
                 case "processTask/recall": return taskRecall(args);              // issues/246 已办撤回
                 case "processTask/revokeDynamicCountersign": return taskRevokeCountersign(args); // issues/247
+                case "processTask/aidant": return taskAidant(args);               // issues/253 动态协办
                 case "processTask/latest": return taskLatest(args);
                 // ── 委托代理（需扩展仓储）──
                 case "processSurrogate/page": return surrogatePage(args);
@@ -507,6 +508,42 @@ public class JeeflowFacade {
         data.put("processTaskId", String.valueOf(resurrected.getTaskId()));
         data.put("taskState", resurrected.getTaskState());
         return ok(data);
+    }
+
+    /**
+     * 动态协办（issues/253，规范 06 §processTask/aidant）：主办把"这活"交给别人干——按人派生
+     * {@code task_type=1} 协办子行，主办行原样保留 DOING，节点推进仍由主办行办结触发。
+     *
+     * <p>门面只做参数归一与信封包装，判据/建单/账本全在引擎（{@code JeeflowEngineImpl#aidantTask}，
+     * 与 recall 同分工）。{@code operator} 硬必填（不接受缺省，与 transfer/withdraw 同口径）；
+     * {@code actorIds} 逗号串与数组两形共用 §2.11 那枚归一单点，空 ⇒ 逐字「actorIds 必填」。
+     * {@code waitCompletion} 选填 bool，缺省 false＝主办不等协办办结即可推进。</p>
+     *
+     * <p>成功 {@code data → null}（规范 06）；失败 msg 见跨栈统一文案表协办六行。
+     * 权限码复用 {@code wf:processTask:execute}（OR 规则，照 246/247 B 案惯例）。</p>
+     */
+    private Map<String, Object> taskAidant(Map<String, Object> args) {
+        Long taskId = toLong(args.get(FlowConst.PROCESS_TASK_ID_KEY));
+        String operator = toStr(args.get("operator"));
+        if (StringUtils.isBlank(operator)) return error("operator 必填");
+        if (taskId == null) return error("processTaskId 缺失");
+        List<String> actorIds = StringUtils.normalizeActorArg(args.get(FlowConst.ACTOR_IDS_KEY));
+        if (actorIds.isEmpty()) return error(com.mldong.jeeflow.core.AidantSupport.MSG_NO_ACTORS);
+        String reason = toStr(args.get("reason"));
+        boolean waitCompletion = parseWaitCompletion(args.get("waitCompletion"));
+        engine.aidantTask(taskId, actorIds, reason, waitCompletion, operator);
+        return ok();
+    }
+
+    /**
+     * {@code waitCompletion} 入参解析：缺省 false（规范 06「选填 bool，缺省 false」）。
+     * 布尔与 "true"/"false" 字符串两形都认（前端 JSON 与表单串两种来源）；其余值按缺省 false
+     * 处理——契约只定义了 bool 档，不为非法值新造文案（跨栈统一文案表协办六行之外不加第七行）。
+     */
+    private static boolean parseWaitCompletion(Object value) {
+        if (value == null) return false;
+        if (value instanceof Boolean) return (Boolean) value;
+        return "true".equalsIgnoreCase(String.valueOf(value).trim());
     }
 
     /**
@@ -1163,6 +1200,13 @@ public class JeeflowFacade {
                                 if (collect != null) {
                                     tExt.put("dynamicCountersign", collect);
                                 }
+                            }
+                            // 动态协办投影（issues/253）：主办行 ext.aidant 从 task_parent_id＋task_type=1
+                            // 现算，不落新存储。**无节点开关**——协办档只由运行期派生，任何任务节点都可能有。
+                            Map<String, Object> aidant = com.mldong.jeeflow.core.AidantSupport
+                                    .buildProjection(inst.getTasks(), task);
+                            if (aidant != null) {
+                                tExt.put("aidant", aidant);
                             }
                             vo.put("taskModel", tm);
                             break;

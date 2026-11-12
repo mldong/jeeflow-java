@@ -45,16 +45,23 @@ public final class CollectSupport {
         List<ProcessTask> out = new ArrayList<>();
         for (ProcessTask t : tasks) {
             if (host.getTaskId() != null && host.getTaskId().equals(t.getParentTaskId())
-                    && host.getTaskName() != null && host.getTaskName().equals(t.getTaskName())) {
+                    && host.getTaskName() != null && host.getTaskName().equals(t.getTaskName())
+                    // issues/253：协办行（task_type=1）也满足 parent＋同节点同名，但它属另一族
+                    // ——征询收齐闸只数征询成员行（task_type=0），两闸各数各的（规范 04「与征询并存」）。
+                    && !AidantSupport.isAidantRow(t)) {
                 out.add(t);
             }
         }
         return out;
     }
 
-    /** 成员行判定：parent 指向同节点同名行（issues/247 §3.3；成员行禁带拉人参数的判据）。 */
+    /** 成员行判定：parent 指向同节点同名行（issues/247 §3.3；成员行禁带拉人参数的判据）。
+     *  issues/253：协办行（task_type=1）不是征询成员行——两族靠 task_type 分辨。 */
     public static boolean isMemberRow(List<ProcessTask> tasks, ProcessTask row) {
         if (row.getParentTaskId() == null || row.getParentTaskId() == 0L) {
+            return false;
+        }
+        if (AidantSupport.isAidantRow(row)) {
             return false;
         }
         for (ProcessTask t : tasks) {

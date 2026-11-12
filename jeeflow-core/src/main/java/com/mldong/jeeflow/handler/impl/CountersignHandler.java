@@ -36,9 +36,13 @@ public class CountersignHandler implements IHandler {
         ProcessInstance instance = execution.getProcessInstance();
 
         // 获取所有属于该节点的任务（包括 DOING 和 FINISHED）
+        // issues/253：会签合并判据**显式排除协办行（task_type=1）**——snaker 按同节点同名行全算
+        // 会把协办行误当表决票挡住合并（规范 04「不计入会签合并计数」）。协办行不驱动流程、
+        // 无表决语义，票齐即推进；它的清场由 abandonRemainingCountersignTasks 里的协办腿负责。
         List<ProcessTask> allTasks = instance.getTasks()
                 .stream()
                 .filter(t -> taskModel.getName().equals(t.getTaskName()))
+                .filter(t -> !com.mldong.jeeflow.core.AidantSupport.isAidantRow(t))
                 .collect(Collectors.toList());
 
         long finishedCount = allTasks.stream()
@@ -120,8 +124,11 @@ public class CountersignHandler implements IHandler {
     }
 
     /** 废弃本节点剩余 DOING 会签任务（merged 时调用）。
-     *  刚完成的任务此刻已置 FINISHED，isDoing 过滤不会误伤 */
+     *  刚完成的任务此刻已置 FINISHED，isDoing 过滤不会误伤。
+     *  issues/253：协办行先走自己的清场腿（废弃＋往主办行账本记废弃），再清剩余会签行——
+     *  顺序不能反，先被下面循环置 99 的协办行就记不上账了。 */
     private void abandonRemainingCountersignTasks(ProcessInstance instance, String operator) {
+        com.mldong.jeeflow.core.AidantSupport.abandonPendingOnNode(instance, taskModel.getName(), operator);
         for (ProcessTask task : instance.getTasks()) {
             if (taskModel.getName().equals(task.getTaskName()) && task.isDoing()) {
                 task.abandon(operator);

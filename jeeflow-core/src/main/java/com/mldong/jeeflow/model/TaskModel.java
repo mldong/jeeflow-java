@@ -44,6 +44,7 @@ public class TaskModel extends NodeModel {
         if (ProcessTaskPerformTypeEnum.COUNTERSIGN.equals(performType)) {
             fire(new CountersignHandler(this), execution);
             if (execution.isMerged()) {
+                abandonAidantOnLeave(execution);
                 runOutTransition(execution);
             }
         } else if (allowAddSign) {
@@ -51,6 +52,7 @@ public class TaskModel extends NodeModel {
             // 没点人但本节点还有兄弟待办→不流转；两者皆否→放行出边）。
             fire(new com.mldong.jeeflow.handler.impl.AddSignHandler(this), execution);
             if (execution.isMerged()) {
+                abandonAidantOnLeave(execution);
                 runOutTransition(execution);
             }
         } else if (dynamicCountersign) {
@@ -59,11 +61,26 @@ public class TaskModel extends NodeModel {
             // AddSignHandler 推进闸：主办还 DOING ⇒ merged=false 节点不动；主办办结且成员清零 ⇒ 放行。
             fire(new com.mldong.jeeflow.handler.impl.AddSignHandler(this), execution);
             if (execution.isMerged()) {
+                abandonAidantOnLeave(execution);
                 runOutTransition(execution);
             }
         } else {
+            abandonAidantOnLeave(execution);
             runOutTransition(execution);
         }
+    }
+
+    /**
+     * 离开节点时清场未办结协办行（issues/253，规范 04「动态协办」）：{@code waitCompletion=false}
+     * （缺省）时主办可随时办结推进，未办结协办行随废弃腿清场、账本记废弃，不留孤儿待办。
+     *
+     * <p>只在<b>真要离开本节点</b>（merged／普通档放行出边）时调用——串行会签/加签续建/征询未收齐
+     * 那些"留在本节点"的分支不调，否则会把还在办的协办行提前废弃。幂等：已废弃行不再命中，
+     * 会签档 {@code CountersignHandler} 先清过一遍也不会重复记账。</p>
+     */
+    private void abandonAidantOnLeave(Execution execution) {
+        com.mldong.jeeflow.core.AidantSupport.abandonPendingOnNode(
+                execution.getProcessInstance(), getName(), execution.getOperator());
     }
 
     // ---- 便捷字段（从 ext 中读取） ----

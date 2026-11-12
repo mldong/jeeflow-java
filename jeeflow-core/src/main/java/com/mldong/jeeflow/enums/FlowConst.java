@@ -76,6 +76,20 @@ public final class FlowConst {
     /** 动态会签（issues/247）发起原因：选填，随账本条目落库并盖到每条成员行（单行出证自足） */
     public static final String ADD_SIGN_REASON = "tf_addSignReason";
     /**
+     * 动态协办账本（issues/253）：{round, fromActor, toActors, reason, time, operator} 只追加，
+     * 落<b>主办行</b>变量（形状照 {@link #ADD_SIGN_HISTORY}，键序锁定、time 为 §2.4 字符串）。
+     * 离开节点清场未办结协办行时追加一条带 {@code abandoned=true} 的条目（照征询撤回的 {@code revoked}）。
+     */
+    public static final String AIDANT_HISTORY = "tf_aidantHistory";
+    /** 动态协办（issues/253）派生原因：选填，盖每条协办行（单行出证自足）；<b>不占 {@link #APPROVAL_COMMENT}</b> */
+    public static final String AIDANT_REASON = "tf_aidantReason";
+    /**
+     * 动态协办等待闸开关（issues/253）：派生时把 {@code waitCompletion} 盖在主办行变量上，
+     * 缺省 false＝主办不等协办办结即可推进。{@code tf_} 前缀使实例合并自动剥键（不传播，
+     * 与 {@link #ALLOW_RECALL} 同通道）；投影 {@code ext.aidant.wait} 同源。
+     */
+    public static final String AIDANT_WAIT = "tf_aidantWait";
+    /**
      * 后加签轮次号键前缀（拼 {@code _{节点名}}）。
      * <p>不复用会签的 {@link #LOOP_COUNTER}：后者是退回复活时被 {@code lineageVariables}
      * 剔掉的会签簿记，加签链的轮次要跨"已办过的人"计数，两者语义不同。</p>

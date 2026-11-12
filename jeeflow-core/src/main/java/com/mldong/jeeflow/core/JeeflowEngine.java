@@ -44,6 +44,25 @@ public interface JeeflowEngine {
      */
     ProcessTask recallTask(Long taskId, String operator);
 
+    /**
+     * 动态协办（issues/253，规范 04 · 动态协办）：主办把"这活"交给别人干——按人派生
+     * {@code task_type=1} 的协办子行（parent＝主办行、同节点同名、performType=NORMAL），
+     * <b>主办行原样保留 DOING</b>；协办行办结不驱动流程，节点推进仍由主办行办结触发。
+     *
+     * <p>判据全排前（报错即零写入）：任务存在 → 禁递归（协办行不能再派生）→ 主办行 DOING →
+     * 名册鉴权（{@code flow.auto}/{@code flow.admin} 例外）→ 逐人去重（该人已有未办结协办行）。
+     * 建单走 {@code saveNewTask} 既有腿（委托并入＋落库＋fire 码 3），不新增事件码。</p>
+     *
+     * @param taskId         主办行任务 id
+     * @param actorIds       协办人（已归一，每人一行）
+     * @param reason         派生原因（选填，进账本＋盖每条协办行 tf_aidantReason）
+     * @param waitCompletion true＝等待闸（主办办结前判无 DOING 协办行）；false（缺省）＝不等
+     * @param operator       操作人（硬必填，门面已校验）
+     * @return 本次派生的协办行（DOING）
+     */
+    List<ProcessTask> aidantTask(Long taskId, List<String> actorIds, String reason,
+                                 boolean waitCompletion, String operator);
+
     /** 获取仓储 */
     com.mldong.jeeflow.spi.IProcessRepository getRepository();
 

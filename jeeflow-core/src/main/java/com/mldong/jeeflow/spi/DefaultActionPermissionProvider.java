@@ -37,6 +37,9 @@ public class DefaultActionPermissionProvider implements IActionPermissionProvide
         // 六语言同款落点见各集成壳的权限表（本轮同批）。
         OR_RULES.put("processTask/recall", new String[]{"wf:processTask:execute"});
         OR_RULES.put("processTask/revokeDynamicCountersign", new String[]{"wf:processTask:execute"});
+        // issues/253 动态协办：照 246/247 B 案惯例复用"办理"这枚码，不建按钮种子行——
+        // 派生协办的主体按引擎判据本来就必然是主办行名册内的人（＝有办理权的人）。
+        OR_RULES.put("processTask/aidant", new String[]{"wf:processTask:execute"});
         // boot3 无权限注解的 action（登录即可）
         NO_PERM_ACTIONS.addAll(Arrays.asList(
                 "processInstance/detail", "processInstance/highLight", "processInstance/approvalRecord",
