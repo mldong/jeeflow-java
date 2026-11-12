@@ -1,5 +1,6 @@
 package com.mldong.jeeflow.parser.impl;
 
+import com.mldong.jeeflow.JeeflowException;
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.enums.CountersignTypeEnum;
 import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
@@ -24,7 +25,15 @@ public class TaskParser extends AbstractNodeParser {
         taskModel.setForm(properties.getStr(FORM_KEY));
         taskModel.setAssignee(properties.getStr(ASSIGNEE_KEY));
         taskModel.setAssignmentHandler(properties.getStr(ASSIGNMENT_HANDLE_KEY));
-        taskModel.setTaskType(ProcessTaskTypeEnum.codeOf(properties.get(TASK_TYPE_KEY)));
+        // 节点级 taskType=1（协办）解析期禁配（规范 02 §4.4，issues/252）：协办档只由运行期
+        // processTask/aidant 派生（issues/253）；snaker 原义下协办节点办结不驱动且跳转同闸，
+        // 节点级配了就是"流程悬挂"陷阱。codeOf 能折成 SECONDARY 的全部输入形在此一律报错；
+        // 其余不可识别值维持 codeOf 既有静默回落主办（issues/245 口径，不扩成 fail-fast）。
+        ProcessTaskTypeEnum taskType = ProcessTaskTypeEnum.codeOf(properties.get(TASK_TYPE_KEY));
+        if (ProcessTaskTypeEnum.SECONDARY.equals(taskType)) {
+            throw new JeeflowException("节点[" + taskModel.getName() + "]不允许配置协办任务类型（taskType=1）");
+        }
+        taskModel.setTaskType(taskType);
         taskModel.setPerformType(ProcessTaskPerformTypeEnum.codeOf(properties.get(PERFORM_TYPE_KEY)));
         taskModel.setReminderTime(properties.getStr(REMINDER_TIME_KEY));
         taskModel.setReminderRepeat(properties.getStr(REMINDER_REPEAT_KEY));
