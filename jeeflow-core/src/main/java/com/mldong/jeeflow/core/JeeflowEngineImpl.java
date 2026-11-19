@@ -16,6 +16,9 @@ import com.mldong.jeeflow.json.IJsonProvider;
 import com.mldong.jeeflow.model.*;
 import com.mldong.jeeflow.parser.ModelParser;
 import com.mldong.jeeflow.spi.IProcessRepository;
+import com.mldong.jeeflow.spi.IInstanceLockRepository;
+import com.mldong.jeeflow.spi.ITimeActionSink;
+import com.mldong.jeeflow.spi.TimeAction;
 import com.mldong.jeeflow.spi.ITransactionTemplate;
 import com.mldong.jeeflow.spi.IUserProvider;
 import com.mldong.jeeflow.util.FlowUtil;
@@ -46,6 +49,13 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     private Configuration config;
     /** 委托代理自动生效（issues/116）：引擎内置、默认开启，任务落库前把代理人并入参与者集合 */
     private final SurrogateInterceptor surrogateApplier = new SurrogateInterceptor();
+    /** 时限动作凭证（spec 04）：未注册时全部时限动作静默跳过，存量使用方行为零变化 */
+    private ITimeActionSink timeActionSink;
+
+    /** 供测试/集成方显式注入时限动作凭证（configure 也会从 ServiceContext 取）。 */
+    public void setTimeActionSink(ITimeActionSink sink) {
+        this.timeActionSink = sink;
+    }
 
     @Override
     public JeeflowEngine configure(Configuration config) {
@@ -53,6 +63,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         this.repository = ServiceContext.find(IProcessRepository.class);
         this.jsonProvider = ServiceContext.find(IJsonProvider.class);
         this.userProvider = ServiceContext.find(IUserProvider.class);
+        this.timeActionSink = ServiceContext.find(ITimeActionSink.class);
         if (this.repository == null) {
             throw new JeeflowException(WfErrEnum.SPI_NOT_REGISTERED);
         }
@@ -112,7 +123,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             //    导致监听器（onEvent 的 sourceId==null 守卫）漏发「新待办」TODO 消息。
             String surrogateProcessName = SurrogateInterceptor.resolveProcessName(exec);
             for (ProcessTask task : exec.getProcessTaskList()) {
-                saveNewTask(task, surrogateProcessName);
+                saveNewTask(task, surrogateProcessName,
+                        taskModelOf(model, task.getTaskName()), instance.getVariables(), true);
             }
             // 记录类节点历史行落库（§6.2 第 1 条）：发起即命中 custom 的流（start→custom→…）走的是
             // 这条腿而不是 persistTasks，两条腿都要有 INSERT，漏一条就是"同一条形状在半数路径上又不落库"。
@@ -507,6 +519,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
      */
     @Override
     public ProcessTask recallTask(Long taskId, String operator) {
+        ProcessTask pre = repository.findTaskById(taskId);
+        if (pre != null) {
+            // 先锁实例再读判据（spec 04 · 并发保护），避免"读后锁前"被另一事务改写
+            lockInstance(pre.getProcessInstanceId());
+        }
         ProcessTask target = repository.findTaskById(taskId);
         if (target == null || !target.isFinished()) {
             throw new JeeflowException(RecallSupport.MSG_NOT_FINISHED);
@@ -557,7 +574,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         // 顺序不能拆：委托必须在 saveTask 之前并进集合，事后 addTaskActor 会打在尚未分配的 id 上静默无效。
         // 此前本栈与 php／csharp 直调 saveTask ⇒ 不并委托，与 go／python／node／rust／moon 五栈相反（5-3 分裂），
         // 定档后统一取"并"。开关仍归 Configuration#surrogateAutoApply，未配置扩展仓储时静默跳过。
-        saveNewTask(resurrected, SurrogateInterceptor.resolveProcessName(model, define));
+        saveNewTask(resurrected, SurrogateInterceptor.resolveProcessName(model, define),
+                (TaskModel) node, instance.getVariables(), true);
         // 账本排在复活行落库之后：recalledTaskId 要指向已分配 id 的那一行
         RecallSupport.appendRecallHistory(target, operator, resurrected.getTaskId());
         repository.updateTask(target);
@@ -592,6 +610,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     public List<ProcessTask> aidantTask(Long taskId, List<String> actorIds, String reason,
                                         boolean waitCompletion, String operator) {
         return inTxFor(taskId, () -> {
+            ProcessTask pre = repository.findTaskById(taskId);
+            if (pre == null) {
+                throw new JeeflowException(AidantSupport.MSG_TASK_NOT_FOUND);
+            }
+            lockInstance(pre.getProcessInstanceId());
             ProcessTask host = repository.findTaskById(taskId);
             if (host == null) {
                 throw new JeeflowException(AidantSupport.MSG_TASK_NOT_FOUND);
@@ -674,7 +697,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             host.setUpdateTime(LocalDateTime.now());
             String processName = SurrogateInterceptor.resolveProcessName(model, define);
             for (ProcessTask child : created) {
-                saveNewTask(child, processName);
+                // 协办行按规范不继承时限动作（spec 02 §4.5 生效范围）
+                saveNewTask(child, processName, taskNode, instance.getVariables(), false);
             }
             repository.updateTask(host);
             return created;
@@ -699,6 +723,12 @@ public class JeeflowEngineImpl implements JeeflowEngine {
 
     private Execution prepareExecution(Long taskId, String operator, FlowData args) {
         args = ReapplySupport.stripReserved(args);
+        ProcessTask pre = repository.findTaskById(taskId);
+        if (pre != null) {
+            // 先锁实例再读任务状态（spec 04 · 并发保护）：先读后锁的窗口里，
+            // 另一事务可能已办结同一行，锁内拿到的旧对象会被二次推进。
+            lockInstance(pre.getProcessInstanceId());
+        }
         ProcessTask task = repository.findTaskById(taskId);
         if (task == null || !task.isDoing()) {
             throw new JeeflowException(WfErrEnum.NOT_FOUND_DOING_PROCESS_TASK);
@@ -768,6 +798,15 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         }
         repository.updateTask(task);
 
+        // 时限动作联动（spec 04 · 写路径）：任务离开 DOING ⇒ 取消该任务 pending 的提醒/自动行；
+        // 完成（TASK_COMPLETE 事实）且有 callback 配置 ⇒ 同事务插 CALLBACK 行。
+        cancelTaskTimeActions(taskId);
+        Integer submitTypeForCb = args == null ? null : args.getInt(FlowConst.SUBMIT_TYPE);
+        boolean rejectedForCb = submitTypeForCb != null && REJECT_SUBMIT_TYPES.contains(submitTypeForCb);
+        if (!rejectedForCb && currentNode instanceof TaskModel) {
+            insertCallbackAction((TaskModel) currentNode, task);
+        }
+
         // 任务被办掉 / 被退回（spec §11.3 码 5 TASK_COMPLETE / 码 6 TASK_REJECT，issues/132 新增）：
         // 紧跟上面这次 updateTask（任务行 state 落库）之后 fire，§11.2 原则 3 的"落库之后"即此。
         // 两条互斥（§11.3 码 6「同一动作走 reject 就不再 fire complete」）：判据取载荷 submitType，
@@ -804,7 +843,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         // （含 content BLOB），不能逐任务重复读
         String surrogateProcessName = SurrogateInterceptor.resolveProcessName(exec);
         for (ProcessTask task : exec.getProcessTaskList()) {
-            saveNewTask(task, surrogateProcessName);
+            saveNewTask(task, surrogateProcessName,
+                    taskModelOf(exec.getProcessModel(), task.getTaskName()),
+                    exec.getProcessInstance().getVariables(), true);
         }
         saveHistoryTasks(exec);
         if (exec.getProcessTask() != null && exec.getProcessTask().getTaskId() != null) {
@@ -896,6 +937,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
                 // 父实例（或更上层）被这一支流转连带办结：它的行不在本次 updateInstance 范围内，补写
                 repository.updateInstance(instance);
             }
+            // 实例终态 ⇒ 取消该实例 pending 的提醒/自动行（CALLBACK 表示既成事实，不取消）
+            cancelInstanceTimeActions(end.getInstanceId());
             ProcessPublisher.notifyInstanceEnd(end.getInstanceId(), end.getState());
         }
     }
@@ -915,6 +958,15 @@ public class JeeflowEngineImpl implements JeeflowEngine {
      *                    模型 name 优先、缺失回落 {@code wf_process_define.name}）后传入
      */
     private void saveNewTask(ProcessTask task, String processName) {
+        saveNewTask(task, processName, null, null, false);
+    }
+
+    /**
+     * 建单唯一收口的带时限动作版本（spec 04 · 写路径）：任务落库后按节点四键登记动作行。
+     * allowActions=false 用于按规范不继承动作的行（协办/动态征询成员）。
+     */
+    private void saveNewTask(ProcessTask task, String processName, TaskModel node,
+                             FlowData vars, boolean allowActions) {
         if (config == null || config.isSurrogateAutoApply()) {
             surrogateApplier.apply(task, processName, LocalDateTime.now());
         }
@@ -926,6 +978,85 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         }
         // TASK_START 在落库（分配 taskId）后 fire，见 start 内注释与 spec §4.4
         notifyTaskStart(task);
+        scheduleTimeActions(node, task, vars, allowActions);
+    }
+
+    /** 实例级事务排他保护（spec 04 · 并发保护）：仓储实现 IInstanceLockRepository 时加实例行锁。 */
+    private void lockInstance(Long instanceId) {
+        if (instanceId == null) return;
+        if (repository instanceof IInstanceLockRepository) {
+            ((IInstanceLockRepository) repository).lockInstance(instanceId);
+        }
+    }
+
+    private static TaskModel taskModelOf(ProcessModel model, String taskName) {
+        if (model == null || taskName == null) return null;
+        NodeModel node = model.getNode(taskName);
+        return node instanceof TaskModel ? (TaskModel) node : null;
+    }
+
+    /**
+     * 建单侧动作行（与任务落库同事务）：autoExecute=Y 且有有效到期时间 ⇒ AUTO_COMPLETE；
+     * 配了有效 reminderTime ⇒ 首条 REMIND（occurrenceNo=1）。协办行与非 DOING 行不建。
+     */
+    private void scheduleTimeActions(TaskModel node, ProcessTask task, FlowData vars, boolean allow) {
+        if (timeActionSink == null || !allow || node == null || task == null) return;
+        if (!ProcessTaskStateEnum.DOING.getCode().equals(task.getTaskState())) return;
+        if (ProcessTaskTypeEnum.SECONDARY.equals(task.getTaskType())) return;
+        if (TimeLimitSupport.autoExecuteEnabled(node)) {
+            if (task.getExpireTime() == null) {
+                System.err.println("[jeeflow] 时限配置诊断 task=" + task.getTaskId()
+                        + " node=" + node.getName() + " autoExecute=Y 但任务无有效到期时间，跳过自动办理");
+            } else {
+                TimeAction a = baseAction(TimeAction.TYPE_AUTO_COMPLETE, task, node);
+                a.setDueAt(TimeLimitSupport.toEpochMilli(task.getExpireTime()));
+                a.setOccurrenceNo(0);
+                a.setIdempotencyKey("wf:auto:" + task.getTaskId() + ":0");
+                timeActionSink.insertTimeAction(a);
+            }
+        }
+        String expr = TimeLimitSupport.reminderTimeExpr(node);
+        if (StringUtils.isNotBlank(expr)) {
+            java.time.LocalDateTime due = TimeLimitSupport.firstReminder(expr, vars, task.getCreateTime());
+            if (due == null) {
+                System.err.println("[jeeflow] 时限配置诊断 task=" + task.getTaskId()
+                        + " node=" + node.getName() + " reminderTime=" + expr + " 解析不出，跳过提醒");
+            } else {
+                TimeAction a = baseAction(TimeAction.TYPE_REMIND, task, node);
+                a.setDueAt(TimeLimitSupport.toEpochMilli(due));
+                a.setOccurrenceNo(1);
+                a.setIdempotencyKey("wf:remind:" + task.getTaskId() + ":1");
+                timeActionSink.insertTimeAction(a);
+            }
+        }
+    }
+
+    /** 任务完成（state 落 20）同事务插入 CALLBACK 行（dueAt=now）。 */
+    private void insertCallbackAction(TaskModel node, ProcessTask task) {
+        if (timeActionSink == null || node == null || task == null || task.getTaskId() == null) return;
+        if (TimeLimitSupport.callbackName(node).isEmpty()) return;
+        TimeAction a = baseAction(TimeAction.TYPE_CALLBACK, task, node);
+        a.setDueAt(TimeLimitSupport.toEpochMilli(FlowUtil.now()));
+        a.setOccurrenceNo(0);
+        a.setIdempotencyKey("wf:callback:" + task.getTaskId() + ":0");
+        timeActionSink.insertTimeAction(a);
+    }
+
+    private static TimeAction baseAction(String type, ProcessTask task, TaskModel node) {
+        TimeAction a = new TimeAction();
+        a.setType(type);
+        a.setInstanceId(task.getProcessInstanceId());
+        a.setTaskId(task.getTaskId());
+        a.setNodeKey(node.getName());
+        return a;
+    }
+
+    private void cancelTaskTimeActions(Long taskId) {
+        if (timeActionSink != null && taskId != null) timeActionSink.cancelTaskTimeActions(taskId);
+    }
+
+    private void cancelInstanceTimeActions(Long instanceId) {
+        if (timeActionSink != null && instanceId != null) timeActionSink.cancelInstanceTimeActions(instanceId);
     }
 
     /**

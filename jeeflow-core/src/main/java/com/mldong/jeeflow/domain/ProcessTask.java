@@ -4,6 +4,7 @@ import com.mldong.jeeflow.enums.FlowConst;
 import com.mldong.jeeflow.enums.ProcessTaskStateEnum;
 import com.mldong.jeeflow.enums.ProcessTaskTypeEnum;
 import com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum;
+import com.mldong.jeeflow.util.FlowUtil;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -64,9 +65,9 @@ public class ProcessTask {
         task.parentTaskId = parentTaskId != null ? parentTaskId : 0L;
         task.variables = FlowData.create();
         task.variables.put(FlowConst.IS_FIRST_TASK_NODE, isFirstTaskNode);
-        task.createTime = LocalDateTime.now();
+        task.createTime = FlowUtil.now();
         task.createUser = operator;
-        task.updateTime = LocalDateTime.now();
+        task.updateTime = FlowUtil.now();
         task.updateUser = operator;
         return task;
     }

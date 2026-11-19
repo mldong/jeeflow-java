@@ -6,9 +6,12 @@ import com.mldong.jeeflow.model.NodeModel;
 import com.mldong.jeeflow.model.ProcessModel;
 import com.mldong.jeeflow.model.TaskModel;
 import com.mldong.jeeflow.spi.IUserProvider;
+import com.mldong.jeeflow.spi.ITimeProvider;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Map;
@@ -24,6 +27,18 @@ public final class FlowUtil {
     private FlowUtil() {}
 
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+    /** 引擎时钟（spec 04 · 时间基准）：未注入时退回系统钟；边界测试注入固定时钟。 */
+    private static volatile ITimeProvider timeProvider;
+
+    public static void setTimeProvider(ITimeProvider provider) {
+        timeProvider = provider;
+    }
+
+    public static LocalDateTime now() {
+        ITimeProvider p = timeProvider;
+        return p != null ? p.now() : LocalDateTime.now();
+    }
 
     /** 追加用户信息到流程参数 */
     public static void addUserInfoToArgs(String operator, FlowData args, IUserProvider userProvider) {
@@ -62,6 +77,11 @@ public final class FlowUtil {
 
     /** 解析期待完成时间 */
     public static java.time.LocalDateTime processTime(String expireTime, FlowData args) {
+        return processTime(expireTime, args, now());
+    }
+
+    /** 解析期待完成时间（相对档锚点由调用方给——注入时钟用于边界测试）。 */
+    public static java.time.LocalDateTime processTime(String expireTime, FlowData args, LocalDateTime base) {
         if (args.containsKey(expireTime)) {
             Object obj = args.get(expireTime);
             if (obj instanceof Date) {
@@ -77,7 +97,7 @@ public final class FlowUtil {
             }
         }
         if (StringUtils.isNotBlank(expireTime)) {
-            Date now = new Date();
+            Date now = Date.from(base.atZone(ZoneId.systemDefault()).toInstant());
             // issues/137 C（2026-09-29 owner 拍 · spec 04 §任务行 expire_time）：误配的相对档
             // （`xh` 前缀非整数 / `2.5h` 小数 / `3hh` 前缀还带字母 / 光秃秃一个后缀字母）一律**落穿**到
             // 下面的绝对时刻档，解析不出即 NULL——不抛 NumberFormatException 打断建单

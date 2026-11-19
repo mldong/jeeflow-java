@@ -31,12 +31,31 @@ import java.util.stream.Collectors;
  *
  * @author mldong
  */
-public class JdbcProcessRepository implements IProcessRepository {
+public class JdbcProcessRepository implements IProcessRepository, com.mldong.jeeflow.spi.IInstanceLockRepository {
 
     private final DataSource dataSource;
 
     public JdbcProcessRepository(DataSource dataSource) {
         this.dataSource = dataSource;
+    }
+
+    /**
+     * 实例级事务排他保护（spec 04 · 并发保护）：对实例行加 SELECT … FOR UPDATE，
+     * 锁随最外层事务提交/回滚释放。集成方 DataSource 若为事务感知代理，本查询并入业务事务。
+     */
+    @Override
+    public void lockInstance(Long instanceId) {
+        if (instanceId == null) return;
+        String sql = "SELECT id FROM wf_process_instance WHERE id = ? FOR UPDATE";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, instanceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                // 行不存在不新造失败面：调用方既有判据会报"实例不存在"
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("实例行锁失败", e);
+        }
     }
 
     // ═══ 流程定义 ═══

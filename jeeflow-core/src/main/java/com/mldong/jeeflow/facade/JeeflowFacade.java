@@ -23,6 +23,8 @@ import com.mldong.jeeflow.model.TransitionModel;
 import com.mldong.jeeflow.util.StringUtils;
 import com.mldong.jeeflow.parser.ModelParser;
 import com.mldong.jeeflow.spi.IProcessExtRepository;
+import com.mldong.jeeflow.spi.IInstanceLockRepository;
+import com.mldong.jeeflow.spi.ITimeActionSink;
 import com.mldong.jeeflow.spi.IUserProvider;
 import com.mldong.jeeflow.spi.IUserSearchProvider;
 import com.mldong.jeeflow.spi.IProcessRepository;
@@ -468,17 +470,36 @@ public class JeeflowFacade {
         return null;
     }
 
+    /** 实例级事务排他（spec 04 · 并发保护）：仓储实现 IInstanceLockRepository 时加实例行锁。 */
+    private void lockInstance(Long instanceId) {
+        if (instanceId == null) return;
+        if (repository instanceof IInstanceLockRepository) {
+            ((IInstanceLockRepository) repository).lockInstance(instanceId);
+        }
+    }
+
+    private void cancelInstanceTimeActions(Long instanceId) {
+        ITimeActionSink sink = ServiceContext.find(ITimeActionSink.class);
+        if (sink != null && instanceId != null) {
+            sink.cancelInstanceTimeActions(instanceId);
+        }
+    }
+
     private Map<String, Object> withdraw(Map<String, Object> args) {
         Long instanceId = toLong(args.get("id"));
         // issues/114：operator 硬必填——严禁缺省回落 user1 等固定账号（撤回人会被静默记成
         // 别人，update_user 与审计链一起失真且不报错）。msg 跨栈统一「operator 必填」。
         String operator = toStr(args.get("operator"));
         if (StringUtils.isBlank(operator)) return error("operator 必填");
+        // 实例级事务排他（spec 04 · 并发保护）：先锁再读，撤回与人工/自动办理共用同一把锁
+        lockInstance(instanceId);
         ProcessInstance inst = repository.findInstanceById(instanceId);
         if (inst == null) return error("流程实例不存在");
         if (!canWithdraw(inst, operator)) return error("无权限撤回该流程实例");
         inst.withdraw(operator);
         repository.updateInstance(inst); // v1.0.1：级联持久化任务状态
+        // 实例终态 ⇒ 取消该实例 pending 的提醒/自动行（CALLBACK 表示既成事实，不取消）
+        cancelInstanceTimeActions(instanceId);
         // TASK_WITHDRAW（spec §11.3 码 8，issues/132 新增，八栈此前零事件）：撤回把实例 state 写 30
         // **落库之后** fire，且**每轮撤回只 fire 一次**（不逐任务——被撤的是"N 个任务"这个同一事实）。
         // issues/134 的实例状态守卫（非进行中一律拒，内部码 20010009）在聚合根内抛出、updateInstance
@@ -553,6 +574,11 @@ public class JeeflowFacade {
      */
     private Map<String, Object> tryDynamicCountersign(Long taskId, String operator, FlowData flowArgs) {
         ProcessTask host = repository.findTaskById(taskId);
+        if (host == null || !host.isDoing()) return null;
+        // 实例级事务排他（spec 04 · 并发保护）：门面 dispatch 已被 engine.inTx 包裹，
+        // 这里先锁实例再重读主办行，避免"读后锁前"被另一事务改写。
+        lockInstance(host.getProcessInstanceId());
+        host = repository.findTaskById(taskId);
         if (host == null || !host.isDoing()) return null;
         java.util.List<String> operators = com.mldong.jeeflow.core.AddSignSupport.operators(flowArgs);
         if (operators.isEmpty()) return null;

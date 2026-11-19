@@ -91,9 +91,9 @@ public class ProcessInstance {
         instance.businessNo = args != null ? args.getStr(FlowConst.BUSINESS_NO) : null;
         instance.variables = args != null ? args.copy() : FlowData.create();
         instance.tasks = new ArrayList<>();
-        instance.createTime = LocalDateTime.now();
+        instance.createTime = FlowUtil.now();
         instance.createUser = operator;
-        instance.updateTime = LocalDateTime.now();
+        instance.updateTime = FlowUtil.now();
         instance.updateUser = operator;
         return instance;
     }
