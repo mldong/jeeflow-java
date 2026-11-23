@@ -84,8 +84,8 @@ public class MetadataTest {
         registry.register(FlowInterceptor.class, "com.example.LogInterceptor", "日志记录", 1, "pre");
 
         List<HandlerMeta> assignments = registry.listHandlers(AssignmentHandler.class);
-        // 内置 7 个通用 handler（v1.6.0 issues/16）+ 2 个自定义
-        assertEquals(9, assignments.size());
+        // 内置 9 个通用 handler（v1.6.0 issues/16 七个 + issues/199 两个）+ 2 个自定义
+        assertEquals(11, assignments.size());
         // order 升序：内置 OperatorAssignmentHandler order=-9999 最前
         assertEquals("com.mldong.jeeflow.interceptor.impl.OperatorAssignmentHandler",
                 assignments.get(0).getClassName());
@@ -108,9 +108,49 @@ public class MetadataTest {
 
     @Test
     public void testEmptyRegistry() {
-        // 构造即内置 7 个通用 handler（v1.6.0 issues/16），空注册表不再为空
+        // 构造即内置 9 个通用 handler（v1.6.0 issues/16 七个 + issues/199 两个），空注册表不再为空
         HandlerRegistry registry = new HandlerRegistry();
-        assertEquals(7, registry.listHandlers(AssignmentHandler.class).size());
+        assertEquals(9, registry.listHandlers(AssignmentHandler.class).size());
+    }
+
+    /**
+     * issues/199：表单指定用户两档的注册名/显示名/排序。
+     *
+     * <p>注册名必须是<b>顶级类</b>全限定名（不带 {@code $}）——其余七语言登记的就是这两个串，
+     * 带 {@code $} 的嵌套类名会让跨语言字典值对不上（现存五枚 org handler 是嵌套类，属 issues/16 的历史形状，
+     * 本轮不回改）。</p>
+     */
+    @Test
+    public void testFormUserBuiltinRows() {
+        HandlerRegistry registry = new HandlerRegistry();
+        List<HandlerMeta> assignments = registry.listHandlers(AssignmentHandler.class);
+        HandlerMeta leader = null;
+        HandlerMeta mainLeader = null;
+        for (HandlerMeta meta : assignments) {
+            if ("com.mldong.jeeflow.interceptor.impl.FormUserDeptLeaderAssignmentHandler".equals(meta.getClassName())) {
+                leader = meta;
+            } else if ("com.mldong.jeeflow.interceptor.impl.FormUserDeptMainLeaderAssignmentHandler".equals(meta.getClassName())) {
+                mainLeader = meta;
+            }
+        }
+        assertNotNull(leader);
+        assertNotNull(mainLeader);
+        assertFalse(leader.getClassName().contains("$"));
+        assertFalse(mainLeader.getClassName().contains("$"));
+        assertEquals("表单指定用户所属部门经理", leader.getDisplayName());
+        assertEquals("表单指定用户所属部门分管领导", mainLeader.getDisplayName());
+        assertEquals(70, leader.getOrder());
+        assertEquals(80, mainLeader.getOrder());
+        // 排在 TaskRoleAssignee（60）之后，且反射可实例化（CreateTaskHandler 按类名 newInstance）
+        assertTrue(leader.getOrder() > 60 && mainLeader.getOrder() > leader.getOrder());
+        try {
+            assertTrue(Class.forName(leader.getClassName()).newInstance()
+                    instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
+            assertTrue(Class.forName(mainLeader.getClassName()).newInstance()
+                    instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
+        } catch (Exception e) {
+            fail("注册名反射不可实例化：" + e);
+        }
     }
 
     @Test(expected = IllegalArgumentException.class)
