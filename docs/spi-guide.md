@@ -210,7 +210,7 @@ public class JeeflowOrgUserProvider implements IOrgUserProvider {
 }
 ```
 
-> 引擎内置 7 个通用 handler，流程定义里 `assignmentHandler` 写 Java 类全限定名即可
+> 引擎内置 9 个通用 handler，流程定义里 `assignmentHandler` 写 Java 类全限定名即可
 > 内置 handler 的**场景/配置/注意事项**见 [用户指南 07 · 参与者解析](../../guides/07-assignment-handlers.md)。
 
 ---
