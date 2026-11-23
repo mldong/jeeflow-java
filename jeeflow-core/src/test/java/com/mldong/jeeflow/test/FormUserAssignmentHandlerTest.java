@@ -38,7 +38,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * issues/199 「表单指定用户所属部门（分管）领导」——八语言契约 §3.2 四档并集／§3.3 取人链／§3.4 失败语义。
+ * issues/254 「表单指定用户所属部门（分管）领导」——八语言契约 §3.2 四档并集／§3.3 取人链／§3.4 失败语义。
  *
  * <p>场景＝HR 代员工提交／代理申请：表单里给出被代理人的用户 id，取<b>该员工</b>部门的经理／分管领导，
  * 与当前操作人无关。链路＝字段 → user → dept → leader。</p>

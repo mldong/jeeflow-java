@@ -14,7 +14,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 「表单指定用户」两个内置处理器的共用取数档（issues/199，八语言契约 §3.2–§3.4）。
+ * 「表单指定用户」两个内置处理器的共用取数档（issues/254，八语言契约 §3.2–§3.4）。
  *
  * <p>场景＝HR 代员工提交／代理申请：表单里给出被代理人的用户 id，取<b>该员工</b>所属部门的
  * 经理／分管领导，与当前操作人无关。链路＝字段 → user → dept → leader。</p>

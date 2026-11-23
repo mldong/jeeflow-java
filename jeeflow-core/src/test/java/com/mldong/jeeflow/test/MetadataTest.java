@@ -84,7 +84,7 @@ public class MetadataTest {
         registry.register(FlowInterceptor.class, "com.example.LogInterceptor", "日志记录", 1, "pre");
 
         List<HandlerMeta> assignments = registry.listHandlers(AssignmentHandler.class);
-        // 内置 9 个通用 handler（v1.6.0 issues/16 七个 + issues/199 两个）+ 2 个自定义
+        // 内置 9 个通用 handler（v1.6.0 issues/16 七个 + issues/254 两个）+ 2 个自定义
         assertEquals(11, assignments.size());
         // order 升序：内置 OperatorAssignmentHandler order=-9999 最前
         assertEquals("com.mldong.jeeflow.interceptor.impl.OperatorAssignmentHandler",
@@ -108,13 +108,13 @@ public class MetadataTest {
 
     @Test
     public void testEmptyRegistry() {
-        // 构造即内置 9 个通用 handler（v1.6.0 issues/16 七个 + issues/199 两个），空注册表不再为空
+        // 构造即内置 9 个通用 handler（v1.6.0 issues/16 七个 + issues/254 两个），空注册表不再为空
         HandlerRegistry registry = new HandlerRegistry();
         assertEquals(9, registry.listHandlers(AssignmentHandler.class).size());
     }
 
     /**
-     * issues/199：表单指定用户两档的注册名/显示名/排序。
+     * issues/254：表单指定用户两档的注册名/显示名/排序。
      *
      * <p>注册名必须是<b>顶级类</b>全限定名（不带 {@code $}）——其余七语言登记的就是这两个串，
      * 带 {@code $} 的嵌套类名会让跨语言字典值对不上（现存五枚 org handler 是嵌套类，属 issues/16 的历史形状，

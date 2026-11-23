@@ -5,7 +5,7 @@ import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.interceptor.AssignmentHandler;
 
 /**
- * 表单指定用户所属部门分管领导（内置，issues/199，八语言契约 §3.3）。
+ * 表单指定用户所属部门分管领导（内置，issues/254，八语言契约 §3.3）。
  *
  * <p>与 {@link FormUserDeptLeaderAssignmentHandler} 同一条链路（字段 → user → dept → leader），
  * 只把最后一跳换成 {@code findDeptMainLeaders}；四档并集、只取第一个非空 id、

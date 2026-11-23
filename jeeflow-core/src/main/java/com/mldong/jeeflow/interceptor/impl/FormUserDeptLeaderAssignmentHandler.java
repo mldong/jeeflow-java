@@ -5,7 +5,7 @@ import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.interceptor.AssignmentHandler;
 
 /**
- * 表单指定用户所属部门经理（内置，issues/199，八语言契约 §3.3）。
+ * 表单指定用户所属部门经理（内置，issues/254，八语言契约 §3.3）。
  *
  * <p>HR 代员工提交／代理申请场景：表单字段里给出被代理人的用户 id，取<b>该员工</b>部门的经理，
  * 与当前操作人无关。字段查找走 {@link FormUserAssignSupport#findFieldValue} 四档并集，
