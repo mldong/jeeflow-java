@@ -392,12 +392,18 @@ public class FormUserAssignmentHandlerTest {
         assertEquals("user2,user3", old.assign(execOf("node1", prefixed)));
         assertEquals("user3", old.assign(execOf("node1", FlowData.create().set("node1", "user3"))));
 
-        // #／_NN 两档是新 handler 专属——旧 handler 里 # 不认
+        // # 档是新 handler 专属——旧 handler 里 # 不认（_NN 档相反，旧 handler 一直认，见 rf02）
         FlowData hashOnly = FlowData.create().set("userId", "u_h");
         assertNull(old.assign(execOf("manager#userId", hashOnly)));
     }
 
-    /** 旧支的 {@code _NN} 档只认裸名 base（没有 f_ 变体），本轮没动它 */
+    /**
+     * 旧支的 {@code _NN} 档只认裸名 base（没有 f_ 变体）。
+     *
+     * <p>issues/255 把这枚判据抬成八语言共同形状：Go 当年因正则判据写错（两捕获组命中返回 3 段，
+     * 却按 {@code == 2} 比）这一档从未生效，Rust／MoonBit 干脆没有这一档。此处补齐反向两条
+     * （尾锚非数字、base 为空），钉住惰性量词 {@code ^(.+?)_(\d+)$} 的形状。</p>
+     */
     @Test
     public void rf02_existingFormFieldHandlerNumberSuffixBareOnly() {
         FormFieldAssigneeHandler old = new FormFieldAssigneeHandler();
@@ -405,6 +411,12 @@ public class FormUserAssignmentHandlerTest {
                 execOf("manager_01", FlowData.create().set("manager", "user5"))));
         FlowData onlyPrefixed = FlowData.create().set("f_manager", "user6");
         assertNull(old.assign(execOf("manager_01", onlyPrefixed)));
+        // 惰性量词的最早可切点：a_b_01 的 base 是 a_b，不是 a
+        assertEquals("u_c", old.assign(execOf("a_b_01",
+                FlowData.create().set("a", "u_x").set("a_b", "u_c"))));
+        // 反向：尾巴非纯数字／base 为空都不该命中
+        assertNull(old.assign(execOf("manager_01x", FlowData.create().set("manager", "user5"))));
+        assertNull(old.assign(execOf("_01", FlowData.create().set("", "user5"))));
     }
 
     // ═══════════════════════════════════════════
