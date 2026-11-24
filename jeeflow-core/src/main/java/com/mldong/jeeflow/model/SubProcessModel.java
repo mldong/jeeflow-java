@@ -9,6 +9,7 @@ import com.mldong.jeeflow.core.Execution;
  */
 public class SubProcessModel extends NodeModel {
 
+    private String processName;
     private String form;
     private Integer version;
 
@@ -17,6 +18,8 @@ public class SubProcessModel extends NodeModel {
         runOutTransition(execution);
     }
 
+    public String getProcessName() { return processName; }
+    public void setProcessName(String processName) { this.processName = processName; }
     public String getForm() { return form; }
     public void setForm(String form) { this.form = form; }
     public Integer getVersion() { return version; }

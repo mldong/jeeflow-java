@@ -22,6 +22,8 @@ public interface NodeParser {
     String EXPR_KEY = "expr";
     String HANDLE_CLASS_KEY = "handleClass";
     String FORM_KEY = "form";
+    String PROCESS_NAME_KEY = "processName";
+    String NAME_KEY = "name";
     String ASSIGNEE_KEY = "assignee";
     String ASSIGNMENT_HANDLE_KEY = "assignmentHandler";
     String TASK_TYPE_KEY = "taskType";

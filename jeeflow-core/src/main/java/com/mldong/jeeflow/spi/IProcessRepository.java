@@ -20,6 +20,22 @@ public interface IProcessRepository {
 
     ProcessInstance.ProcessDefine findDefineById(Long defineId);
 
+    default ProcessInstance.ProcessDefine findDefineByNameAndVersion(String name, Integer version) {
+        if (name == null || name.trim().isEmpty()) return null;
+        PageQuery query = new PageQuery(1, 1);
+        query.add("t.name", "EQ", name);
+        if (version != null) query.add("t.version", "EQ", version);
+        query.setOrderBy("t.version desc,t.id desc");
+        PageResult<DefineRow> page = pageDefines(query);
+        if (page.getRows() == null || page.getRows().isEmpty()) return null;
+        DefineRow row = page.getRows().stream()
+                .max(java.util.Comparator.comparing(DefineRow::getVersion,
+                        java.util.Comparator.nullsFirst(Integer::compareTo))
+                        .thenComparing(DefineRow::getId, java.util.Comparator.nullsFirst(Long::compareTo)))
+                .orElse(page.getRows().get(0));
+        return findDefineById(row.getId());
+    }
+
     // ── 流程定义写操作（v1.0.1 新增：设计器部署/启停/删除）──
     /** 新增流程定义（id 为空时由实现生成） */
     void saveDefine(ProcessInstance.ProcessDefine define);

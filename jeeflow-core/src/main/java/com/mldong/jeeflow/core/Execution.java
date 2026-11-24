@@ -26,6 +26,8 @@ public class Execution {
     private ProcessTask processTask;
     private ProcessInstance processInstance;
     private List<ProcessTask> processTaskList = new ArrayList<>();
+    private final List<ProcessTask> persistedTasks = new ArrayList<>();
+    private final List<Execution> continuations = new ArrayList<>();
 
     /**
      * 记录类（custom）节点产生的<b>历史行</b>（{@code task_state=20}）——
@@ -86,6 +88,29 @@ public class Execution {
 
     public void addTasks(List<ProcessTask> tasks) {
         this.processTaskList.addAll(tasks);
+    }
+
+    public void addPersistedTasks(Iterable<ProcessTask> tasks) {
+        if (tasks != null) {
+            for (ProcessTask task : tasks) this.persistedTasks.add(task);
+        }
+    }
+
+    public List<ProcessTask> getResultTasks() {
+        List<ProcessTask> result = new ArrayList<>(processTaskList);
+        result.addAll(persistedTasks);
+        for (Execution continuation : continuations) {
+            result.addAll(continuation.getResultTasks());
+        }
+        return result;
+    }
+
+    public void addContinuation(Execution continuation) {
+        if (continuation != null) this.continuations.add(continuation);
+    }
+
+    public List<Execution> getContinuations() {
+        return continuations;
     }
 
     /**

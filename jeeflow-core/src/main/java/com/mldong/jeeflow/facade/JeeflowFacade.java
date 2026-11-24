@@ -3,6 +3,7 @@ package com.mldong.jeeflow.facade;
 import com.mldong.jeeflow.core.JeeflowEngine;
 import com.mldong.jeeflow.core.ReapplySupport;
 import com.mldong.jeeflow.core.ServiceContext;
+import com.mldong.jeeflow.core.StartAndExecuteSupport;
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessDesign;
 import com.mldong.jeeflow.domain.ProcessDesignHis;
@@ -316,20 +317,7 @@ public class JeeflowFacade {
             if (!FlowConst.PROCESS_DEFINE_ID_KEY.equals(k) && !"operator".equals(k)) flowArgs.put(k, v);
         });
         ProcessInstance inst = engine.startProcessInstanceById(defineId, operator, flowArgs);
-        // boot2 startAndExecute：自动完成申请节点（assignee="applicant" → 发起人）
-        List<ProcessTask> doingTasks = repository.findDoingTasks(inst.getInstanceId(), new String[]{});
-        for (ProcessTask task : doingTasks) {
-            repository.addTaskActor(task.getTaskId(), Collections.singletonList(operator));
-            flowArgs.put(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.APPLY.getCode());
-            // 对齐 boot3：f_nextNodeOperator（发起时预指派人）→ tf_nextNodeOperator（引擎执行参数）
-            Object startNextOp = flowArgs.get(FlowConst.PROCESS_START_NEXT_NODE_OPERATOR);
-            if (startNextOp != null && !startNextOp.toString().isEmpty()) {
-                flowArgs.put(FlowConst.NEXT_NODE_OPERATOR, startNextOp);
-            }
-            // issues/176：spec 04:60-62——apply 节点由 flow.auto 代执行（operator 列=flow.auto，
-            // 不进发起人已办）；u_* 由发起腿留下、引擎对 flow.auto 跳过注入（对齐 boot2 :317）
-            engine.executeProcessTask(task.getTaskId(), FlowConst.AUTO_ID, flowArgs);
-        }
+        StartAndExecuteSupport.applyInitialTasks(engine, inst.getInstanceId(), operator, flowArgs);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put(FlowConst.PROCESS_INSTANCE_ID_KEY, inst.getInstanceId());
         return ok(data);

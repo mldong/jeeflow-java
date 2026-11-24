@@ -6,6 +6,7 @@ import com.mldong.jeeflow.Configuration;
 import com.mldong.jeeflow.core.JeeflowEngine;
 import com.mldong.jeeflow.core.JeeflowEngineImpl;
 import com.mldong.jeeflow.core.ServiceContext;
+import com.mldong.jeeflow.core.StartAndExecuteSupport;
 import com.mldong.jeeflow.domain.FlowData;
 import com.mldong.jeeflow.domain.ProcessInstance;
 import com.mldong.jeeflow.domain.ProcessTask;
@@ -855,6 +856,82 @@ public class JdbcRepositoryTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+        return def;
+    }
+
+    @Test
+    public void subProcessParentChildColumnsAndNoDuplicateTaskRows() throws Exception {
+        String childJson = ("{'name':'jdbcChild257','displayName':'子','type':'test','nodes':["
+                + "{'id':'start','type':'snaker:start','x':0,'y':0,'properties':{},'text':{'value':'开始'}},"
+                + "{'id':'apply','type':'snaker:task','x':0,'y':0,'properties':{'assignee':'applicant','taskType':0,'performType':0},'text':{'value':'申请'}},"
+                + "{'id':'childReview','type':'snaker:task','x':0,'y':0,'properties':{'assignee':'leader','taskType':0,'performType':0},'text':{'value':'子审批'}},"
+                + "{'id':'end','type':'snaker:end','x':0,'y':0,'properties':{},'text':{'value':'结束'}}],"
+                + "'edges':[{'id':'e1','sourceNodeId':'start','targetNodeId':'apply','properties':{}},"
+                + "{'id':'e2','sourceNodeId':'apply','targetNodeId':'childReview','properties':{}},"
+                + "{'id':'e3','sourceNodeId':'childReview','targetNodeId':'end','properties':{}}]}").replace('\'', '"');
+        String parentJson = ("{'name':'jdbcParent257','displayName':'父','type':'test','nodes':["
+                + "{'id':'start','type':'snaker:start','x':0,'y':0,'properties':{},'text':{'value':'开始'}},"
+                + "{'id':'apply','type':'snaker:task','x':0,'y':0,'properties':{'assignee':'applicant','taskType':0,'performType':0},'text':{'value':'申请'}},"
+                + "{'id':'sub','type':'snaker:subProcess','x':0,'y':0,'properties':{'processName':'jdbcChild257','version':1,'form':'__wrong__'},'text':{'value':'子'}},"
+                + "{'id':'parentAfter','type':'snaker:task','x':0,'y':0,'properties':{'assignee':'manager','taskType':0,'performType':0},'text':{'value':'父后续'}},"
+                + "{'id':'end','type':'snaker:end','x':0,'y':0,'properties':{},'text':{'value':'结束'}}],"
+                + "'edges':[{'id':'e1','sourceNodeId':'start','targetNodeId':'apply','properties':{}},"
+                + "{'id':'e2','sourceNodeId':'apply','targetNodeId':'sub','properties':{}},"
+                + "{'id':'e3','sourceNodeId':'sub','targetNodeId':'parentAfter','properties':{}},"
+                + "{'id':'e4','sourceNodeId':'parentAfter','targetNodeId':'end','properties':{}}]}").replace('\'', '"');
+        repo.saveDefine(define("jdbcChild257", childJson));
+        repo.saveDefine(define("jdbcParent257", parentJson));
+
+        ProcessInstance parent = engine.startProcessInstanceById(
+                repo.findDefineByNameAndVersion("jdbcParent257", null).getId(), "applicant", FlowData.create());
+        StartAndExecuteSupport.applyInitialTasks(engine, parent.getInstanceId(), "applicant", FlowData.create());
+
+        Long childId;
+        String parentNodeName;
+        Long parentId;
+        try (Connection conn = ds.getConnection(); PreparedStatement ps = conn.prepareStatement(
+                "SELECT id,parent_id,parent_node_name FROM wf_process_instance WHERE process_define_id="
+                        + repo.findDefineByNameAndVersion("jdbcChild257", null).getId())) {
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next());
+                childId = rs.getLong("id");
+                parentId = rs.getLong("parent_id");
+                parentNodeName = rs.getString("parent_node_name");
+                assertFalse(rs.next());
+            }
+        }
+        assertEquals(parent.getInstanceId(), parentId);
+        assertEquals("sub", parentNodeName);
+        assertEquals(1, countRows("SELECT COUNT(*) FROM wf_process_task WHERE process_instance_id=" + childId
+                + " AND task_name='childReview' AND task_state=10"));
+        assertEquals(1, countRows("SELECT COUNT(*) FROM wf_process_task WHERE process_instance_id=" + childId
+                + " AND task_name='apply' AND task_state=20"));
+
+        ProcessTask childReview = repo.findDoingTasks(childId, new String[]{"childReview"}).get(0);
+        engine.executeProcessTask(childReview.getTaskId(), "leader", FlowData.create()
+                .set(FlowConst.SUBMIT_TYPE, ProcessSubmitTypeEnum.AGREE.getCode()));
+        assertEquals(1, countRows("SELECT COUNT(*) FROM wf_process_task WHERE process_instance_id="
+                + parent.getInstanceId() + " AND task_name='parentAfter' AND task_state=10"));
+        assertEquals(ProcessInstanceStateEnum.FINISHED.getCode(),
+                repo.findInstanceById(childId).getState());
+    }
+
+    private int countRows(String sql) throws Exception {
+        try (Connection conn = ds.getConnection(); PreparedStatement ps = conn.prepareStatement(sql);
+             java.sql.ResultSet rs = ps.executeQuery()) {
+            assertTrue(rs.next());
+            return rs.getInt(1);
+        }
+    }
+
+    private ProcessInstance.ProcessDefine define(String name, String json) {
+        ProcessInstance.ProcessDefine def = new ProcessInstance.ProcessDefine();
+        def.setName(name);
+        def.setDisplayName(name);
+        def.setType("test");
+        def.setState(1);
+        def.setVersion(1);
+        def.setContent(json.getBytes(StandardCharsets.UTF_8));
         return def;
     }
 

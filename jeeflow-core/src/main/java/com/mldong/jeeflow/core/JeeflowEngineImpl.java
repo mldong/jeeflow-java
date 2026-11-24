@@ -121,19 +121,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             //    「任务落库后逐任务 fire，监听器可按 taskId 反查」与 Go 参考实现。
             //    CreateTaskHandler 在 handler 阶段（taskId 尚未生成）不再 fire，避免 sourceId=null
             //    导致监听器（onEvent 的 sourceId==null 守卫）漏发「新待办」TODO 消息。
-            String surrogateProcessName = SurrogateInterceptor.resolveProcessName(exec);
-            for (ProcessTask task : exec.getProcessTaskList()) {
-                saveNewTask(task, surrogateProcessName,
-                        taskModelOf(model, task.getTaskName()), instance.getVariables(), true);
-            }
-            // 记录类节点历史行落库（§6.2 第 1 条）：发起即命中 custom 的流（start→custom→…）走的是
-            // 这条腿而不是 persistTasks，两条腿都要有 INSERT，漏一条就是"同一条形状在半数路径上又不落库"。
-            // 只 saveTask、不 fire 码 3，判据见 saveHistoryTasks 的方法注释。
-            saveHistoryTasks(exec);
-            repository.updateInstance(instance);
-            // 实例终态事件（码 2）：发起即办结的短流（start→end、decision 直达结束）与
-            // 子流程父实例都从这一支落库后播——顺序判据同 persistTasks 的收口。
-            flushInstanceEndEvents(exec);
+            persistTasks(exec);
             return instance;
         });
     }
@@ -165,7 +153,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             // 跨事件的相对次序与本轮修复前逐字一致（recorder 主用例钉的 1,3,5,2,4,4）。
             persistTasks(exec);
             handleCcActors(exec.getProcessInstance().getInstanceId(), operator, args.get(FlowConst.CC_ACTORS));
-            return exec.getProcessTaskList();
+            return exec.getResultTasks();
         });
     }
 
@@ -243,7 +231,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
                 tm.execute(exec);
             }
             persistTasks(exec);
-            return exec.getProcessTaskList();
+            return exec.getResultTasks();
         });
     }
 
@@ -272,7 +260,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
                 tm.execute(exec);
             }
             persistTasks(exec);
-            return exec.getProcessTaskList();
+            return exec.getResultTasks();
         });
     }
 
@@ -327,7 +315,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
                 }
             }
             persistTasks(exec);
-            return exec.getProcessTaskList();
+            return exec.getResultTasks();
         });
     }
 
@@ -455,7 +443,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             applyNode.executePostInterceptors(exec);
         }
         persistTasks(exec);
-        return exec.getProcessTaskList();
+        return exec.getResultTasks();
     }
 
     private static TaskModel firstTaskModel(ProcessModel model) {
@@ -718,7 +706,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             return Collections.emptyList();
         }
         persistTasks(exec);
-        return exec.getProcessTaskList();
+        return exec.getResultTasks();
     }
 
     private Execution prepareExecution(Long taskId, String operator, FlowData args) {
@@ -769,6 +757,7 @@ public class JeeflowEngineImpl implements JeeflowEngine {
         NodeModel currentNode = model.getNode(task.getTaskName());
         if (currentNode != null) {
             currentNode.validateDeclaredInterceptors(model);
+            StartAndExecuteSupport.validateSubProcessTarget(model, currentNode, repository);
         }
 
         // issues/251：办理时把本节点的 allowRecall 开关快照进行变量（tf_ 前缀，实例合并
@@ -839,6 +828,11 @@ public class JeeflowEngineImpl implements JeeflowEngine {
     }
 
     private void persistTasks(Execution exec) {
+        persistTasksTree(exec);
+        flushInstanceEndEvents(exec);
+    }
+
+    private void persistTasksTree(Execution exec) {
         // 委托查询的流程名逐次 execution 解析一次后复用（对齐 Go/Node）：回落路径要读定义行
         // （含 content BLOB），不能逐任务重复读
         String surrogateProcessName = SurrogateInterceptor.resolveProcessName(exec);
@@ -852,8 +846,9 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             repository.updateTask(exec.getProcessTask());
         }
         repository.updateInstance(exec.getProcessInstance());
-        // 实例终态事件（码 2）：紧跟上面那次 updateInstance —— 行的 state 已落库才允许播
-        flushInstanceEndEvents(exec);
+        for (Execution continuation : exec.getContinuations()) {
+            persistTasksTree(continuation);
+        }
     }
 
     /**
@@ -924,7 +919,8 @@ public class JeeflowEngineImpl implements JeeflowEngine {
      * 导致事务回滚时事件已经漏出去；现在事件排在写库之后，回滚的那次不再播。</p>
      */
     private void flushInstanceEndEvents(Execution exec) {
-        List<PendingInstanceEnd> pending = exec.drainPendingEnds();
+        List<PendingInstanceEnd> pending = new ArrayList<>();
+        collectPendingEnds(exec, pending);
         if (pending.isEmpty()) {
             return;
         }
@@ -940,6 +936,13 @@ public class JeeflowEngineImpl implements JeeflowEngine {
             // 实例终态 ⇒ 取消该实例 pending 的提醒/自动行（CALLBACK 表示既成事实，不取消）
             cancelInstanceTimeActions(end.getInstanceId());
             ProcessPublisher.notifyInstanceEnd(end.getInstanceId(), end.getState());
+        }
+    }
+
+    private void collectPendingEnds(Execution exec, List<PendingInstanceEnd> pending) {
+        pending.addAll(exec.drainPendingEnds());
+        for (Execution continuation : exec.getContinuations()) {
+            collectPendingEnds(continuation, pending);
         }
     }
 

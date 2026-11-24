@@ -164,12 +164,18 @@ public abstract class NodeModel extends BaseModel implements Action {
      * 判断 current 是否可以退回到 parent
      */
     public static boolean canRejected(NodeModel current, NodeModel parent) {
+        if (parent instanceof TaskModel
+                && !com.mldong.jeeflow.enums.ProcessTaskPerformTypeEnum.NORMAL
+                        .equals(((TaskModel) parent).getPerformType())) {
+            return false;
+        }
         boolean result = false;
         for (TransitionModel tm : current.getInputs()) {
             NodeModel source = tm.getSource();
             if (source == parent) return true;
             if (source instanceof ForkModel
                     || source instanceof JoinModel
+                    || source instanceof SubProcessModel
                     || source instanceof StartModel) {
                 continue;
             }

@@ -319,10 +319,9 @@ public class InstanceEndEventTimingTest {
      * 终态只改内存 ⇒ SQL 仓里父实例永远停在 10）；② 把 fire 简单挪到子流程的 updateInstance
      * 之后，会把父实例这一支整丢掉。现在 flush 对"不是本次 execution  own 的实例"先补写再播。</p>
      *
-     * <p>夹具说明：{@code StartSubProcessHandler} 以 {@code defineId=null} 调引擎（源码里就标着
-     * "简化处理"），正向"父 → 子"起不来 ⇒ 本用例按级联的反方向直造子实例
-     * （{@code startProcessInstanceById(child, parentId, "subprocess")}，正是那个处理器本该做的事），
-     * 要照的"子办结 → 父级联"这一段与生产同形。</p>
+     * <p>夹具说明：本格只验证「子办结 → 父终态事件」这一段，父实例直接造一条 DOING 行，
+     * 子实例用 {@code startProcessInstanceById(child, parentId, "subprocess")} 直造； avoiding
+     * 父申请任务先启动子流程，从而把断言集中在父级联的写库与事件时机。</p>
      */
     @Test
     public void subProcessParentEndEventFiresOnceAfterParentRowIsWritten() {
@@ -330,7 +329,10 @@ public class InstanceEndEventTimingTest {
         ProcessInstance.ProcessDefine parentDef = addDefine(PARENT_FLOW_WITH_SUBPROCESS);
         ProcessInstance.ProcessDefine childDef = addDefine(CHILD_FLOW);
 
-        ProcessInstance parent = engine.startProcessInstanceById(parentDef.getId(), "zhangsan", FlowData.create());
+        // 本格只验证「子办结 → 父终态事件」；父实例直接造一条 DOING 行，避免父申请任务先于子实例启动。
+        // SnakerFlow 语义下，父流程仍有未完成主办任务时不允许被子流程回父直接办结。
+        ProcessInstance parent = ProcessInstance.create(parentDef, "zhangsan", FlowData.create());
+        repo.saveInstance(parent);
         Long parentId = parent.getInstanceId();
         ProcessInstance child = engine.startProcessInstanceById(childDef.getId(), "zhangsan",
                 FlowData.create(), parentId, "subprocess");
