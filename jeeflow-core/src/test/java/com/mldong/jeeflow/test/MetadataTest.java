@@ -84,8 +84,8 @@ public class MetadataTest {
         registry.register(FlowInterceptor.class, "com.example.LogInterceptor", "日志记录", 1, "pre");
 
         List<HandlerMeta> assignments = registry.listHandlers(AssignmentHandler.class);
-        // 内置 9 个通用 handler（v1.6.0 issues/16 七个 + issues/254 两个）+ 2 个自定义
-        assertEquals(11, assignments.size());
+        // 内置 11 个通用 handler（v1.6.0 issues/16 七个 + issues/254 两个 + issues/258 两个）+ 2 个自定义
+        assertEquals(13, assignments.size());
         // order 升序：内置 OperatorAssignmentHandler order=-9999 最前
         assertEquals("com.mldong.jeeflow.interceptor.impl.OperatorAssignmentHandler",
                 assignments.get(0).getClassName());
@@ -108,9 +108,9 @@ public class MetadataTest {
 
     @Test
     public void testEmptyRegistry() {
-        // 构造即内置 9 个通用 handler（v1.6.0 issues/16 七个 + issues/254 两个），空注册表不再为空
+        // 构造即内置 11 个通用 handler（v1.6.0 issues/16 七个 + issues/254 两个 + issues/258 两个），空注册表不再为空
         HandlerRegistry registry = new HandlerRegistry();
-        assertEquals(9, registry.listHandlers(AssignmentHandler.class).size());
+        assertEquals(11, registry.listHandlers(AssignmentHandler.class).size());
     }
 
     /**
@@ -143,6 +143,37 @@ public class MetadataTest {
         assertEquals(80, mainLeader.getOrder());
         // 排在 TaskRoleAssignee（60）之后，且反射可实例化（CreateTaskHandler 按类名 newInstance）
         assertTrue(leader.getOrder() > 60 && mainLeader.getOrder() > leader.getOrder());
+        try {
+            assertTrue(Class.forName(leader.getClassName()).newInstance()
+                    instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
+            assertTrue(Class.forName(mainLeader.getClassName()).newInstance()
+                    instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
+        } catch (Exception e) {
+            fail("注册名反射不可实例化：" + e);
+        }
+    }
+
+    @Test
+    public void testFormDeptBuiltinRows() {
+        HandlerRegistry registry = new HandlerRegistry();
+        List<HandlerMeta> assignments = registry.listHandlers(AssignmentHandler.class);
+        HandlerMeta leader = null;
+        HandlerMeta mainLeader = null;
+        for (HandlerMeta meta : assignments) {
+            if ("com.mldong.jeeflow.interceptor.impl.FormDeptLeaderAssignmentHandler".equals(meta.getClassName())) {
+                leader = meta;
+            } else if ("com.mldong.jeeflow.interceptor.impl.FormDeptMainLeaderAssignmentHandler".equals(meta.getClassName())) {
+                mainLeader = meta;
+            }
+        }
+        assertNotNull(leader);
+        assertNotNull(mainLeader);
+        assertFalse(leader.getClassName().contains("$"));
+        assertFalse(mainLeader.getClassName().contains("$"));
+        assertEquals("表单指定部门负责人", leader.getDisplayName());
+        assertEquals("表单指定部门分管领导", mainLeader.getDisplayName());
+        assertEquals(90, leader.getOrder());
+        assertEquals(100, mainLeader.getOrder());
         try {
             assertTrue(Class.forName(leader.getClassName()).newInstance()
                     instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
