@@ -84,8 +84,8 @@ public class MetadataTest {
         registry.register(FlowInterceptor.class, "com.example.LogInterceptor", "日志记录", 1, "pre");
 
         List<HandlerMeta> assignments = registry.listHandlers(AssignmentHandler.class);
-        // 内置 11 个通用 handler（v1.6.0 issues/16 七个 + issues/254 两个 + issues/258 两个）+ 2 个自定义
-        assertEquals(13, assignments.size());
+        // 内置 13 个通用 handler（issues/16 七个 + issues/254 两个 + issues/258 两个 + issues/259 两个）+ 2 个自定义
+        assertEquals(15, assignments.size());
         // order 升序：内置 OperatorAssignmentHandler order=-9999 最前
         assertEquals("com.mldong.jeeflow.interceptor.impl.OperatorAssignmentHandler",
                 assignments.get(0).getClassName());
@@ -108,9 +108,9 @@ public class MetadataTest {
 
     @Test
     public void testEmptyRegistry() {
-        // 构造即内置 11 个通用 handler（v1.6.0 issues/16 七个 + issues/254 两个 + issues/258 两个），空注册表不再为空
+        // 构造即内置 13 个通用 handler（issues/16 七个 + issues/254 两个 + issues/258 两个 + issues/259 两个），空注册表不再为空
         HandlerRegistry registry = new HandlerRegistry();
-        assertEquals(11, registry.listHandlers(AssignmentHandler.class).size());
+        assertEquals(13, registry.listHandlers(AssignmentHandler.class).size());
     }
 
     /**
@@ -178,6 +178,37 @@ public class MetadataTest {
             assertTrue(Class.forName(leader.getClassName()).newInstance()
                     instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
             assertTrue(Class.forName(mainLeader.getClassName()).newInstance()
+                    instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
+        } catch (Exception e) {
+            fail("注册名反射不可实例化：" + e);
+        }
+    }
+
+    @Test
+    public void testFormPostBuiltinRows() {
+        HandlerRegistry registry = new HandlerRegistry();
+        List<HandlerMeta> assignments = registry.listHandlers(AssignmentHandler.class);
+        HandlerMeta taskPost = null;
+        HandlerMeta formPost = null;
+        for (HandlerMeta meta : assignments) {
+            if ("com.mldong.jeeflow.interceptor.impl.OrgUserAssignmentHandlers$TaskPostAssigneeHandler".equals(meta.getClassName())) {
+                taskPost = meta;
+            } else if ("com.mldong.jeeflow.interceptor.impl.FormPostAssignmentHandler".equals(meta.getClassName())) {
+                formPost = meta;
+            }
+        }
+        assertNotNull(taskPost);
+        assertNotNull(formPost);
+        assertEquals("根据任务节点唯一编码关联岗位分配参与者", taskPost.getDisplayName());
+        assertEquals("表单指定岗位分配参与者", formPost.getDisplayName());
+        assertEquals(65, taskPost.getOrder());
+        assertEquals(110, formPost.getOrder());
+        assertTrue(taskPost.getClassName().contains("$"));
+        assertFalse(formPost.getClassName().contains("$"));
+        try {
+            assertTrue(Class.forName(taskPost.getClassName()).newInstance()
+                    instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
+            assertTrue(Class.forName(formPost.getClassName()).newInstance()
                     instanceof com.mldong.jeeflow.interceptor.AssignmentHandler);
         } catch (Exception e) {
             fail("注册名反射不可实例化：" + e);

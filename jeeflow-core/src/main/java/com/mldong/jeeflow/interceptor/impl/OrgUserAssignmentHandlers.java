@@ -5,6 +5,7 @@ import com.mldong.jeeflow.core.ServiceContext;
 import com.mldong.jeeflow.interceptor.AssignmentHandler;
 import com.mldong.jeeflow.model.NodeModel;
 import com.mldong.jeeflow.spi.IOrgUserProvider;
+import com.mldong.jeeflow.spi.IPostUserProvider;
 import com.mldong.jeeflow.spi.IUserProvider;
 
 import java.util.List;
@@ -75,6 +76,25 @@ public final class OrgUserAssignmentHandlers {
             IOrgUserProvider org = ServiceContext.find(IOrgUserProvider.class);
             if (org == null) return null;
             List<String> ids = org.findByRole(roleCode);
+            return ids == null || ids.isEmpty() ? null : String.join(",", ids);
+        }
+    }
+
+    /** 任务节点唯一编码关联岗位（postCode = 节点 name） */
+    public static class TaskPostAssigneeHandler implements AssignmentHandler {
+        @Override
+        public String assign(Execution execution) {
+            NodeModel nodeModel = execution.getNodeModel();
+            String postCode = nodeModel == null ? null : nodeModel.getName();
+            if (postCode == null || postCode.isEmpty()) return null;
+            IPostUserProvider provider = ServiceContext.find(IPostUserProvider.class);
+            if (provider == null) return null;
+            List<String> ids;
+            try {
+                ids = provider.findByPost(postCode);
+            } catch (RuntimeException ignored) {
+                return null;
+            }
             return ids == null || ids.isEmpty() ? null : String.join(",", ids);
         }
     }
